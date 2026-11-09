@@ -1,0 +1,65 @@
+name: marketing
+
+on:
+  pull_request:
+    paths: ['apps/marketing/**', '.github/workflows/marketing.yml']
+  push:
+    branches: [main]
+    paths: ['apps/marketing/**', '.github/workflows/marketing.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/marketing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: apps/marketing/.nvmrc
+      - run: npm run build
+      - run: npm run check
+      - run: npm test
+      - uses: actions/upload-pages-artifact@v3
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        with:
+          path: apps/marketing/dist
+
+  deploy:
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+  smoke-live:
+    needs: deploy
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/marketing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: apps/marketing/.nvmrc
+      - run: npm run build
+      - run: npm test
+        env:
+          SMOKE_URL: ${{ needs.deploy.outputs.page_url || 'https://aulteran.github.io/DriveLoom/' }}
