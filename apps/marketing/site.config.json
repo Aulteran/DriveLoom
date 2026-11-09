@@ -1,0 +1,10 @@
+{
+  "_note": "Single source of public identity. Placeholder values only until the owner clears the public name (release gate 0.1).",
+  "name": "Project Placeholder",
+  "tagline": "Coming soon.",
+  "description": "A self-hosted vehicle and fuel tracking platform. Coming soon.",
+  "siteUrl": "",
+  "basePath": "/",
+  "followUrl": "",
+  "lang": "en"
+}

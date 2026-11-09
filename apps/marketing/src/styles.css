@@ -1,0 +1,5 @@
+:root { color-scheme: light dark; --accent: #1e6fff; }
+body { margin: 0; font: 16px/1.5 system-ui, sans-serif; min-height: 100vh; display: grid; grid-template-rows: auto 1fr auto; padding: 0 16px; }
+main { max-width: 40rem; margin: auto; }
+h1 { font-size: clamp(2rem, 6vw, 3.5rem); }
+a { color: var(--accent); }
