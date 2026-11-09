@@ -1,5 +1,0 @@
-# Private · Paste into Claude Code Projects
-
-Coordinate DriveLoom Phase 0 only. Use the public repo specifications and the private coordinator, naming, work plan and checkpoint files. Launch a standalone coming-soon marketing site from `apps/marketing` through GitHub Actions Pages. The platform API, web app and native clients are paused.
-
-First verify the staging repository, base SHA, cloud environment and decision gates. DriveLoom has an exact-name collision in related vehicle software. Keep branded work private and prepare for a possible rename. Ask the owner for the public identity and release decision before any public exposure. In parallel with that decision, prepare the standalone baseline privately. Once it merges, split the landing and CI work into independent branches and draft PRs with non-overlapping paths. Default to Sonnet, use the documented checks and keep the private checkpoint current. Verify the approved production URL after launch, record the release and rollback evidence, then stop after Phase 0.
