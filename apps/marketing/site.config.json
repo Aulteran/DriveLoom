@@ -1,10 +1,10 @@
 {
-  "_note": "Single source of public identity. Placeholder values only until the owner clears the public name (release gate 0.1).",
-  "name": "Project Placeholder",
+  "_note": "Single source of public identity. Name chosen by owner; release gate 0.1 (name collision) remains open until the owner approves launch.",
+  "name": "DriveLoom",
   "tagline": "Coming soon.",
   "description": "A self-hosted vehicle and fuel tracking platform. Coming soon.",
-  "siteUrl": "",
-  "basePath": "/",
-  "followUrl": "",
+  "siteUrl": "https://aulteran.github.io/DriveLoom/",
+  "basePath": "/DriveLoom/",
+  "followUrl": "https://github.com/Aulteran/DriveLoom",
   "lang": "en"
 }
