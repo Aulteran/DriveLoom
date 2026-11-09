@@ -6,5 +6,6 @@
   "siteUrl": "https://aulteran.github.io/DriveLoom/",
   "basePath": "/DriveLoom/",
   "followUrl": "https://github.com/Aulteran/DriveLoom",
-  "lang": "en"
+  "lang": "en",
+  "indexable": true
 }
