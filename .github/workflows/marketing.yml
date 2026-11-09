@@ -34,8 +34,31 @@ jobs:
         with:
           path: apps/marketing/dist
 
+  browser:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/marketing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: apps/marketing/.nvmrc
+          cache: npm
+          cache-dependency-path: apps/marketing/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build
+      - run: npm run test:browser
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: landing-screenshots
+          path: apps/marketing/test-results/screenshots
+          if-no-files-found: ignore
+
   deploy:
-    needs: build
+    needs: [build, browser]
     if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:

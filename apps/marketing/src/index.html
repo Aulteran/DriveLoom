@@ -5,7 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{name}}</title>
   <meta name="description" content="{{description}}">
-  <meta name="robots" content="noindex">
+  <meta name="robots" content="{{robotsContent}}">
+  <link rel="canonical" href="{{siteUrl}}">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="{{name}}">
+  <meta property="og:description" content="{{description}}">
+  <meta property="og:url" content="{{siteUrl}}">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="{{name}}">
+  <meta name="twitter:description" content="{{description}}">
   <meta name="color-scheme" content="dark light">
   <link rel="stylesheet" href="{{basePath}}styles.css">
 </head>
