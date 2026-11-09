@@ -4,10 +4,13 @@
   "private": true,
   "type": "module",
   "license": "AGPL-3.0-only",
-  "engines": { "node": ">=22 <23" },
+  "engines": {
+    "node": ">=22 <23"
+  },
   "scripts": {
     "build": "node scripts/build.mjs",
     "check": "node scripts/check.mjs",
-    "dev": "node scripts/dev.mjs"
+    "dev": "node scripts/dev.mjs",
+    "test": "node --test tests/*.test.mjs"
   }
 }
