@@ -11,7 +11,7 @@ const live = process.env.SMOKE_URL;
 
 test('built page has semantic landmarks', () => {
   assert.ok(html, 'run npm run build first');
-  for (const re of [/<html lang="[^"]+"/, /<main id="main">/, /<h1>[^<]+<\/h1>/, /<header>/, /<footer>/])
+  for (const re of [/<html lang="[^"]+"/, /<main id="main">/, /<h1>[^<]+<\/h1>/, /<header[ >]/, /<footer[ >]/])
     assert.match(html, re);
 });
 

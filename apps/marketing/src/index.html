@@ -6,15 +6,89 @@
   <title>{{name}}</title>
   <meta name="description" content="{{description}}">
   <meta name="robots" content="noindex">
+  <meta name="color-scheme" content="dark light">
   <link rel="stylesheet" href="{{basePath}}styles.css">
 </head>
 <body>
-  <header><p class="brand">{{name}}</p></header>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="site-header">
+    <a class="brand" href="{{basePath}}">{{name}}</a>
+    <nav aria-label="Primary">
+      <a href="#features">Features</a>
+      <a href="#how">How it works</a>
+      <a href="#faq">FAQ</a>
+      <a class="btn btn-small" href="{{followUrl}}">Follow on GitHub</a>
+    </nav>
+  </header>
+
   <main id="main">
-    <h1>{{tagline}}</h1>
-    <p>{{description}}</p>
-    {{followLink}}
+    <section class="hero">
+      <p class="eyebrow">Coming soon &middot; Self-hosted &middot; Open source</p>
+      <h1>Know what every mile really costs.</h1>
+      <p class="lead">{{name}} is a self-hosted vehicle and fuel tracker. Log fills and odometer readings, share vehicles with the people you drive with, and compare efficiency on your own server, with your data staying yours.</p>
+      <p class="cta-row">
+        <a class="btn" href="{{followUrl}}">Follow progress on GitHub</a>
+        <a class="btn btn-ghost" href="#features">See what's planned</a>
+      </p>
+      <p class="note">In development. Nothing to install yet.</p>
+    </section>
+
+    <section id="what" class="band">
+      <h2>What it is</h2>
+      <p class="section-lead">One place for your vehicles, fuel and mileage, run on hardware you control instead of someone else's cloud.</p>
+      <div class="grid three">
+        <article class="card"><h3>Self-hosted</h3><p>Runs on your own server. No account with a third party and no data leaving your instance.</p></article>
+        <article class="card"><h3>Built for sharing</h3><p>Several people can track the same vehicle, such as a family car or a shared van, in one history.</p></article>
+        <article class="card"><h3>Open source</h3><p>Licensed under AGPL-3.0, so you can read, audit and run exactly what you're trusting with your data.</p></article>
+      </div>
+    </section>
+
+    <section id="features" class="band">
+      <h2>Planned features</h2>
+      <p class="section-lead">The direction for {{name}}. Details may change as it is built.</p>
+      <div class="grid two">
+        <article class="card"><h3>Fuel and odometer integrity</h3><p>Entries are checked against each other so a mistyped odometer reading is caught before it skews your numbers.</p></article>
+        <article class="card"><h3>Your units, everyone's units</h3><p>Enter fuel and distance in whatever units you used at the pump. Each person views everything in the units they prefer.</p></article>
+        <article class="card"><h3>Compare efficiency with friends</h3><p>Friends on the same instance can compare how efficiently they drive, with the data they choose to share.</p></article>
+        <article class="card"><h3>Flexible sign-in</h3><p>Password sign-in, with optional single sign-on through OIDC, plus TOTP and passkeys for stronger accounts.</p></article>
+        <article class="card"><h3>Your data, portable</h3><p>Back up and restore a whole instance, migrate between servers, and export or import individual vehicles.</p></article>
+        <article class="card"><h3>Fits your setup</h3><p>Designed to sit behind your reverse proxy, such as Nginx Proxy Manager. No bundled tunnel, and you decide how it is exposed.</p></article>
+      </div>
+    </section>
+
+    <section id="how" class="band">
+      <h2>How it works</h2>
+      <ol class="steps">
+        <li><h3>Run it yourself</h3><p>Deploy {{name}} on a server you control and put it behind your own reverse proxy.</p></li>
+        <li><h3>Add your vehicles</h3><p>Create vehicles and invite the people who share them.</p></li>
+        <li><h3>Log as you go</h3><p>Record fill-ups and odometer readings in the units you actually used.</p></li>
+        <li><h3>See the real picture</h3><p>Watch consumption and cost trends, and compare with friends if you choose to.</p></li>
+      </ol>
+      <p class="note">Android and iPhone apps are planned for later. They are not part of the first release.</p>
+    </section>
+
+    <section id="faq" class="band">
+      <h2>FAQ</h2>
+      <div class="faq">
+        <details><summary>When will it be available?</summary><p>There is no release date yet. {{name}} is in early development. Following the GitHub project is the best way to see progress.</p></details>
+        <details><summary>Does this site track me?</summary><p>No. There are no analytics, no cookies, no forms and no third-party scripts on this page.</p></details>
+        <details><summary>Is it free?</summary><p>It is open source under AGPL-3.0, so you can run it yourself at no cost beyond your own hosting.</p></details>
+        <details><summary>Where does my data live?</summary><p>On your own server. {{name}} is self-hosted, so there is no central service holding your vehicle history.</p></details>
+        <details><summary>Will there be mobile apps?</summary><p>Native Android and iPhone clients are planned for later, after the core platform.</p></details>
+        <details><summary>How do I follow along?</summary><p>Use the GitHub link below. This site does not collect email addresses.</p></details>
+      </div>
+    </section>
+
+    <section class="band final">
+      <h2>Follow the build</h2>
+      <p class="section-lead">Watch or star the repository to see {{name}} take shape.</p>
+      <p class="cta-row"><a class="btn" href="{{followUrl}}">Follow on GitHub</a></p>
+    </section>
   </main>
-  <footer><p>&copy; {{year}} {{name}}</p></footer>
+
+  <footer class="site-footer">
+    <p>&copy; {{year}} {{name}} &middot; Open source under AGPL-3.0 &middot; <a href="{{followUrl}}">GitHub</a></p>
+    <p class="small">This site sets no cookies and collects no personal data.</p>
+  </footer>
 </body>
 </html>
