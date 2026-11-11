@@ -27,6 +27,9 @@ export async function createTestDb(): Promise<TestDb | null> {
   const u = new URL(url);
   u.pathname = `/${name}`;
   const pool = new pg.Pool({ connectionString: u.toString(), max: 8 });
+  // A backend can still be closing when DROP DATABASE ... FORCE runs; that error is expected at teardown.
+  pool.on('connect', (c) => c.on('error', () => undefined));
+  pool.on('error', () => undefined);
   const c = await pool.connect();
   try { await migrate(c); } finally { c.release(); }
   return {

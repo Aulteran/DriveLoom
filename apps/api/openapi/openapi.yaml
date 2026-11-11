@@ -1,15 +1,20 @@
 openapi: 3.1.0
 info:
   title: DriveLoom API
-  version: 0.1.0
+  version: 0.2.0
   summary: Versioned contract skeleton for the self-hosted DriveLoom API.
   description: >
-    Skeleton for milestone 1.1. Only instance-level endpoints exist. Accounts,
-    vehicles, fuel and sharing endpoints are added by later milestones under the
-    compatibility policy in docs/CONTRACTS.md.
+    Instance endpoints (milestone 1.1) and authentication (milestone 1.2, tag
+    `auth`). Vehicles, fuel and sharing endpoints are added by later milestones
+    under the compatibility policy in docs/CONTRACTS.md. Authenticated requests
+    use the `dl_session` cookie; unsafe methods must also send the
+    `X-CSRF-Token` returned at sign-in, and any `Origin` header must equal the
+    instance public origin.
   license:
     name: AGPL-3.0-only
     identifier: AGPL-3.0-only
+security:
+  - session: []
 servers:
   - url: /
     description: Same origin as the web client; the operator's proxy provides TLS.
@@ -17,7 +22,7 @@ paths:
   /v1/health:
     get:
       operationId: getHealth
-      summary: Liveness and database readiness
+      summary: 'Liveness and database readiness'
       security: []
       responses:
         '200':
@@ -30,7 +35,7 @@ paths:
   /v1/version:
     get:
       operationId: getVersion
-      summary: Server, API and schema versions for client compatibility checks
+      summary: 'Server, API and schema versions for client compatibility checks'
       security: []
       responses:
         '200':
@@ -40,16 +45,400 @@ paths:
               schema: { $ref: '#/components/schemas/VersionInfo' }
         default:
           $ref: '#/components/responses/Problem'
+  /v1/auth/register:
+    post:
+      operationId: register
+      tags: [auth]
+      summary: 'Create an account'
+      security: []
+      description: 'The first account on an instance becomes its administrator. Later registration follows the instance policy.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterRequest' }
+      responses:
+        '202':
+          description: Accepted. With email verification the response is the same whether or not the address is already registered.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RegisterResult' }
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/auth/verify-email:
+    post:
+      operationId: verifyEmail
+      tags: [auth]
+      summary: 'Verify an email address with an emailed code'
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VerifyEmailRequest' }
+      responses:
+        '204':
+          description: Done.
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      summary: 'Sign in with email and password'
+      security: []
+      description: 'Sets the session cookie. When a second factor is enrolled the result state is `mfa_required`. Unknown account and wrong password are indistinguishable.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionState' }
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/auth/mfa/totp:
+    post:
+      operationId: completeTotp
+      tags: [auth]
+      summary: 'Complete sign-in with a TOTP code or recovery code'
+      description: 'Requires a session in state `mfa_required`. Issues a new session identifier.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TotpLoginRequest' }
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionState' }
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/auth/logout:
+    post:
+      operationId: logout
+      tags: [auth]
+      summary: 'Revoke the current session'
+      responses:
+        '204':
+          description: Done.
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/auth/session:
+    get:
+      operationId: getSession
+      tags: [auth]
+      summary: 'Current account, credentials and CSRF token'
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AccountSession' }
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/auth/reauth:
+    post:
+      operationId: reauthenticate
+      tags: [auth]
+      summary: 'Refresh recent-authentication status with password or TOTP'
+      description: 'Sensitive operations (credential changes) return `reauth_required` unless the session authenticated within the last 10 minutes.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReauthRequest' }
+      responses:
+        '204':
+          description: Done.
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/auth/sessions:
+    get:
+      operationId: listSessions
+      tags: [auth]
+      summary: 'List active sessions'
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionList' }
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/auth/sessions/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { $ref: '#/components/schemas/Id' } }
+    delete:
+      operationId: revokeSession
+      tags: [auth]
+      summary: 'Revoke one of the caller''s sessions'
+      responses:
+        '204':
+          description: Done.
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/auth/sessions/revoke-others:
+    post:
+      operationId: revokeOtherSessions
+      tags: [auth]
+      summary: 'Revoke all sessions except the current one'
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RevokedCount' }
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/auth/password:
+    put:
+      operationId: setPassword
+      tags: [auth]
+      summary: 'Change or add the password'
+      description: 'Changing requires the current password. Other sessions are revoked.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SetPasswordRequest' }
+      responses:
+        '204':
+          description: Done.
+        default:
+          $ref: '#/components/responses/Problem'
+    delete:
+      operationId: removePassword
+      tags: [auth]
+      summary: 'Remove the password'
+      description: 'Refused with `last_credential` if it is the only sign-in method.'
+      responses:
+        '204':
+          description: Done.
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/auth/recovery/request:
+    post:
+      operationId: requestRecovery
+      tags: [auth]
+      summary: 'Email a recovery code'
+      security: []
+      description: 'Returns 501 `email_not_configured` when the instance has no SMTP; use operator recovery.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RecoveryRequest' }
+      responses:
+        '202':
+          description: Accepted whether or not the account exists.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Accepted' }
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/auth/recovery/complete:
+    post:
+      operationId: completeRecovery
+      tags: [auth]
+      summary: 'Set a new password with a recovery code'
+      security: []
+      description: 'Revokes every session of the account.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RecoveryComplete' }
+      responses:
+        '204':
+          description: Done.
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/auth/totp:
+    post:
+      operationId: beginTotp
+      tags: [auth]
+      summary: 'Start TOTP enrolment'
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TotpEnrolment' }
+        default:
+          $ref: '#/components/responses/Problem'
+    delete:
+      operationId: removeTotp
+      tags: [auth]
+      summary: 'Remove the authenticator and its recovery codes'
+      responses:
+        '204':
+          description: Done.
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/auth/totp/confirm:
+    post:
+      operationId: confirmTotp
+      tags: [auth]
+      summary: 'Confirm TOTP enrolment and receive recovery codes'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TotpConfirm' }
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RecoveryCodes' }
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/auth/passkeys/register/options:
+    post:
+      operationId: passkeyRegisterOptions
+      tags: [auth]
+      summary: 'WebAuthn creation options (PublicKeyCredentialCreationOptionsJSON)'
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WebAuthnOptions' }
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/auth/passkeys/register/verify:
+    post:
+      operationId: passkeyRegisterVerify
+      tags: [auth]
+      summary: 'Verify a created passkey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PasskeyRegisterVerify' }
+      responses:
+        '201':
+          description: Passkey registered.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IdOnly' }
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/auth/passkeys/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { $ref: '#/components/schemas/Id' } }
+    delete:
+      operationId: removePasskey
+      tags: [auth]
+      summary: 'Remove a passkey'
+      description: 'Refused with `last_credential` if it is the only sign-in method.'
+      responses:
+        '204':
+          description: Done.
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/auth/passkeys/login/options:
+    post:
+      operationId: passkeyLoginOptions
+      tags: [auth]
+      summary: 'WebAuthn request options for sign-in'
+      security: []
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WebAuthnOptions' }
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/auth/passkeys/login/verify:
+    post:
+      operationId: passkeyLoginVerify
+      tags: [auth]
+      summary: 'Sign in with a passkey'
+      security: []
+      description: 'Passkeys require user verification, so this is a complete sign-in.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PasskeyLoginVerify' }
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionState' }
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/auth/oidc/start:
+    post:
+      operationId: oidcStart
+      tags: [auth]
+      summary: 'Begin OIDC sign-in or linking'
+      security: [ {}, { session: [] } ]
+      description: 'Sets a short-lived `dl_oidc` browser-binding cookie. `mode: link` needs a recently authenticated session.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OidcStart' }
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OidcStartResult' }
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/auth/oidc/callback:
+    parameters:
+      - { name: state, in: query, schema: { type: string } }
+      - { name: code, in: query, schema: { type: string } }
+    get:
+      operationId: oidcCallback
+      tags: [auth]
+      summary: 'OIDC redirect target'
+      security: [ {}, { session: [] } ]
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OidcCallbackResult' }
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/auth/oidc/identities/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { $ref: '#/components/schemas/Id' } }
+    delete:
+      operationId: unlinkOidc
+      tags: [auth]
+      summary: 'Unlink an OIDC identity'
+      responses:
+        '204':
+          description: Done.
+        default:
+          $ref: '#/components/responses/Problem'
 components:
   securitySchemes:
     session:
       type: apiKey
       in: cookie
       name: dl_session
-      description: Placeholder; authentication is defined in milestone 1.2.
+      description: >
+        HttpOnly, SameSite=Lax session cookie issued by sign-in. A session in
+        state `mfa_required` is accepted only by `/v1/auth/mfa/totp`.
   responses:
     Problem:
-      description: Error in RFC 9457 problem details form.
+      description: 'Error in RFC 9457 problem details form.'
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
@@ -57,12 +446,12 @@ components:
     Id:
       type: string
       format: uuid
-      description: Opaque UUIDv7 identifier generated by the server.
+      description: 'Opaque UUIDv7 identifier generated by the server.'
       examples: ['018f3b1e-7c4a-7d2e-9a10-5b6c7d8e9f01']
     Timestamp:
       type: string
       format: date-time
-      description: UTC instant in RFC 3339 form.
+      description: 'UTC instant in RFC 3339 form.'
     Decimal:
       type: string
       pattern: '^-?(0|[1-9][0-9]*)(\.[0-9]+)?$'
@@ -73,13 +462,174 @@ components:
     CurrencyCode:
       type: string
       pattern: '^[A-Z]{3}$'
-      description: ISO 4217 alphabetic code.
+      description: 'ISO 4217 alphabetic code.'
     DistanceUnit:
       type: string
       enum: [km, mi]
     VolumeUnit:
       type: string
       enum: [l, gal_us, gal_imp]
+    RegisterRequest:
+      type: object
+      required: [email, password]
+      additionalProperties: false
+      properties:
+        email: { type: string, format: email, maxLength: 254 }
+        password: { type: string, minLength: 12, maxLength: 256 }
+        display_name: { type: string, maxLength: 80 }
+    RegisterResult:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [created, verification_sent] }
+    VerifyEmailRequest:
+      type: object
+      required: [email, code]
+      additionalProperties: false
+      properties:
+        email: { type: string }
+        code: { type: string }
+    LoginRequest:
+      type: object
+      required: [email, password]
+      additionalProperties: false
+      properties:
+        email: { type: string }
+        password: { type: string }
+    SessionState:
+      type: object
+      required: [state, csrf_token]
+      properties:
+        state: { type: string, enum: [signed_in, mfa_required] }
+        csrf_token: { type: string, description: Send as X-CSRF-Token on unsafe requests. }
+    TotpLoginRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        code: { type: string, pattern: '^[0-9]{6}$' }
+        recovery_code: { type: string }
+    ReauthRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        password: { type: string }
+        code: { type: string }
+    AccountSession:
+      type: object
+      required: [csrf_token, session_id, account]
+      properties:
+        csrf_token: { type: string }
+        session_id: { $ref: '#/components/schemas/Id' }
+        account: { $ref: '#/components/schemas/Account' }
+    Account:
+      type: object
+      required: [id, email, instanceRole, emailVerified, credentials]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        email: { type: string }
+        displayName: { type: string }
+        instanceRole: { type: string, enum: [admin, user] }
+        emailVerified: { type: boolean }
+        credentials: { type: object, description: Which sign-in methods are set up (password, totp, passkeys, oidc). }
+    SessionList:
+      type: object
+      required: [sessions]
+      properties:
+        sessions:
+          type: array
+          items:
+            type: object
+            required: [id, created_at, last_seen_at, current]
+            properties:
+              id: { $ref: '#/components/schemas/Id' }
+              created_at: { $ref: '#/components/schemas/Timestamp' }
+              last_seen_at: { $ref: '#/components/schemas/Timestamp' }
+              user_agent: { type: string }
+              current: { type: boolean }
+    RevokedCount:
+      type: object
+      required: [revoked]
+      properties:
+        revoked: { type: integer }
+    SetPasswordRequest:
+      type: object
+      required: [new_password]
+      additionalProperties: false
+      properties:
+        current_password: { type: string, description: Required when a password already exists. }
+        new_password: { type: string, minLength: 12, maxLength: 256 }
+    RecoveryRequest:
+      type: object
+      required: [email]
+      additionalProperties: false
+      properties:
+        email: { type: string }
+    RecoveryComplete:
+      type: object
+      required: [email, code, new_password]
+      additionalProperties: false
+      properties:
+        email: { type: string }
+        code: { type: string }
+        new_password: { type: string, minLength: 12, maxLength: 256 }
+    Accepted:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [accepted] }
+    TotpEnrolment:
+      type: object
+      required: [secret, otpauth_uri]
+      properties:
+        secret: { type: string, description: Base32 secret, shown once. }
+        otpauth_uri: { type: string }
+    TotpConfirm:
+      type: object
+      required: [code]
+      additionalProperties: false
+      properties:
+        code: { type: string, pattern: '^[0-9]{6}$' }
+    RecoveryCodes:
+      type: object
+      required: [recovery_codes]
+      properties:
+        recovery_codes: { type: array, items: { type: string }, description: Single-use codes, shown once. }
+    WebAuthnOptions:
+      type: object
+      description: 'JSON options as defined by the WebAuthn Level 3 JSON serialisation.'
+    PasskeyRegisterVerify:
+      type: object
+      required: [response]
+      properties:
+        response: { type: object, description: RegistrationResponseJSON from the browser. }
+        label: { type: string, maxLength: 60 }
+    PasskeyLoginVerify:
+      type: object
+      required: [response]
+      properties:
+        response: { type: object, description: AuthenticationResponseJSON from the browser. }
+    IdOnly:
+      type: object
+      required: [id]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+    OidcStart:
+      type: object
+      additionalProperties: false
+      properties:
+        mode: { type: string, enum: [login, link], default: login }
+    OidcStartResult:
+      type: object
+      required: [authorization_url]
+      properties:
+        authorization_url: { type: string, format: uri }
+    OidcCallbackResult:
+      type: object
+      required: [state]
+      properties:
+        state: { type: string, enum: [signed_in, mfa_required] }
+        csrf_token: { type: string }
+        status: { type: string, enum: [linked] }
     Health:
       type: object
       required: [status, database]

@@ -71,3 +71,11 @@ Status: proposed default, defined first so the vehicles lane (1.3) can build aga
 **Errors.** `AuthError` codes: `unauthenticated` (401), `forbidden`, `csrf_failed`, `reauth_required` (403). The HTTP layer renders them as RFC 9457 problems with that `code`.
 
 **HTTP layer.** `apps/api/src/http/app.ts` owns routing, JSON bodies (64 KiB default limit), cookie parsing, session resolution, the `Origin` and `X-CSRF-Token` checks for unsafe methods, trusted-proxy client IP resolution and problem+json rendering. A feature module exports `Route[]` (`method`, `path` such as `/v1/vehicles/:id`, `auth` mode, `handler`). The default `auth` mode is `required`, so a route is private unless it opts out, and handlers read `req.ctx` and call `requirePrincipal`. Handlers throw `HttpProblem(status, code, title)` for expected errors. Other lanes add their routes to the list passed to `createApp` and use `tests/helpers/` (`createTestDb`, `createTestUser`, `fakeAuthenticator`) for isolated databases and actors.
+
+## Authentication (milestone 1.2)
+
+Decisions and open questions are in [ADR 0002](adr/0002-authentication.md). The HTTP surface is the `auth` tag in `openapi.yaml` (`/v1/auth/...`), and `tests/auth-contract.test.ts` fails if routes and document drift apart.
+
+**Operator configuration** (environment): `DRIVELOOM_PUBLIC_ORIGIN` (required, an origin such as `https://fuel.example.com`, fixed WebAuthn origin), `DRIVELOOM_SECRET_KEY` (at least 32 characters), `DRIVELOOM_RP_ID` (defaults to the origin host; keep stable once passkeys exist), `DRIVELOOM_REGISTRATION` (`open` or `closed`, default `closed`), `DRIVELOOM_PASSWORD_LOGIN` (`0` to disable), `DRIVELOOM_TRUSTED_PROXIES` (comma-separated IPs or CIDRs), `DRIVELOOM_SMTP_URL` and `DRIVELOOM_SMTP_FROM` (optional), `DRIVELOOM_REQUIRE_EMAIL_VERIFICATION=1` (needs SMTP), `DRIVELOOM_OIDC_ISSUER`, `DRIVELOOM_OIDC_CLIENT_ID`, `DRIVELOOM_OIDC_CLIENT_SECRET` (optional; the redirect URI is `<origin>/v1/auth/oidc/callback`). Start with `npm start` in `apps/api`.
+
+**Auth tables** (all in migration 0003): `users`, `password_credentials`, `totp_credentials`, `recovery_codes`, `passkeys`, `oidc_identities`, `sessions`, `one_time_codes`, `auth_challenges`, `rate_limits`. Only the auth module writes them.
