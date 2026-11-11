@@ -71,3 +71,22 @@ Status: proposed default, defined first so the vehicles lane (1.3) can build aga
 **Errors.** `AuthError` codes: `unauthenticated` (401), `forbidden`, `csrf_failed`, `reauth_required` (403). The HTTP layer renders them as RFC 9457 problems with that `code`.
 
 **HTTP layer.** `apps/api/src/http/app.ts` owns routing, JSON bodies (64 KiB default limit), cookie parsing, session resolution, the `Origin` and `X-CSRF-Token` checks for unsafe methods, trusted-proxy client IP resolution and problem+json rendering. A feature module exports `Route[]` (`method`, `path` such as `/v1/vehicles/:id`, `auth` mode, `handler`). The default `auth` mode is `required`, so a route is private unless it opts out, and handlers read `req.ctx` and call `requirePrincipal`. Handlers throw `HttpProblem(status, code, title)` for expected errors. Other lanes add their routes to the list passed to `createApp` and use `tests/helpers/` (`createTestDb`, `createTestUser`, `fakeAuthenticator`) for isolated databases and actors.
+
+## Vehicles and ownership (milestone 1.3)
+
+Status: proposed defaults for owner review. Code is in `apps/api/src/vehicles/`, schema in `0004_vehicles.sql`, HTTP shapes in the `vehicles` operations of the OpenAPI file. The service layer is framework-independent; HTTP wiring waits for the framework decision.
+
+| Role | May |
+| --- | --- |
+| viewer | read the vehicle and its member roster, leave |
+| editor | everything a viewer may, plus edit vehicle details (later: fuel records) |
+| owner | everything, plus archive, grant, change or remove members, transfer ownership |
+
+- **One owner per vehicle.** A partial unique index forbids a second owner. The service creates the owner row with the vehicle, never removes it, and swaps it only by transfer or recovery. Every mutation locks the vehicle row first, so concurrent transfers, removals and role changes serialise.
+- **404, not 403, for strangers.** A caller with no grant, including an instance admin, gets `vehicle_not_found` on every operation. A member lacking permission gets 403 `forbidden`.
+- **Transfer.** The owner hands ownership to an existing active member; the previous owner becomes an editor. The owner cannot be removed or have their role changed directly (`owner_required`, `owner_immutable`).
+- **Admin recovery.** `recoverOwnership` is the only vehicle operation open to instance admins. It needs a written reason, makes an active user the owner, keeps the previous owner as editor (dropped if that account is disabled or deleted), and never grants the admin vehicle access.
+- **Audit.** Each mutation writes an `audit_events` row in the same transaction: `vehicle.create|update|archive|unarchive`, `member.add|role_change|remove|leave`, `owner.transfer|recover`.
+- **Account removal.** Auth must not delete a user who owns a vehicle until the owner transfers it or an admin recovers it.
+
+Open product questions for the owner: whether editors should be able to edit vehicle details, whether the previous owner stays as editor after admin recovery, and whether admins need a way to list a user's owned vehicles.

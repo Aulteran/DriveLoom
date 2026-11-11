@@ -14,6 +14,7 @@ if (!/^\d+\.\d+\.\d+$/.test(doc.info?.version ?? '')) errors.push('info.version 
 for (const p of Object.keys(doc.paths ?? {})) {
   if (!p.startsWith('/v1/')) errors.push(`path ${p} must be under /v1/`);
   for (const [method, op] of Object.entries<Operation>(doc.paths[p])) {
+    if (!['get', 'put', 'post', 'delete', 'patch', 'head', 'options', 'trace'].includes(method)) continue; // path-level keys such as parameters
     if (!op.operationId) errors.push(`${method} ${p} needs operationId`);
     if (!op.responses?.default && !Object.keys(op.responses ?? {}).some((c) => /^[45]/.test(c))) {
       errors.push(`${method} ${p} must document an error response`);
