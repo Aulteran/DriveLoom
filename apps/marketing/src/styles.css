@@ -1,10 +1,10 @@
 :root {
   --bg: #0b0f17; --surface: #131a26; --border: #243049; --text: #e8edf6; --muted: #a3b0c7;
-  --accent: #3b82ff; --accent-text: #fff;
+  --accent: #3b82ff; --accent-text: #0b0f17; /* dark text on the bright accent: 5.3:1 (white was 3.6:1) */
   color-scheme: dark light;
 }
 @media (prefers-color-scheme: light) {
-  :root { --bg: #f6f8fc; --surface: #fff; --border: #d8e0ee; --text: #0f1726; --muted: #4a5873; --accent: #1e5fe0; }
+  :root { --bg: #f6f8fc; --surface: #fff; --border: #d8e0ee; --text: #0f1726; --muted: #4a5873; --accent: #1e5fe0; --accent-text: #fff; }
 }
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
