@@ -1,0 +1,16 @@
+# Local development database only. Not a production deployment (milestone 1.6).
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: driveloom
+      POSTGRES_PASSWORD: driveloom-dev-only
+      POSTGRES_DB: driveloom
+    ports: ['127.0.0.1:54320:5432']
+    volumes: ['dbdata:/var/lib/postgresql/data']
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U driveloom']
+      interval: 2s
+      retries: 30
+volumes:
+  dbdata:
