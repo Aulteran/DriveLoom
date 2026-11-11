@@ -1,12 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { uuidv7, isUuid } from '../src/ids.js';
+import { uuidv7, isUuid } from '../src/ids.ts';
 
 test('uuidv7 has version 7 and RFC variant', () => {
   const id = uuidv7();
   assert.ok(isUuid(id));
   assert.equal(id[14], '7');
-  assert.match(id[19], /[89ab]/);
+  assert.match(id[19]!, /[89ab]/);
 });
 
 test('uuidv7 is unique and monotonic within a process', () => {

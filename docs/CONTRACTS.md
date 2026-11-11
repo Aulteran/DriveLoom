@@ -8,7 +8,7 @@ Status: proposed defaults for owner review, per the roadmap. Nothing here is a p
 | --- | --- | --- |
 | `apps/api/openapi/openapi.yaml` | contract | Versioned OpenAPI 3.1 skeleton, source of truth for HTTP shapes |
 | `apps/api/migrations/` | persistence | Forward-only numbered SQL migrations |
-| `apps/api/src/` | API | Identifier and migration runner; later milestones add modules |
+| `apps/api/src/` | API | Identifier, shared types and migration runner (TypeScript); later milestones add modules |
 | `apps/api/tests/` | tests | Unit, contract and PostgreSQL integration tests, plus `fixtures/` |
 | `deploy/compose.dev.yml` | dev | Local PostgreSQL only |
 
@@ -19,7 +19,7 @@ docker compose -f deploy/compose.dev.yml up -d --wait
 cd apps/api && npm ci
 export DATABASE_URL=postgres://driveloom:driveloom-dev-only@127.0.0.1:54320/driveloom
 npm run migrate      # empty database to latest
-npm run check        # OpenAPI validation
+npm run check        # type-check plus OpenAPI validation
 npm test             # set REQUIRE_DB=1 to fail rather than skip without a database
 ```
 

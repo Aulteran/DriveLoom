@@ -1,5 +1,5 @@
 import pg from 'pg';
-import { migrate } from '../src/migrate.js';
+import { migrate } from '../src/migrate.ts';
 
 const url = process.env.DATABASE_URL;
 if (!url) { console.error('DATABASE_URL is required'); process.exit(2); }

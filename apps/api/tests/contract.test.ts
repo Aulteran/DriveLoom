@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { parse } from 'yaml';
 
 test('OpenAPI skeleton passes check script', () => {
-  const out = execFileSync('node', ['scripts/check-openapi.mjs'], { encoding: 'utf8' });
+  const out = execFileSync('node', ['scripts/check-openapi.ts'], { encoding: 'utf8' });
   assert.match(out, /ok/);
 });
 

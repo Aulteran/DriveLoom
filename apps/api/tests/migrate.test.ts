@@ -2,19 +2,19 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import pg from 'pg';
-import { migrate, loadMigrations } from '../src/migrate.js';
+import { migrate, loadMigrations } from '../src/migrate.ts';
 
-const url = process.env.DATABASE_URL;
-if (!url && process.env.REQUIRE_DB) throw new Error('REQUIRE_DB set but DATABASE_URL missing');
+const url = process.env['DATABASE_URL'];
+if (!url && process.env['REQUIRE_DB']) throw new Error('REQUIRE_DB set but DATABASE_URL missing');
 const skip = url ? false : 'DATABASE_URL not set';
 
-let admin;
-const dbs = [];
+let admin: pg.Client;
+const dbs: string[] = [];
 async function freshClient() {
   const name = `dl_test_${process.pid}_${dbs.length}`;
   await admin.query(`CREATE DATABASE ${name}`);
   dbs.push(name);
-  const u = new URL(url);
+  const u = new URL(url!);
   u.pathname = `/${name}`;
   const c = new pg.Client({ connectionString: u.toString() });
   await c.connect();
