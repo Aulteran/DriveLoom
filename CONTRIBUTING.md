@@ -11,7 +11,14 @@
     ARCHITECTURE.md
     ROADMAP.md
     VERIFICATION.md
+  deploy/
+    compose.dev.yml
   apps/
+    api/
+      openapi/
+      migrations/
+      src/
+      tests/
     marketing/
       README.md
       ASSET-PROVENANCE.md
@@ -23,6 +30,7 @@
   .github/
     workflows/
       marketing.yml
+      api.yml
 ```
 
 Work from the current default branch in a scoped feature branch. In the PR, identify the milestone, describe the change, and provide verification evidence. Include responsive screenshots for UI changes. Record provenance for new assets. Keep generated output and local environment files outside commits.

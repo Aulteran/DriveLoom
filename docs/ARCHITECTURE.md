@@ -16,6 +16,8 @@ The site uses semantic HTML and CSS with dependency-free build scripts on Node 2
 
 ## Deferred platform
 
+Milestone 1.1 foundations (OpenAPI skeleton, identifiers, migrations, test infrastructure) are documented in [contracts](CONTRACTS.md) and [ADR 0001](adr/0001-platform-foundations.md) as proposed defaults.
+
 **Recommended architecture.** A modular backend with a versioned REST/OpenAPI contract, PostgreSQL and private image storage. Serve the web/PWA over the same public origin where practical. Deploy the API/web and database via Docker Compose on an internal network with persistent volumes. Document the instance public URL, stable WebAuthn origin and relying party ID, trusted proxy ranges, secure cookies and validated forwarding. The main platform repository holds API, web and deployment. Future native clients consume the published contract and use a secure native authentication flow selected before that phase.
 
 | Boundary | Data and invariants |

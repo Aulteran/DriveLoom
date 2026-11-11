@@ -1,0 +1,28 @@
+{
+  "description": "Shared fixtures for decimal, unit and economy rules in docs/CONTRACTS.md. Values are decimal strings.",
+  "units": {
+    "gal_us_to_l": "3.785411784",
+    "gal_imp_to_l": "4.54609",
+    "mi_to_km": "1.609344"
+  },
+  "fullToFull": {
+    "note": "Starting fill excluded; partial purchase and closing fill included.",
+    "start": { "odometer": "10000", "unit": "km", "full": true },
+    "fills": [
+      { "odometer": "10250", "volume": "20", "unit": "l", "full": false },
+      { "odometer": "10500", "volume": "30", "unit": "l", "full": true }
+    ],
+    "expected": { "distanceKm": "500", "volumeL": "50", "lPer100km": "10" }
+  },
+  "incompleteInterval": {
+    "fills": [
+      { "odometer": "10000", "volume": "40", "unit": "l", "full": true },
+      { "odometer": "10300", "volume": "20", "unit": "l", "full": false }
+    ],
+    "expected": "unavailable"
+  },
+  "roundTrips": [
+    { "input": "10", "unit": "gal_us", "storedL": "37.85411784" },
+    { "input": "10", "unit": "gal_imp", "storedL": "45.4609" }
+  ]
+}

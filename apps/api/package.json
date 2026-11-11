@@ -1,0 +1,26 @@
+{
+  "name": "driveloom-api",
+  "version": "0.0.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "typecheck": "tsc",
+    "check": "tsc && node scripts/check-openapi.ts",
+    "migrate": "node scripts/migrate.ts",
+    "test": "node --test tests/*.test.ts"
+  },
+  "dependencies": {
+    "pg": "8.23.1"
+  },
+  "devDependencies": {
+    "@seriousme/openapi-schema-validator": "2.11.0",
+    "@types/node": "22.20.5",
+    "@types/pg": "8.23.1",
+    "typescript": "7.0.2",
+    "yaml": "2.9.1"
+  }
+}
