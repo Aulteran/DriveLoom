@@ -69,3 +69,5 @@ Status: proposed default, defined first so the vehicles lane (1.3) can build aga
 **Test helper.** `tests/helpers/` (added by auth) creates a user and a ready `RequestContext` without going through sign-in, so vehicles tests can act as separate actors.
 
 **Errors.** `AuthError` codes: `unauthenticated` (401), `forbidden`, `csrf_failed`, `reauth_required` (403). The HTTP layer renders them as RFC 9457 problems with that `code`.
+
+**HTTP layer.** `apps/api/src/http/app.ts` owns routing, JSON bodies (64 KiB default limit), cookie parsing, session resolution, the `Origin` and `X-CSRF-Token` checks for unsafe methods, trusted-proxy client IP resolution and problem+json rendering. A feature module exports `Route[]` (`method`, `path` such as `/v1/vehicles/:id`, `auth` mode, `handler`). The default `auth` mode is `required`, so a route is private unless it opts out, and handlers read `req.ctx` and call `requirePrincipal`. Handlers throw `HttpProblem(status, code, title)` for expected errors. Other lanes add their routes to the list passed to `createApp` and use `tests/helpers/` (`createTestDb`, `createTestUser`, `fakeAuthenticator`) for isolated databases and actors.

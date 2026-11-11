@@ -5,6 +5,7 @@ CREATE TABLE users (
   id uuid PRIMARY KEY,
   email text NOT NULL,
   display_name text NOT NULL DEFAULT '',
+  email_verified_at timestamptz,
   instance_role text NOT NULL DEFAULT 'user' CHECK (instance_role IN ('admin', 'user')),
   status text NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled', 'deleted')),
   created_at timestamptz NOT NULL DEFAULT now(),
