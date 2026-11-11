@@ -12,8 +12,9 @@ if (!existsSync(join(dist, 'index.html'))) fail('dist/index.html missing (run np
 const html = read('index.html');
 if (/\{\{/.test(html)) fail('unresolved template variable');
 for (const re of [/<html lang="[^"]+"/, /<title>[^<]+<\/title>/, /<main id="main">/, /<h1>[^<]+<\/h1>/, /name="viewport"/,
-  /<link rel="canonical" href="https?:\/\/[^"]+"/, /property="og:title"/, /property="og:url"/, /name="twitter:card"/])
+  /<link rel="canonical" href="https?:\/\/[^"]+"/, /property="og:title"/, /property="og:url"/, /name="twitter:card" content="summary_large_image"/, /property="og:image" content="https?:\/\/[^"]+\/og-image\.png"/, /name="twitter:image" content="https?:\/\/[^"]+\/og-image\.png"/])
   if (!re.test(html)) fail('missing ' + re);
+if (!existsSync(join(dist, 'og-image.png'))) fail('og-image.png missing');
 if (!existsSync(join(dist, 'styles.css'))) fail('styles.css missing');
 
 // Discovery policy: meta robots, robots.txt and sitemap must agree.

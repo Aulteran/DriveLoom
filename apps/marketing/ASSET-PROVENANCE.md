@@ -4,4 +4,4 @@ Record each bundled image, illustration, font, icon and third-party mark before 
 
 | File | Creator and source URL | License or permission evidence | Changes and attribution | Reviewer |
 | --- | --- | --- | --- | --- |
-| _Add a row per bundled asset_ | | | | |
+| `src/og-image.png` (source `assets/og-image.svg`, regenerate with `node scripts/render-og.mjs`) | Original work for this project: plain text and a curve in system fonts, no third-party artwork, logos or marks | Project license (AGPL-3.0) | None | Pending owner review |

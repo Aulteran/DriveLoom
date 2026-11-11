@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <rect width="1200" height="630" fill="#0b0f17"/>
+  <rect x="60" y="60" width="1080" height="510" rx="28" fill="#131a26" stroke="#243049" stroke-width="2"/>
+  <path d="M120 520 C 300 440, 420 560, 600 490 S 900 420, 1080 470" fill="none" stroke="#3b82ff" stroke-width="6" stroke-linecap="round" opacity=".55"/>
+  <text x="120" y="200" font-family="system-ui, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="30" font-weight="600" letter-spacing="3" fill="#3b82ff">COMING SOON · SELF-HOSTED · OPEN SOURCE</text>
+  <text x="120" y="300" font-family="system-ui, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="104" font-weight="700" fill="#e8edf6">DriveLoom</text>
+  <text x="120" y="360" font-family="system-ui, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="38" fill="#a3b0c7">A self-hosted vehicle and fuel tracker.</text>
+</svg>

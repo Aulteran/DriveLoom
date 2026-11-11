@@ -27,6 +27,13 @@ test('asset links use the configured base path', () => {
   assert.ok(html.includes(`href="${cfg.basePath}styles.css"`));
 });
 
+test('share image meta tags point at the absolute og-image URL', () => {
+  assert.ok(html.includes(`property="og:image" content="${cfg.siteUrl}og-image.png"`));
+  assert.ok(html.includes(`name="twitter:image" content="${cfg.siteUrl}og-image.png"`));
+  assert.match(html, /name="twitter:card" content="summary_large_image"/);
+  assert.ok(existsSync(join(root, 'dist/og-image.png')));
+});
+
 test('live URL responds (only when SMOKE_URL is set)', { skip: !live }, async () => {
   const res = await fetch(live);
   assert.equal(res.status, 200);

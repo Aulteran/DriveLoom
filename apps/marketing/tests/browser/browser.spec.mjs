@@ -14,7 +14,7 @@ const dist = join(root, 'dist');
 const shots = join(root, 'test-results', 'screenshots');
 const cfg = JSON.parse(await readFile(join(root, 'site.config.json'), 'utf8'));
 const prefix = cfg.basePath;
-const types = { '.html': 'text/html', '.css': 'text/css', '.txt': 'text/plain', '.xml': 'application/xml' };
+const types = { '.html': 'text/html', '.css': 'text/css', '.txt': 'text/plain', '.xml': 'application/xml', '.png': 'image/png' };
 
 const server = createServer(async (req, res) => {
   const p = normalize(new URL(req.url, 'http://x').pathname);
@@ -62,4 +62,41 @@ test('robots.txt is served and agrees with the robots meta tag', async () => {
   assert.doesNotMatch(txt, /^\s*Disallow:\s*\/\s*$/m);
   const sm = await fetch(`${origin}${prefix}sitemap.xml`);
   assert.equal(sm.status, cfg.indexable ? 200 : 404);
+});
+
+for (const scheme of ['dark', 'light']) {
+  test(`${scheme} theme: no WCAG AA contrast violations, including button states`, async () => {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: scheme });
+    const page = await context.newPage();
+    await page.goto(`${origin}${prefix}`);
+    await page.locator('details').first().evaluate((d) => { d.open = true; });
+    const axe = await new AxeBuilder({ page }).withRules(['color-contrast']).analyze();
+    assert.deepEqual(axe.violations.map((v) => v.nodes.map((n) => n.html.slice(0, 80))), []);
+    await context.close();
+  });
+}
+
+test('keyboard: skip link first, every control reachable in order with a visible focus ring', async () => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const page = await context.newPage();
+  await page.goto(`${origin}${prefix}`);
+  await page.keyboard.press('Tab');
+  assert.equal(await page.evaluate(() => document.activeElement.className), 'skip');
+  assert.ok((await page.locator('.skip').boundingBox()).x >= 0, 'skip link is on-screen when focused');
+  const expected = await page.$$eval('a[href], summary', (els) => els.length);
+  const seen = [];
+  for (let i = 1; i < expected; i++) {
+    await page.keyboard.press('Tab');
+    seen.push(await page.evaluate(() => {
+      const e = document.activeElement; const cs = getComputedStyle(e);
+      return { tag: e.tagName, outline: cs.outlineStyle !== 'none' && parseFloat(cs.outlineWidth) >= 2 };
+    }));
+  }
+  assert.equal(seen.length, expected - 1);
+  assert.ok(seen.every((s) => s.outline), 'every focused control has a visible outline');
+  await page.keyboard.press('Shift+Tab'); await page.keyboard.press('Tab');
+  await page.locator('summary').first().focus();
+  await page.keyboard.press('Enter');
+  assert.equal(await page.locator('details').first().evaluate((d) => d.open), true, 'Enter toggles FAQ');
+  await context.close();
 });
