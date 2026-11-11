@@ -74,7 +74,7 @@ Status: proposed default, defined first so the vehicles lane (1.3) can build aga
 
 ## Vehicles and ownership (milestone 1.3)
 
-Status: proposed defaults for owner review. Code is in `apps/api/src/vehicles/`, schema in `0004_vehicles.sql`, HTTP shapes in the `vehicles` operations of the OpenAPI file. The service layer is framework-independent; HTTP wiring waits for the framework decision.
+Status: proposed defaults for owner review. Code is in `apps/api/src/vehicles/`, schema in `0004_vehicles.sql`, HTTP shapes in the `vehicles` operations of the OpenAPI file. Authorization lives in `VehicleService`; `vehicleRoutes(service)` in `src/vehicles/routes.ts` exposes it as `Route[]` for the shared HTTP layer, and the application entry point (not yet written) passes those routes to `createApp`.
 
 | Role | May |
 | --- | --- |
