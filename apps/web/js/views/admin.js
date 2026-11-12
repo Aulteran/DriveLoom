@@ -4,8 +4,9 @@ import { h, form, field, select, confirmDialog, toast } from '../ui.js';
 import { render, state } from '../main.js';
 import { date, dateTime } from '../format.js';
 import { withFreshSignIn } from './settings.js';
+import { icon } from '../icons.js';
 
-const SECTIONS = [['users', 'Accounts'], ['invites', 'Invitations'], ['audit', 'Audit log']];
+const SECTIONS = [['users', 'Accounts', 'users'], ['invites', 'Invitations', 'mail'], ['audit', 'Audit log', 'list']];
 
 const act = (label, fn, cls = 'secondary') => h('button', { class: cls, onclick: async (e) => {
   const btn = e.currentTarget; btn.disabled = true;
@@ -115,6 +116,6 @@ export async function adminView(section, query) {
   const body = section === 'invites' ? await invites() : section === 'audit' ? await audit(query) : await users();
   return h('div', {},
     h('h1', {}, 'Administration'),
-    h('nav', { class: 'tabs', 'aria-label': 'Administration sections' }, SECTIONS.map(([k, label]) => h('a', { href: `#/admin/${k}`, 'aria-current': k === section ? 'page' : undefined }, label))),
+    h('nav', { class: 'tabs', 'aria-label': 'Administration sections' }, SECTIONS.map(([k, label, ic]) => h('a', { href: `#/admin/${k}`, 'aria-current': k === section ? 'page' : undefined }, icon(ic), label))),
     body);
 }

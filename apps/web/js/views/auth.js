@@ -20,7 +20,7 @@ async function signedIn(result) {
 
 function shell(title, subtitle, ...body) {
   return h('div', { class: 'narrow' },
-    h('div', { class: 'row', style: 'margin-bottom:16px' }, h('img', { src: '/icon.svg', alt: '', width: 40, height: 40 }), h('strong', { style: 'font-size:1.3rem' }, 'DriveLoom')),
+    h('div', { class: 'auth-brand' }, h('img', { src: '/icon.svg', alt: '', width: 52, height: 52 }), h('div', {}, h('strong', {}, 'DriveLoom'), h('span', {}, 'Self-hosted fuel tracker'))),
     h('div', { class: 'panel' }, h('h1', {}, title), subtitle ? h('p', { class: 'muted' }, subtitle) : null, ...body));
 }
 
