@@ -67,14 +67,18 @@ test('web client journeys', { skip, timeout: 180_000 }, async (t: TestContext) =
       assert.match(vehicle, /^vehicles\/[0-9a-f-]{36}$/);
       // Recent dates, so the default statistics period always includes them.
       const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10) + 'T10:00';
-      for (const [when, odo, vol, amount] of [[daysAgo(40), '10000', '40', '70'], [daysAgo(25), '10600', '42', '73.5'], [daysAgo(10), '11150', '38.5', '68']] as const) {
+      const fills = [[daysAgo(40), '10000', '40', '70'], [daysAgo(25), '10600', '42', '73.5'], [daysAgo(10), '11150', '38.5', '68']] as const;
+      for (const [i, [when, odo, vol, amount]] of fills.entries()) {
         await page.getByRole('button', { name: /add fill-up/i }).first().click();
         await page.getByLabel('Date and time').fill(when);
         await page.getByLabel('Odometer reading').fill(odo);
         await page.getByLabel('Fuel volume').fill(vol);
         await page.getByLabel('Amount paid').fill(amount);
         await page.getByRole('button', { name: 'Add fill-up' }).last().click();
-        await page.getByText('Fill-up added.').waitFor();
+        // The log re-renders after the toast appears; wait for the new row and the closed form before the next entry.
+        await page.locator('main tbody tr').nth(i).waitFor();
+        await page.getByLabel('Odometer reading').waitFor({ state: 'detached' });
+        await page.waitForLoadState('networkidle');
       }
       await page.getByText('7.00 L/100 km').first().waitFor();
     });
