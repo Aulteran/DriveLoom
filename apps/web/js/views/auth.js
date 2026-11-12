@@ -8,9 +8,12 @@ const ERRORS = {
   registration_closed: 'Registration is closed on this instance. Ask an administrator for an invitation.',
 };
 
+// Which second step the pending sign-in needs; kept in memory only.
+let mfaMethod = 'totp';
+
 async function signedIn(result) {
   setCsrf(result.csrf_token);
-  if (result.state === 'mfa_required') { go('#/mfa'); return; }
+  if (result.state === 'mfa_required') { mfaMethod = result.mfa_method ?? 'totp'; go('#/mfa'); return; }
   await refreshSession();
   go('#/');
 }
@@ -90,6 +93,15 @@ function verifyForm(email) {
 }
 
 function mfaView() {
+  const again = h('p', { class: 'small' }, h('a', { href: '#/signin' }, 'Start sign-in again'));
+  if (mfaMethod === 'email') {
+    return shell('Check your email', 'We sent an 8-digit sign-in code to your email address. It expires in 15 minutes.',
+      form({}, [
+        field('Sign-in code', h('input', { name: 'code', inputmode: 'numeric', autocomplete: 'one-time-code', required: true, autofocus: true, maxlength: 8 })),
+        h('button', { type: 'submit' }, 'Continue'),
+      ], async (v) => signedIn(await post('/v1/auth/mfa/email', { code: v.code.trim() }))),
+      again);
+  }
   let recovery = false;
   const input = h('input', { name: 'code', inputmode: 'numeric', autocomplete: 'one-time-code', required: true, autofocus: true });
   const label = h('label', { for: 'mfa-code' }, 'Authenticator code');
@@ -102,7 +114,8 @@ function mfaView() {
   } }, 'Use a recovery code instead');
   return shell('Two-step verification', 'Enter the code from your authenticator app.',
     form({}, [h('div', { class: 'field' }, label, input), h('div', { class: 'row' }, h('button', { type: 'submit' }, 'Continue'), toggle)],
-      async (v) => signedIn(await post('/v1/auth/mfa/totp', recovery ? { recovery_code: v.code } : { code: v.code }))));
+      async (v) => signedIn(await post('/v1/auth/mfa/totp', recovery ? { recovery_code: v.code } : { code: v.code }))),
+    again);
 }
 
 function recoverView(info) {

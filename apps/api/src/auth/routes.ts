@@ -56,11 +56,15 @@ export function authRoutes(ctx: AuthContext): Route[] {
     r('POST', '/v1/auth/login', 'none', async (req) => {
       const b = body(req);
       const out = await acct.login(ctx, { email: b['email'], password: b['password'] }, meta(req));
-      return sessionResult(ctx, out.session);
+      return sessionResult(ctx, out.session, out.mfaMethod ? { mfa_method: out.mfaMethod } : {});
     }),
     r('POST', '/v1/auth/mfa/totp', 'pending', async (req) => {
       const b = body(req);
       const out = await acct.completeMfa(ctx, { sessionId: req.session!.sessionId, userId: req.session!.userId }, { code: b['code'], recoveryCode: b['recovery_code'] }, meta(req));
+      return sessionResult(ctx, out.session);
+    }),
+    r('POST', '/v1/auth/mfa/email', 'pending', async (req) => {
+      const out = await acct.completeEmailMfa(ctx, { sessionId: req.session!.sessionId, userId: req.session!.userId }, { code: body(req)['code'] }, meta(req));
       return sessionResult(ctx, out.session);
     }),
     r('POST', '/v1/auth/logout', 'required', async (req) => {

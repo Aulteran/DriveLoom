@@ -23,7 +23,7 @@ async function findUser(q: Pick<PoolClient, 'query'>, email: string): Promise<Us
 }
 
 // ---------- one-time emailed codes ----------
-async function issueCode(ctx: AuthContext, tx: Pick<PoolClient, 'query'>, userId: Id, purpose: 'verify_email' | 'recover_account'): Promise<string> {
+async function issueCode(ctx: AuthContext, tx: Pick<PoolClient, 'query'>, userId: Id, purpose: CodePurpose): Promise<string> {
   const code = numericCode(8);
   const now = ctx.now();
   await tx.query("UPDATE one_time_codes SET consumed_at = $3 WHERE user_id = $1 AND purpose = $2 AND consumed_at IS NULL", [userId, purpose, now]);
@@ -33,7 +33,7 @@ async function issueCode(ctx: AuthContext, tx: Pick<PoolClient, 'query'>, userId
 }
 
 /** Counts the attempt first (atomically), then checks; a code is single-use and dies after too many attempts. */
-async function consumeCode(ctx: AuthContext, userId: Id, purpose: 'verify_email' | 'recover_account', code: unknown): Promise<void> {
+async function consumeCode(ctx: AuthContext, userId: Id, purpose: CodePurpose, code: unknown): Promise<void> {
   const now = ctx.now();
   const { rows } = await ctx.db.query<{ id: Id; code_hash: string }>(
     `UPDATE one_time_codes SET attempts = attempts + 1 WHERE id = (
@@ -107,7 +107,10 @@ export async function verifyEmail(ctx: AuthContext, input: { email: unknown; cod
 }
 
 // ---------- sign-in ----------
-export interface SignIn { session: NewSession; userId: Id; mfaRequired: boolean }
+type CodePurpose = 'verify_email' | 'recover_account' | 'sign_in';
+
+/** `mfaMethod` names the second step a pending session must complete. */
+export interface SignIn { session: NewSession; userId: Id; mfaRequired: boolean; mfaMethod?: 'totp' | 'email' }
 
 export async function login(ctx: AuthContext, input: { email: unknown; password: unknown }, meta: Meta): Promise<SignIn> {
   const email = normaliseEmail(input.email);
@@ -125,10 +128,17 @@ export async function login(ctx: AuthContext, input: { email: unknown; password:
   // Reveal the unverified state only to someone who proved the password.
   if (ctx.mailer && ctx.config.requireEmailVerification && !u.email_verified_at) throw new HttpProblem(403, 'email_not_verified', 'Verify your email address before signing in');
   const totp = await ctx.db.query('SELECT 1 FROM totp_credentials WHERE user_id = $1 AND confirmed_at IS NOT NULL', [u.id]);
-  const mfaRequired = !!totp.rowCount;
+  // An authenticator app wins; otherwise the instance may require an emailed code.
+  const mfaMethod = totp.rowCount ? 'totp' as const : ctx.config.emailSignInCodes && ctx.mailer ? 'email' as const : undefined;
+  if (mfaMethod === 'email') {
+    const code = await issueCode(ctx, ctx.db, u.id, 'sign_in');
+    try { await ctx.mailer!.send(u.email, 'Your DriveLoom sign-in code', `Your sign-in code is ${code}. It expires in ${Math.round(ctx.config.codeTtlMs / 60000)} minutes. If you did not just sign in, change your password.`); }
+    catch { throw new HttpProblem(503, 'email_unavailable', 'Could not send the sign-in code; try again later'); }
+  }
+  const mfaRequired = !!mfaMethod;
   const session = await createSession(ctx, u.id, mfaRequired ? 'pending' : 'active', meta);
   await audit(ctx.db, u.id, mfaRequired ? 'login.first_factor' : 'login.succeeded', u.id, { method: 'password' }, ctx.now());
-  return { session, userId: u.id, mfaRequired };
+  return { session, userId: u.id, mfaRequired, ...(mfaMethod ? { mfaMethod } : {}) };
 }
 
 /** Second factor for a pending session. The pending session is destroyed and a fresh one issued (no fixation). */
@@ -145,6 +155,23 @@ export async function completeMfa(ctx: AuthContext, pending: { sessionId: Id; us
   await ctx.db.query('UPDATE sessions SET revoked_at = $2 WHERE id = $1', [pending.sessionId, ctx.now()]);
   const session = await createSession(ctx, pending.userId, 'active', meta);
   await audit(ctx.db, pending.userId, 'login.succeeded', pending.userId, { method: 'password+totp' }, ctx.now());
+  return { session, userId: pending.userId, mfaRequired: false };
+}
+
+/** Second step by emailed code, for accounts without an authenticator app. */
+export async function completeEmailMfa(ctx: AuthContext, pending: { sessionId: Id; userId: Id }, input: { code?: unknown }, meta: Meta): Promise<SignIn> {
+  await rateLimit(ctx, `mfa:acct:${pending.userId}`, 10, TEN_MIN);
+  await rateLimit(ctx, `mfa:ip:${meta.ip}`, 30, TEN_MIN);
+  // An account that has since enrolled an authenticator app must use it.
+  const totp = await ctx.db.query('SELECT 1 FROM totp_credentials WHERE user_id = $1 AND confirmed_at IS NOT NULL', [pending.userId]);
+  if (totp.rowCount) throw new HttpProblem(401, 'invalid_code', 'Code is invalid or expired');
+  try { await consumeCode(ctx, pending.userId, 'sign_in', input.code); } catch (e) {
+    await audit(ctx.db, pending.userId, 'login.mfa_failed', pending.userId, { method: 'email' }, ctx.now());
+    throw e;
+  }
+  await ctx.db.query('UPDATE sessions SET revoked_at = $2 WHERE id = $1', [pending.sessionId, ctx.now()]);
+  const session = await createSession(ctx, pending.userId, 'active', meta);
+  await audit(ctx.db, pending.userId, 'login.succeeded', pending.userId, { method: 'password+email' }, ctx.now());
   return { session, userId: pending.userId, mfaRequired: false };
 }
 

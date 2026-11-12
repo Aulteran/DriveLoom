@@ -14,7 +14,9 @@ The site uses semantic HTML and CSS with dependency-free build scripts on Node 2
 
 [GitHub Pages custom workflows](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)
 
-## Deferred platform
+## Platform
+
+As built on 2026-11-12: one Node 22 process (TypeScript run directly) serving the `/v1` API and the `apps/web` client on one origin, PostgreSQL 16 for all data including images, Docker Compose for deployment. Module contracts are in [contracts](CONTRACTS.md), decisions in [ADRs 0001 to 0005](adr/), operations in [deployment](DEPLOYMENT.md). The text below is the original plan the build followed.
 
 Milestone 1.1 foundations (OpenAPI skeleton, identifiers, migrations, test infrastructure) are documented in [contracts](CONTRACTS.md) and [ADR 0001](adr/0001-platform-foundations.md) as proposed defaults.
 

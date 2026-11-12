@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: DriveLoom API
-  version: 0.5.0
+  version: 0.6.0
   summary: Versioned contract for the self-hosted DriveLoom API.
   description: >
     Contract for the self-hosted DriveLoom API under the compatibility policy
@@ -111,6 +111,30 @@ paths:
         content:
           application/json:
             schema: { $ref: '#/components/schemas/TotpLoginRequest' }
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionState' }
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/auth/mfa/email:
+    post:
+      operationId: completeEmailCode
+      tags: [auth]
+      summary: 'Complete sign-in with an emailed code'
+      description: 'When the instance sets `DRIVELOOM_EMAIL_SIGN_IN_CODES=1` and the account has no authenticator app, a correct password emails an 8-digit code and the login result has `mfa_method: email`. Requires a session in state `mfa_required`. Issues a new session identifier.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              additionalProperties: false
+              properties:
+                code: { type: string }
       responses:
         '200':
           description: Success.
@@ -1279,7 +1303,7 @@ components:
       name: dl_session
       description: >
         HttpOnly, SameSite=Lax session cookie issued by sign-in. A session in
-        state `mfa_required` is accepted only by `/v1/auth/mfa/totp`.
+        state `mfa_required` is accepted only by `/v1/auth/mfa/totp` and `/v1/auth/mfa/email`.
   parameters:
     VehicleId:
       name: vehicleId
@@ -1408,6 +1432,7 @@ components:
       properties:
         state: { type: string, enum: [signed_in, mfa_required] }
         csrf_token: { type: string, description: Send as X-CSRF-Token on unsafe requests. }
+        mfa_method: { type: string, enum: [totp, email], description: 'With `mfa_required`: which second step completes the sign-in.' }
     TotpLoginRequest:
       type: object
       additionalProperties: false

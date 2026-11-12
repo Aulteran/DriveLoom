@@ -65,3 +65,26 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm run test:browser
+
+  deploy:
+    # The real Dockerfile and compose file: build, start, wait for healthy, serve.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start the compose stack
+        run: |
+          cp deploy/.env.example deploy/.env
+          sed -i "s|^DRIVELOOM_SECRET_KEY=$|DRIVELOOM_SECRET_KEY=$(openssl rand -hex 32)|; s|^POSTGRES_PASSWORD=$|POSTGRES_PASSWORD=$(openssl rand -hex 16)|; s|^DRIVELOOM_SETUP_TOKEN=$|DRIVELOOM_SETUP_TOKEN=$(openssl rand -hex 16)|" deploy/.env
+          mkdir -p deploy/backups && sudo chown 1000:1000 deploy/backups
+          docker compose -f deploy/compose.yml --env-file deploy/.env up -d --build --wait --wait-timeout 240
+      - name: Serves the API and the web client
+        run: |
+          curl -fsS http://127.0.0.1:8080/v1/health
+          curl -fsS http://127.0.0.1:8080/v1/version
+          curl -fsS http://127.0.0.1:8080/ | grep -q 'src="/js/main.js"'
+      - name: Backup round trip inside the container
+        run: |
+          docker compose -f deploy/compose.yml --env-file deploy/.env exec -T app node scripts/backup.ts create /backups/ci.dl-backup
+          docker compose -f deploy/compose.yml --env-file deploy/.env exec -T app node scripts/backup.ts verify /backups/ci.dl-backup
+      - if: failure()
+        run: docker compose -f deploy/compose.yml --env-file deploy/.env logs

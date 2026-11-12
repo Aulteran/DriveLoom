@@ -1,6 +1,6 @@
 # Milestones and acceptance
 
-Phase 0 is the only active implementation scope. The owner decides whether to restart the platform after marketing. Criteria for future phases describe planning targets and assume review of the proposed defaults.
+Phase 0 is complete (2026-11-11). On 2026-11-12 the owner restarted the platform and had milestones 1.1 to 2.2 built in one autonomous run; they await owner review and a security review. Evidence against each criterion is in [verification](VERIFICATION.md#platform-evidence-autonomous-build-2026-11-12). Phase 3 (native clients) has not started. Criteria describe planning targets and assume review of the proposed defaults.
 
 | ID | Deliverable | Acceptance evidence |
 | --- | --- | --- |

@@ -243,3 +243,43 @@ test('recovery request answers before mail delivery, for known and unknown addre
   await Promise.all([known.delivery, unknown.delivery]);
   assert.equal(h.mailer.sent.length, 1);
 }));
+
+test('email sign-in codes: second step after the password, single use, not for authenticator accounts', { skip }, () => using({ emailSignInCodes: true }, {}, async (h) => {
+  const env = { DRIVELOOM_PUBLIC_ORIGIN: 'https://dl.example', DRIVELOOM_SECRET_KEY: 'x'.repeat(40), DRIVELOOM_EMAIL_SIGN_IN_CODES: '1' };
+  assert.throws(() => configFromEnv(env, false), /needs SMTP/);
+  assert.equal(configFromEnv(env, true).emailSignInCodes, true);
+
+  await acct.register(h.ctx, { email: 'e@example.test', password: PW }, meta);
+  const first = await acct.login(h.ctx, { email: 'e@example.test', password: PW }, meta);
+  assert.deepEqual([first.mfaRequired, first.mfaMethod, first.session.state], [true, 'email', 'pending']);
+  const emailed = h.mailer.lastCode('e@example.test')!;
+  assert.match(emailed, /^\d{8}$/);
+  const pending = { sessionId: first.session.sessionId, userId: first.userId };
+  // A pending session is not a signed-in session.
+  assert.equal((await h.auth.resolveSession(first.session.token))?.pending, true);
+  assert.equal(await code(acct.completeEmailMfa(h.ctx, pending, { code: '00000000' }, meta)), 'invalid_code');
+  assert.equal(await code(acct.completeMfa(h.ctx, pending, { code: emailed }, meta)), 'invalid_code', 'the emailed code is not a TOTP code');
+  const done = await acct.completeEmailMfa(h.ctx, pending, { code: emailed }, meta);
+  assert.equal(done.session.state, 'active');
+  assert.notEqual(done.session.sessionId, pending.sessionId, 'a new session identifier is issued');
+  assert.equal(await h.auth.resolveSession(first.session.token), null, 'the pending session is gone');
+
+  // Single use, and a newer login replaces an older code.
+  const again = await acct.login(h.ctx, { email: 'e@example.test', password: PW }, meta);
+  assert.equal(await code(acct.completeEmailMfa(h.ctx, { sessionId: again.session.sessionId, userId: again.userId }, { code: emailed }, meta)), 'invalid_code');
+
+  // Send failure: no pending session and a clear error.
+  h.mailer.fail = true;
+  assert.equal(await code(acct.login(h.ctx, { email: 'e@example.test', password: PW }, meta)), 'email_unavailable');
+  h.mailer.fail = false;
+
+  // An authenticator app takes precedence, and an outstanding emailed code no longer works.
+  const outstanding = await acct.login(h.ctx, { email: 'e@example.test', password: PW }, meta);
+  const stale = h.mailer.lastCode('e@example.test')!;
+  const p = await principalFor(h, done.session.token);
+  const begin = await acct.totpBegin(h.ctx, p);
+  await acct.totpConfirm(h.ctx, p, await currentTotp(h, begin.secret));
+  const withTotp = await acct.login(h.ctx, { email: 'e@example.test', password: PW }, meta);
+  assert.equal(withTotp.mfaMethod, 'totp');
+  assert.equal(await code(acct.completeEmailMfa(h.ctx, { sessionId: outstanding.session.sessionId, userId: outstanding.userId }, { code: stale }, meta)), 'invalid_code');
+}));
