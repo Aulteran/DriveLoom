@@ -85,9 +85,18 @@ export function parseCookies(header: string | undefined): Record<string, string>
   const out: Record<string, string> = {};
   for (const part of (header ?? '').split(';')) {
     const i = part.indexOf('=');
-    if (i > 0) out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+    if (i <= 0) continue;
+    const name = part.slice(0, i).trim(), raw = part.slice(i + 1).trim();
+    // A malformed value in any cookie on this host (another app, a stray
+    // script) must not break every request: keep it undecoded instead of throwing.
+    try { out[name] = decodeURIComponent(raw); } catch { out[name] = raw; }
   }
   return out;
+}
+
+/** Path parameters with malformed percent-encoding match no resource. */
+function decodeParam(v: string): string {
+  try { return decodeURIComponent(v); } catch { throw new HttpProblem(404, 'not_found', 'Not found'); }
 }
 
 function safeEqual(a: string, b: string): boolean {
@@ -146,7 +155,7 @@ export function createApp(opts: AppOptions): (req: IncomingMessage, res: ServerR
         if (!m) continue;
         pathKnown = true;
         if (c.route.method !== method) continue;
-        match = { c, params: Object.fromEntries(c.names.map((n, i) => [n, decodeURIComponent(m[i + 1]!)])) };
+        match = { c, params: Object.fromEntries(c.names.map((n, i) => [n, decodeParam(m[i + 1]!)])) };
         break;
       }
       if (!match) throw pathKnown ? new HttpProblem(405, 'method_not_allowed', 'Method not allowed') : new HttpProblem(404, 'not_found', 'Not found');

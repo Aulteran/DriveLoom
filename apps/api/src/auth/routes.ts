@@ -149,8 +149,9 @@ export function authRoutes(ctx: AuthContext): Route[] {
     r('POST', '/v1/auth/passkeys/login/verify', 'none', async (req) => sessionResult(ctx, (await pk.loginVerify(ctx, body(req)['response'], meta(req))).session)),
     // --- OIDC ---
     r('POST', '/v1/auth/oidc/start', 'optional', async (req) => {
-      const mode = body(req)['mode'] === 'link' ? 'link' : 'login';
-      const out = await oidc.start(ctx, { mode, principal: req.ctx.principal }, meta(req));
+      const b = body(req);
+      const mode = b['mode'] === 'link' ? 'link' : 'login';
+      const out = await oidc.start(ctx, { mode, principal: req.ctx.principal, setupToken: b['setup_token'] }, meta(req));
       return { status: 200, body: { authorization_url: out.url }, headers: { 'set-cookie': cookie(ctx, OIDC_BINDING_COOKIE, out.binding, 600, '/v1/auth/oidc') } };
     }),
     r('GET', '/v1/auth/oidc/callback', 'optional', async (req) => {

@@ -62,9 +62,18 @@ function signInView(info, query) {
 function registerView(info, query) {
   const setup = info.needs_setup;
   const invite = query.get('invite') ?? '';
+  // On an empty instance with an identity provider, the administrator can also be created through it.
+  const viaOidc = setup && info.oidc
+    ? form({}, [
+      info.setup_token_required ? field('Setup token', h('input', { name: 'setup_token', required: true, autocomplete: 'off' }), 'Set by the operator in DRIVELOOM_SETUP_TOKEN.') : null,
+      h('button', { class: 'secondary', type: 'submit', style: 'width:100%;justify-content:center' }, 'Set up with your identity provider'),
+    ], async (v) => {
+      location.assign((await post('/v1/auth/oidc/start', { mode: 'login', setup_token: v.setup_token || undefined })).authorization_url);
+    })
+    : null;
   return shell(setup ? 'Set up this instance' : 'Create your account',
     setup ? 'No account exists yet. The account you create now is the administrator.' : info.registration === 'open' ? null : 'Registration is by invitation on this instance.',
-    form({}, [
+    info.password_login === false ? null : form({}, [
       field('Name', h('input', { name: 'display_name', autocomplete: 'name', maxlength: 80 })),
       field('Email', h('input', { name: 'email', type: 'email', autocomplete: 'username', required: true })),
       field('Password', h('input', { name: 'password', type: 'password', autocomplete: 'new-password', required: true, minlength: 12 }), 'At least 12 characters. A passphrase works well.'),
@@ -81,6 +90,7 @@ function registerView(info, query) {
       }
       await signedIn(await post('/v1/auth/login', { email: v.email, password: v.password }));
     }),
+    viaOidc ? h('div', { class: 'stack', style: 'margin-top:16px' }, viaOidc) : null,
     h('p', { class: 'small', style: 'margin-top:16px' }, h('a', { href: '#/signin' }, 'Already have an account? Sign in')));
 }
 

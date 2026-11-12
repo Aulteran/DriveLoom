@@ -50,7 +50,7 @@ paths:
       tags: [auth]
       summary: 'Create an account'
       security: []
-      description: 'The first account on an instance becomes its administrator; when the operator configured a setup token, that registration must present it (`setup_token_required`). Later registration follows the instance policy.'
+      description: 'The first account on an instance becomes its administrator; when the operator configured a setup token, that registration must present it (`setup_token_required`). Later registration follows the instance policy. Refused with `password_login_disabled` when the operator turned password sign-in off.'
       requestBody:
         required: true
         content:
@@ -460,7 +460,7 @@ paths:
       tags: [auth]
       summary: 'Begin OIDC sign-in or linking'
       security: [ {}, { session: [] } ]
-      description: 'Sets a short-lived `dl_oidc` browser-binding cookie. `mode: link` needs a recently authenticated session.'
+      description: 'Sets a short-lived `dl_oidc` browser-binding cookie. `mode: link` needs a recently authenticated session. On an empty instance with a setup token, send `setup_token`; otherwise the callback refuses to create the first account (`setup_token_required`).'
       requestBody:
         required: true
         content:
@@ -1549,6 +1549,7 @@ components:
       additionalProperties: false
       properties:
         mode: { type: string, enum: [login, link], default: login }
+        setup_token: { type: string, maxLength: 256, description: 'Required when the first account is created through the identity provider and the operator set DRIVELOOM_SETUP_TOKEN.' }
     OidcStartResult:
       type: object
       required: [authorization_url]
