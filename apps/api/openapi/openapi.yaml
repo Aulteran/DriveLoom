@@ -1,12 +1,11 @@
 openapi: 3.1.0
 info:
   title: DriveLoom API
-  version: 0.2.0
-  summary: Versioned contract skeleton for the self-hosted DriveLoom API.
+  version: 0.3.0
+  summary: Versioned contract for the self-hosted DriveLoom API.
   description: >
-    Instance endpoints (milestone 1.1) and authentication (milestone 1.2, tag
-    `auth`). Vehicles, fuel and sharing endpoints are added by later milestones
-    under the compatibility policy in docs/CONTRACTS.md. Authenticated requests
+    Contract for the self-hosted DriveLoom API under the compatibility policy
+    in docs/CONTRACTS.md. Authenticated requests
     use the `dl_session` cookie; unsafe methods must also send the
     `X-CSRF-Token` returned at sign-in, and any `Origin` header must equal the
     instance public origin.
@@ -691,6 +690,150 @@ paths:
                         archived: { type: boolean }
         '401': { $ref: '#/components/responses/Problem' }
         '404': { $ref: '#/components/responses/Problem' }
+  # --- fuel, units and costs (milestone 1.4) ---
+  /v1/preferences:
+    get:
+      operationId: getPreferences
+      summary: The caller's display preferences
+      tags: [preferences]
+      responses:
+        '200':
+          description: Preferences (defaults when never set).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Preferences' }
+        '401': { $ref: '#/components/responses/Problem' }
+    put:
+      operationId: setPreferences
+      summary: Change display preferences; stored records are never converted
+      tags: [preferences]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PreferencesPatch' }
+      responses:
+        '200':
+          description: Updated preferences.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Preferences' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/vehicles/{vehicleId}/fill-ups:
+    parameters:
+      - { $ref: '#/components/parameters/VehicleId' }
+    get:
+      operationId: listFillUps
+      summary: Fuel purchases, newest first, with the interval each full fill closes
+      tags: [fuel]
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 5000, default: 500 } }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+      responses:
+        '200':
+          description: Fill-ups in the viewer's display units; entered values are returned unchanged.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/FillUp' } }
+                  total: { type: integer }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: createFillUp
+      summary: Record a purchase (editor or owner)
+      description: >
+        Units are chosen explicitly. The odometer may not run backwards in time
+        (`odometer_out_of_sequence`), the same instant and reading is a
+        duplicate (`duplicate_fill_up`), and a purchase in another currency
+        needs `exchangeRate` or `reportingAmount` (`reporting_amount_required`).
+      tags: [fuel]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FillUpInput' }
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FillUp' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/vehicles/{vehicleId}/fill-ups/{fillUpId}:
+    parameters:
+      - { $ref: '#/components/parameters/VehicleId' }
+      - { name: fillUpId, in: path, required: true, schema: { $ref: '#/components/schemas/Id' } }
+    get:
+      operationId: getFillUp
+      summary: One purchase
+      tags: [fuel]
+      responses:
+        '200':
+          description: The fill-up.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FillUp' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+    patch:
+      operationId: updateFillUp
+      summary: Correct a purchase; the merged record is validated again as a whole
+      tags: [fuel]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FillUpPatch' }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FillUp' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+    delete:
+      operationId: deleteFillUp
+      summary: Delete a purchase
+      tags: [fuel]
+      responses:
+        '204': { description: Deleted. }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+  /v1/vehicles/{vehicleId}/stats:
+    parameters:
+      - { $ref: '#/components/parameters/VehicleId' }
+    get:
+      operationId: getVehicleStats
+      summary: Aggregate economy and spending for a window
+      description: Intervals belong to the window their closing fill falls in. Economy is computed from summed distance and volume.
+      tags: [fuel]
+      parameters:
+        - { name: from, in: query, description: Inclusive start, schema: { $ref: '#/components/schemas/Timestamp' } }
+        - { name: to, in: query, description: Exclusive end, schema: { $ref: '#/components/schemas/Timestamp' } }
+      responses:
+        '200':
+          description: Statistics in the viewer's units and the vehicle's reporting currency.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VehicleStats' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
 components:
   securitySchemes:
     session:
@@ -754,6 +897,8 @@ components:
         make: { type: [string, 'null'], minLength: 1, maxLength: 80 }
         model: { type: [string, 'null'], minLength: 1, maxLength: 80 }
         year: { type: [integer, 'null'], minimum: 1886 }
+        odometerUnit: { $ref: '#/components/schemas/DistanceUnit', description: Unit of the physical odometer. Defaults to the creator's distance preference. }
+        currency: { $ref: '#/components/schemas/CurrencyCode', description: Reporting currency. Defaults to the creator's currency preference; locked once costs are recorded. }
     VehiclePatch:
       type: object
       additionalProperties: false
@@ -763,10 +908,14 @@ components:
         make: { type: [string, 'null'], minLength: 1, maxLength: 80 }
         model: { type: [string, 'null'], minLength: 1, maxLength: 80 }
         year: { type: [integer, 'null'], minimum: 1886 }
+        odometerUnit: { $ref: '#/components/schemas/DistanceUnit', description: Unit of the physical odometer. Defaults to the creator's distance preference. }
+        currency: { $ref: '#/components/schemas/CurrencyCode', description: Reporting currency. Defaults to the creator's currency preference; locked once costs are recorded. }
     Vehicle:
       type: object
-      required: [id, name, make, model, year, archived, role, createdAt, updatedAt]
+      required: [id, name, make, model, year, archived, odometerUnit, currency, role, createdAt, updatedAt]
       properties:
+        odometerUnit: { $ref: '#/components/schemas/DistanceUnit' }
+        currency: { $ref: '#/components/schemas/CurrencyCode' }
         id: { $ref: '#/components/schemas/Id' }
         name: { type: string }
         make: { type: [string, 'null'] }
@@ -970,3 +1119,163 @@ components:
         status: { type: integer }
         detail: { type: string }
         code: { type: string, description: Machine-readable error code. }
+    EconomyUnit:
+      type: string
+      enum: [l_per_100km, km_per_l, mpg_us, mpg_imp]
+      description: '`mpg_us` uses the US gallon, `mpg_imp` the imperial gallon.'
+    Preferences:
+      type: object
+      required: [distanceUnit, volumeUnit, economyUnit, currency]
+      properties:
+        distanceUnit: { $ref: '#/components/schemas/DistanceUnit' }
+        volumeUnit: { $ref: '#/components/schemas/VolumeUnit' }
+        economyUnit: { $ref: '#/components/schemas/EconomyUnit' }
+        currency: { $ref: '#/components/schemas/CurrencyCode' }
+    PreferencesPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        distanceUnit: { $ref: '#/components/schemas/DistanceUnit' }
+        volumeUnit: { $ref: '#/components/schemas/VolumeUnit' }
+        economyUnit: { $ref: '#/components/schemas/EconomyUnit' }
+        currency: { $ref: '#/components/schemas/CurrencyCode' }
+    Distance:
+      type: object
+      required: [value, unit]
+      additionalProperties: false
+      properties:
+        value: { $ref: '#/components/schemas/Decimal' }
+        unit: { $ref: '#/components/schemas/DistanceUnit' }
+    Volume:
+      type: object
+      required: [value, unit]
+      additionalProperties: false
+      properties:
+        value: { $ref: '#/components/schemas/Decimal' }
+        unit: { $ref: '#/components/schemas/VolumeUnit' }
+    Economy:
+      type: object
+      required: [value, unit]
+      properties:
+        value: { $ref: '#/components/schemas/Decimal' }
+        unit: { $ref: '#/components/schemas/EconomyUnit' }
+    FillUpCostInput:
+      type: object
+      required: [amount, currency]
+      additionalProperties: false
+      properties:
+        amount: { $ref: '#/components/schemas/Decimal' }
+        currency: { $ref: '#/components/schemas/CurrencyCode' }
+        exchangeRate: { oneOf: [{ $ref: '#/components/schemas/Decimal' }, { type: 'null' }], description: Reporting-currency units per one unit of `currency`. Only for a purchase in another currency. }
+        reportingAmount: { oneOf: [{ $ref: '#/components/schemas/Decimal' }, { type: 'null' }], description: The amount in the vehicle's reporting currency. Wins over `exchangeRate` when both are sent. }
+        reportingCurrency: { $ref: '#/components/schemas/CurrencyCode' }
+    FillUpCost:
+      type: object
+      required: [amount, currency, exchangeRate, reportingAmount, reportingCurrency]
+      properties:
+        amount: { $ref: '#/components/schemas/Decimal' }
+        currency: { $ref: '#/components/schemas/CurrencyCode' }
+        exchangeRate: { oneOf: [{ $ref: '#/components/schemas/Decimal' }, { type: 'null' }] }
+        reportingAmount: { $ref: '#/components/schemas/Decimal' }
+        reportingCurrency: { $ref: '#/components/schemas/CurrencyCode' }
+    FillUpInput:
+      type: object
+      required: [occurredAt, odometer, volume]
+      additionalProperties: false
+      properties:
+        occurredAt: { $ref: '#/components/schemas/Timestamp' }
+        odometer: { $ref: '#/components/schemas/Distance' }
+        volume: { $ref: '#/components/schemas/Volume' }
+        full: { type: boolean, default: true, description: The tank was filled completely. }
+        missedPrevious: { type: boolean, default: false, description: One or more purchases before this one were not recorded. }
+        cost: { oneOf: [{ $ref: '#/components/schemas/FillUpCostInput' }, { type: 'null' }] }
+        notes: { type: [string, 'null'], maxLength: 500 }
+    FillUpPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        occurredAt: { $ref: '#/components/schemas/Timestamp' }
+        odometer: { $ref: '#/components/schemas/Distance' }
+        volume: { $ref: '#/components/schemas/Volume' }
+        full: { type: boolean }
+        missedPrevious: { type: boolean }
+        cost: { oneOf: [{ $ref: '#/components/schemas/FillUpCostInput' }, { type: 'null' }] }
+        notes: { type: [string, 'null'], maxLength: 500 }
+    FillUpInterval:
+      type: object
+      required: [available, reason, distance, volume, economy]
+      description: The full-to-full interval a purchase closes. Unavailable intervals carry a reason and no figures.
+      properties:
+        available: { type: boolean }
+        reason: { type: [string, 'null'], enum: [partial_fill, no_previous_full_fill, missed_fill, no_distance, null] }
+        distance: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }] }
+        volume: { oneOf: [{ $ref: '#/components/schemas/Volume' }, { type: 'null' }] }
+        economy: { oneOf: [{ $ref: '#/components/schemas/Economy' }, { type: 'null' }] }
+    FillUp:
+      type: object
+      required: [id, vehicleId, occurredAt, odometer, volume, full, missedPrevious, cost, notes, createdBy, createdAt, updatedAt, display, interval]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        vehicleId: { $ref: '#/components/schemas/Id' }
+        occurredAt: { $ref: '#/components/schemas/Timestamp' }
+        odometer: { $ref: '#/components/schemas/Distance', description: Exactly as entered. }
+        volume: { $ref: '#/components/schemas/Volume', description: Exactly as entered. }
+        full: { type: boolean }
+        missedPrevious: { type: boolean }
+        cost: { oneOf: [{ $ref: '#/components/schemas/FillUpCost' }, { type: 'null' }] }
+        notes: { type: string }
+        createdBy: { oneOf: [{ $ref: '#/components/schemas/Id' }, { type: 'null' }] }
+        createdAt: { $ref: '#/components/schemas/Timestamp' }
+        updatedAt: { $ref: '#/components/schemas/Timestamp' }
+        display:
+          type: object
+          required: [odometer, volume]
+          description: Converted values. Odometer in the vehicle's odometer unit, volume in the viewer's volume unit.
+          properties:
+            odometer: { $ref: '#/components/schemas/Distance' }
+            volume: { $ref: '#/components/schemas/Volume' }
+        interval: { oneOf: [{ $ref: '#/components/schemas/FillUpInterval' }, { type: 'null' }] }
+    VehicleStats:
+      type: object
+      required: [vehicleId, window, fillCount, intervalCount, unavailableIntervalCount, distance, volume, economy, spend, costPerDistance, series]
+      properties:
+        vehicleId: { $ref: '#/components/schemas/Id' }
+        window:
+          type: object
+          required: [from, to]
+          properties:
+            from: { oneOf: [{ $ref: '#/components/schemas/Timestamp' }, { type: 'null' }] }
+            to: { oneOf: [{ $ref: '#/components/schemas/Timestamp' }, { type: 'null' }] }
+        fillCount: { type: integer }
+        intervalCount: { type: integer, description: Available intervals in the window. }
+        unavailableIntervalCount: { type: integer }
+        distance: { $ref: '#/components/schemas/Distance' }
+        volume: { $ref: '#/components/schemas/Volume' }
+        economy: { oneOf: [{ $ref: '#/components/schemas/Economy' }, { type: 'null' }] }
+        spend:
+          type: object
+          required: [amount, currency, costedFillCount]
+          description: Sum of every costed purchase in the window, in the reporting currency. Not an efficiency figure.
+          properties:
+            amount: { $ref: '#/components/schemas/Decimal' }
+            currency: { $ref: '#/components/schemas/CurrencyCode' }
+            costedFillCount: { type: integer }
+        costPerDistance:
+          oneOf:
+            - type: object
+              required: [value, currency, per]
+              properties:
+                value: { $ref: '#/components/schemas/Decimal' }
+                currency: { $ref: '#/components/schemas/CurrencyCode' }
+                per: { $ref: '#/components/schemas/DistanceUnit' }
+            - type: 'null'
+        series:
+          type: array
+          description: Economy of each available interval, oldest first, for charts.
+          items:
+            type: object
+            required: [at, economy]
+            properties:
+              at: { $ref: '#/components/schemas/Timestamp' }
+              economy: { $ref: '#/components/schemas/Decimal' }

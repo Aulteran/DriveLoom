@@ -4,21 +4,23 @@
 // the only admin path is recoverOwnership, which is audited.
 import type pg from 'pg';
 import { isUuid, uuidv7 } from '../ids.ts';
-import type { Id } from '../types.ts';
+import type { DistanceUnit, Id } from '../types.ts';
+import { isCurrency, isDistanceUnit } from '../units.ts';
+import { getPreferences } from '../preferences.ts';
 import type { Principal } from '../identity.ts';
 import { ApiError, conflict, forbidden, invalid, notFound } from './errors.ts';
-import type { GrantableRole, Member, Role, Vehicle, VehicleInput, VehiclePatch } from './types.ts';
+import type { GrantableRole, Member, Role, Vehicle, VehicleAccess, VehicleInput, VehiclePatch } from './types.ts';
 
 type Q = pg.PoolClient;
 interface VehicleRow {
   id: Id; name: string; make: string | null; model: string | null; model_year: number | null;
-  archived_at: Date | null; created_at: Date; updated_at: Date; role: Role;
+  archived_at: Date | null; created_at: Date; updated_at: Date; role: Role; odometer_unit: DistanceUnit; currency: string;
 }
 const toVehicle = (r: VehicleRow): Vehicle => ({
-  id: r.id, name: r.name, make: r.make, model: r.model, year: r.model_year, archived: r.archived_at !== null,
+  id: r.id, name: r.name, make: r.make, model: r.model, year: r.model_year, archived: r.archived_at !== null, odometerUnit: r.odometer_unit, currency: r.currency,
   createdAt: r.created_at.toISOString(), updatedAt: r.updated_at.toISOString(), role: r.role,
 });
-const COLS = 'v.id, v.name, v.make, v.model, v.model_year, v.archived_at, v.created_at, v.updated_at, m.role';
+const COLS = 'v.id, v.name, v.make, v.model, v.model_year, v.archived_at, v.created_at, v.updated_at, m.role, v.odometer_unit, v.currency';
 
 function text(v: unknown, field: string, required: boolean): string | null {
   if (v === undefined || v === null) { if (required) throw invalid(`${field} is required.`); return null; }
@@ -30,6 +32,14 @@ function text(v: unknown, field: string, required: boolean): string | null {
 function year(v: unknown): number | null {
   if (v === undefined || v === null) return null;
   if (typeof v !== 'number' || !Number.isInteger(v) || v < 1886 || v > new Date().getUTCFullYear() + 2) throw invalid('year is out of range.');
+  return v;
+}
+function odometerUnit(v: unknown): DistanceUnit {
+  if (!isDistanceUnit(v)) throw invalid("odometerUnit must be 'km' or 'mi'.");
+  return v;
+}
+function currency(v: unknown): string {
+  if (!isCurrency(v)) throw invalid('currency must be an ISO 4217 code such as EUR.');
   return v;
 }
 function id(v: unknown): Id {
@@ -70,6 +80,22 @@ export class VehicleService {
     return { id: vid, role: rows[0].role };
   }
 
+  /**
+   * Authorization entry point for other modules (fuel, portability, comparisons).
+   * Returns the caller's grant or throws 404; with `lock` it also takes the
+   * vehicle row lock, serialising with every other mutation on the vehicle.
+   */
+  async access(c: Pick<pg.Pool, 'query'>, p: Principal, vehicleId: unknown, lock = false): Promise<VehicleAccess> {
+    const vid = id(vehicleId);
+    const { rows } = await c.query<{ role: Role | null; archived: boolean; odometer_unit: DistanceUnit; currency: string }>(
+      `SELECT (SELECT role FROM vehicle_members WHERE vehicle_id = v.id AND user_id = $2) AS role,
+              v.archived_at IS NOT NULL AS archived, v.odometer_unit, v.currency
+         FROM vehicles v WHERE v.id = $1 ${lock ? 'FOR UPDATE' : ''}`, [vid, p.userId]);
+    const r = rows[0];
+    if (!r || !r.role) throw notFound();
+    return { id: vid, role: r.role, archived: r.archived, odometerUnit: r.odometer_unit, currency: r.currency };
+  }
+
   async #load(c: Q, p: Principal, vid: Id): Promise<Vehicle> {
     const { rows } = await c.query<VehicleRow>(
       `SELECT ${COLS} FROM vehicles v JOIN vehicle_members m ON m.vehicle_id = v.id AND m.user_id = $2 WHERE v.id = $1`, [vid, p.userId]);
@@ -79,9 +105,13 @@ export class VehicleService {
   async create(p: Principal, input: VehicleInput): Promise<Vehicle> {
     const name = text(input.name, 'name', true), make = text(input.make, 'make', false), model = text(input.model, 'model', false);
     const y = year(input.year);
+    // Unit and currency default to the creator's display preferences.
+    const prefs = input.odometerUnit === undefined || input.currency === undefined ? await getPreferences(this.#pool, p.userId) : null;
+    const unit = input.odometerUnit === undefined ? prefs!.distanceUnit : odometerUnit(input.odometerUnit);
+    const cur = input.currency === undefined ? prefs!.currency : currency(input.currency);
     return this.#tx(async (c) => {
       const vid = uuidv7();
-      await c.query('INSERT INTO vehicles (id, name, make, model, model_year) VALUES ($1,$2,$3,$4,$5)', [vid, name, make, model, y]);
+      await c.query('INSERT INTO vehicles (id, name, make, model, model_year, odometer_unit, currency) VALUES ($1,$2,$3,$4,$5,$6,$7)', [vid, name, make, model, y, unit, cur]);
       await c.query("INSERT INTO vehicle_members (vehicle_id, user_id, role, granted_by) VALUES ($1,$2,'owner',$2)", [vid, p.userId]);
       await this.#audit(c, p.userId, 'vehicle.create', vid);
       return this.#load(c, p, vid);
@@ -110,9 +140,16 @@ export class VehicleService {
     if ('make' in patch) add('make', text(patch.make, 'make', false));
     if ('model' in patch) add('model', text(patch.model, 'model', false));
     if ('year' in patch) add('model_year', year(patch.year));
+    if ('odometerUnit' in patch) add('odometer_unit', odometerUnit(patch.odometerUnit));
+    if ('currency' in patch) add('currency', currency(patch.currency));
     return this.#tx(async (c) => {
       const v = await this.#lock(c, p, vehicleId);
       if (v.role === 'viewer') throw forbidden('editing this vehicle');
+      if ('currency' in patch) {
+        // Changing the reporting currency would silently relabel recorded costs.
+        const costs = await c.query('SELECT 1 FROM fill_ups WHERE vehicle_id = $1 AND cost_amount IS NOT NULL AND $2 <> (SELECT currency FROM vehicles WHERE id = $1) LIMIT 1', [v.id, patch.currency]);
+        if (costs.rowCount) throw conflict('currency_locked', 'The reporting currency cannot change once costs are recorded.');
+      }
       if (sets.length) {
         await c.query(`UPDATE vehicles SET ${sets.join(', ')}, updated_at = now() WHERE id = $1`, [v.id, ...vals]);
         await this.#audit(c, p.userId, 'vehicle.update', v.id, { fields: Object.keys(patch) });

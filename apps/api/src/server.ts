@@ -10,6 +10,7 @@ import { authRoutes } from './auth/routes.ts';
 import { createSmtpMailer } from './auth/mailer.ts';
 import { createOidcProvider } from './auth/oidc.ts';
 import type { AuthContext } from './auth/context.ts';
+import { API_VERSION } from './version.ts';
 
 const env = process.env;
 const pool = new pg.Pool({ connectionString: env['DATABASE_URL'] });
@@ -25,7 +26,7 @@ const system: Route[] = [
   { method: 'GET', path: '/v1/health', auth: 'none', handler: async () => { await pool.query('SELECT 1'); return { status: 200, body: { status: 'ok', database: 'ok' } }; } },
   { method: 'GET', path: '/v1/version', auth: 'none', handler: async () => {
     const { rows } = await pool.query<{ v: number | null }>('SELECT max(version) AS v FROM schema_migrations');
-    return { status: 200, body: { server: pkg.version, api: '0.2.0', schema: rows[0]!.v ?? 0 } };
+    return { status: 200, body: { server: pkg.version, api: API_VERSION, schema: rows[0]!.v ?? 0 } };
   } },
 ];
 const routes: Route[] = [...system, ...authRoutes(ctx)];
