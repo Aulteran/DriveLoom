@@ -13,6 +13,12 @@ export const MIGRATIONS_DIR = fileURLToPath(new URL('../migrations/', import.met
 const NAME_RE = /^(\d{4})_[a-z0-9_]+\.sql$/;
 const LOCK_KEY = 7_165_201; // arbitrary constant: serialises concurrent migrators
 
+export const SCHEMA_MIGRATIONS_DDL = `CREATE TABLE IF NOT EXISTS schema_migrations (
+  version integer PRIMARY KEY,
+  name text NOT NULL,
+  checksum text NOT NULL,
+  applied_at timestamptz NOT NULL DEFAULT now())`;
+
 export async function loadMigrations(dir: string = MIGRATIONS_DIR): Promise<Migration[]> {
   const names = (await readdir(dir)).filter((n) => n.endsWith('.sql')).sort();
   const out: Migration[] = [];
@@ -31,11 +37,7 @@ export async function migrate(client: Client, dir: string = MIGRATIONS_DIR): Pro
   const migrations = await loadMigrations(dir);
   await client.query('SELECT pg_advisory_lock($1)', [LOCK_KEY]);
   try {
-    await client.query(`CREATE TABLE IF NOT EXISTS schema_migrations (
-      version integer PRIMARY KEY,
-      name text NOT NULL,
-      checksum text NOT NULL,
-      applied_at timestamptz NOT NULL DEFAULT now())`);
+    await client.query(SCHEMA_MIGRATIONS_DDL);
     const { rows } = await client.query<{ version: number; checksum: string }>('SELECT version, checksum FROM schema_migrations');
     const done = new Map(rows.map((r) => [r.version, r.checksum]));
     for (const v of done.keys()) {
