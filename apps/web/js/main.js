@@ -2,6 +2,7 @@
 // every non-API path serves index.html, and the fragment never reaches it.
 import { get, post, setCsrf, whenSignedOut } from './api.js';
 import { mount, h, toast } from './ui.js';
+import { icon } from './icons.js';
 import { authView } from './views/auth.js';
 import { vehiclesView } from './views/vehicles.js';
 import { vehicleView } from './views/vehicle.js';
@@ -70,6 +71,11 @@ export async function render() {
     mount(h('div', { class: 'panel' }, h('h1', {}, err.status === 404 ? 'Not found' : 'Something went wrong'), h('p', { class: 'muted' }, err.message), h('a', { href: '#/' }, 'Back to your vehicles')), 'Error');
   }
 }
+
+// Decorative icons for the static navigation.
+const NAV_ICONS = { vehicles: 'car', friends: 'users', settings: 'sliders', admin: 'shield' };
+for (const a of document.querySelectorAll('[data-nav]')) a.prepend(icon(NAV_ICONS[a.dataset.nav]));
+document.getElementById('signout').prepend(icon('logout'));
 
 whenSignedOut(() => { if (state.account) { state.account = null; toast('Your session ended. Please sign in again.'); render(); } });
 document.getElementById('signout').addEventListener('click', async () => {

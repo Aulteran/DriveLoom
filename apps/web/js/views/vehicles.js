@@ -3,13 +3,14 @@ import { get, post } from '../api.js';
 import { h, form, field, select } from '../ui.js';
 import { go, state } from '../main.js';
 import { ROLE } from '../format.js';
+import { icon } from '../icons.js';
 
 export const CURRENCIES = ['USD', 'EUR', 'GBP', 'CAD', 'AUD', 'CHF', 'JPY', 'INR', 'NZD', 'SEK', 'NOK', 'DKK', 'PLN', 'CZK', 'ZAR', 'BRL', 'MXN', 'SGD', 'HKD', 'AED'];
 export const currencyOptions = (current) => [...new Set([current, ...CURRENCIES].filter(Boolean))].map((c) => [c, c]);
 
 function card(v) {
   return h('a', { class: 'card', href: `#/vehicles/${v.id}` },
-    h('div', { class: 'photo' }, v.imageVersion ? h('img', { src: `/v1/vehicles/${v.id}/image?v=${v.imageVersion}`, alt: '', loading: 'lazy' }) : h('span', {}, '🚗')),
+    h('div', { class: 'photo' }, v.imageVersion ? h('img', { src: `/v1/vehicles/${v.id}/image?v=${v.imageVersion}`, alt: '', loading: 'lazy' }) : icon('car')),
     h('div', { class: 'body' },
       h('div', { class: 'row spread' }, h('strong', {}, v.name), h('span', { class: `badge ${v.role === 'owner' ? 'accent' : ''}` }, ROLE[v.role])),
       h('div', { class: 'muted small' }, [v.year, v.make, v.model].filter(Boolean).join(' ') || '—', v.archived ? ' · archived' : '')));
@@ -51,8 +52,8 @@ export async function vehiclesView(query) {
     h('div', { class: 'row spread', style: 'margin-bottom:16px' },
       h('h1', {}, 'Your vehicles'),
       h('div', { class: 'row' },
-        h('button', { class: 'secondary', onclick: () => { importBox.hidden = !importBox.hidden; } }, 'Import'),
-        h('button', { onclick: () => { create.hidden = !create.hidden; create.querySelector('input')?.focus(); } }, 'Add vehicle'))),
+        h('button', { class: 'secondary', onclick: () => { importBox.hidden = !importBox.hidden; } }, icon('upload'), 'Import'),
+        h('button', { onclick: () => { create.hidden = !create.hidden; create.querySelector('input')?.focus(); } }, icon('plus'), 'Add vehicle'))),
     create, importBox,
     items.length ? h('div', { class: 'grid' }, items.map(card)) : h('div', { class: 'panel empty' }, h('p', {}, 'No vehicles yet. Add one above, or ask an owner to share theirs with you.')),
     h('p', { class: 'small', style: 'margin-top:16px' }, h('a', { href: archived ? '#/' : '#/?archived=1' }, archived ? 'Hide archived vehicles' : 'Show archived vehicles')));

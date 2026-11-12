@@ -5,8 +5,9 @@ import { go, render, state } from '../main.js';
 import { qty, date, dateTime, money, REASONS, ROLE, UNIT, localInput, toInstant } from '../format.js';
 import { economyChart } from './chart.js';
 import { currencyOptions } from './vehicles.js';
+import { icon } from '../icons.js';
 
-const TABS = [['log', 'Fuel log'], ['stats', 'Statistics'], ['members', 'Members'], ['data', 'Import & export'], ['settings', 'Settings']];
+const TABS = [['log', 'Fuel log', 'fuel'], ['stats', 'Statistics', 'chart'], ['members', 'Members', 'users'], ['data', 'Import & export', 'swap'], ['settings', 'Settings', 'gear']];
 
 export async function vehicleView(id, tab, query) {
   const v = await get(`/v1/vehicles/${id}`);
@@ -14,10 +15,10 @@ export async function vehicleView(id, tab, query) {
   const body = tab === 'stats' ? await statsTab(v, query) : tab === 'members' ? await membersTab(v) : tab === 'data' ? dataTab(v, canEdit)
     : tab === 'settings' ? await settingsTab(v) : await logTab(v, canEdit, query);
   return h('div', {},
-    h('p', { class: 'small' }, h('a', { href: '#/' }, '← All vehicles')),
-    h('div', { class: 'row spread' },
+    h('a', { class: 'back', href: '#/' }, icon('back'), 'All vehicles'),
+    h('div', { class: 'hero' },
       h('div', {}, h('h1', {}, v.name), h('p', { class: 'muted' }, [v.year, v.make, v.model].filter(Boolean).join(' ') || '', ' ', h('span', { class: 'badge' }, ROLE[v.role]), v.archived ? h('span', { class: 'badge' }, ' Archived') : null))),
-    h('nav', { class: 'tabs', 'aria-label': 'Vehicle sections' }, TABS.map(([key, label]) => h('a', { href: `#/vehicles/${v.id}/${key}`, 'aria-current': key === tab ? 'page' : undefined }, label))),
+    h('nav', { class: 'tabs', 'aria-label': 'Vehicle sections' }, TABS.map(([key, label, ic]) => h('a', { href: `#/vehicles/${v.id}/${key}`, 'aria-current': key === tab ? 'page' : undefined }, icon(ic), label))),
     body);
 }
 
@@ -82,7 +83,7 @@ async function logTab(v, canEdit, query) {
         await del(`/v1/vehicles/${v.id}/fill-ups/${f.id}`); toast('Fill-up deleted.'); render();
       } }, 'Delete')) : null);
   return h('div', {},
-    canEdit ? h('div', { class: 'row', style: 'margin-bottom:16px' }, h('button', { onclick: () => open(null) }, 'Add fill-up')) : null,
+    canEdit ? h('div', { class: 'row', style: 'margin-bottom:16px' }, h('button', { onclick: () => open(null) }, icon('plus'), 'Add fill-up')) : null,
     slot,
     items.length ? h('div', { class: 'panel table-wrap' }, h('table', {},
       h('caption', { class: 'muted small', style: 'text-align:left;padding-bottom:8px' }, `${total} fill-ups, newest first. Economy is shown on the full fill that closes each interval.`),
@@ -154,7 +155,7 @@ function dataTab(v, canEdit) {
     const res = await api('GET', `/v1/vehicles/${v.id}/export?format=${format}`, undefined, { raw: true });
     const name = /filename="([^"]+)"/.exec(res.headers.get('content-disposition') ?? '')?.[1] ?? `driveloom.${format}`;
     download(name, await res.blob());
-  } }, format === 'csv' ? 'Download CSV' : 'Download JSON');
+  } }, icon('download'), format === 'csv' ? 'Download CSV' : 'Download JSON');
   const report = h('div');
   const showReport = (r) => report.replaceChildren(h('div', { class: r.committed ? 'notice' : r.summary.invalid ? 'error' : 'notice' },
     h('p', {}, r.committed ? 'Imported.' : r.dryRun ? 'Preview only. Nothing has been saved yet.' : 'Nothing was imported.'),

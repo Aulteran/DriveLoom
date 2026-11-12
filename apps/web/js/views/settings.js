@@ -5,8 +5,9 @@ import { h, form, field, select, confirmDialog, toast, errorBox, showError } fro
 import { go, render, refreshSession, state } from '../main.js';
 import { dateTime } from '../format.js';
 import { currencyOptions } from './vehicles.js';
+import { icon } from '../icons.js';
 
-const SECTIONS = [['preferences', 'Preferences'], ['profile', 'Profile'], ['security', 'Security']];
+const SECTIONS = [['preferences', 'Preferences', 'sliders'], ['profile', 'Profile', 'user'], ['security', 'Security', 'key']];
 
 /**
  * Run `fn`; when the server answers reauth_required, ask for the password or
@@ -243,6 +244,6 @@ export async function settingsView(section, query) {
   const body = section === 'security' ? await security(query) : section === 'profile' ? profile() : preferences();
   return h('div', {},
     h('h1', {}, 'Settings'),
-    h('nav', { class: 'tabs', 'aria-label': 'Settings sections' }, SECTIONS.map(([k, label]) => h('a', { href: `#/settings/${k}`, 'aria-current': k === section ? 'page' : undefined }, label))),
+    h('nav', { class: 'tabs', 'aria-label': 'Settings sections' }, SECTIONS.map(([k, label, ic]) => h('a', { href: `#/settings/${k}`, 'aria-current': k === section ? 'page' : undefined }, icon(ic), label))),
     body);
 }
