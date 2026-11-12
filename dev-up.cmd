@@ -9,7 +9,6 @@ cd /d "%~dp0"
 title DriveLoom launcher
 
 rem ---- Settings you may want to change --------------------------------------
-set "BRANCH=dev"
 set "BASEFILE=deploy\compose.yml"
 set "OVERRIDE=deploy\compose.override.yml"
 set "OVERRIDE_ALT=deploy\compose.override.yaml"
@@ -56,8 +55,6 @@ if exist "%ENVFILE%" (
   echo          This script never creates or overwrites that file.
   echo.
 )
-if exist "%OVERRIDE%" echo Using local override: %OVERRIDE%
-if exist "%OVERRIDE_ALT%" echo Using local override: %OVERRIDE_ALT%
 
 rem ---- Main menu --------------------------------------------------------------
 :menu
@@ -66,7 +63,7 @@ echo %ESC%[92m=== DriveLoom (built from local source) ===%ESC%[0m
 echo   1  Start it as you left it (keeps your data)
 echo   2  Stop the app without quitting (keeps data)
 echo   3  Show live logs (press Ctrl+C, then N, to come back here)
-echo   4  Restart and apply updates (pulls %BRANCH% if clean, rebuilds, recreates containers, keeps data)
+echo   4  Restart and apply updates (pulls the current branch if clean, rebuilds, keeps data)
 echo   5  Wipe everything and start completely fresh (DELETES the database, asks first)
 echo   6  Quit (leaves the app as it is)
 set "CHOICE="
@@ -75,62 +72,47 @@ if "%CHOICE%"=="1" goto :do_start
 if "%CHOICE%"=="2" goto :do_stop
 if "%CHOICE%"=="3" goto :do_logs
 if "%CHOICE%"=="4" goto :do_update
-if "%CHOICE%"=="5" goto :do_reset
-if "%CHOICE%"=="6" goto :quit
-echo Please type a number from 1 to 6.
-goto :menu
-
-rem ---- 1: start ---------------------------------------------------------------
-:do_start
-echo Starting DriveLoom (waits until it is healthy)...
-docker compose %DCARGS% up -d --quiet-pull --wait
-if errorlevel 1 goto :failed
-call :print_url
-goto :menu
-
-rem ---- 2: stop (containers removed, database volume kept) ---------------------
-:do_stop
-docker compose %DCARGS% down
-if errorlevel 1 goto :failed
-echo Stopped. Your data is kept.
-goto :menu
-
-rem ---- 3: logs ----------------------------------------------------------------
-:do_logs
-docker compose %DCARGS% logs -f --tail 100
-goto :menu
-
-rem ---- 4: restart and apply updates --------------------------------------------
-:do_update
-echo.
-echo [1/4] Git pull
-rem Only pull when on the expected branch with no changes to tracked files.
+rem Pull the branch you are on (fast-forward only), but only when it is safe.
 set "CUR="
 for /f "delims=" %%B in ('git rev-parse --abbrev-ref HEAD 2^>nul') do set "CUR=%%B"
-if /i not "%CUR%"=="%BRANCH%" (
-  echo       Skipped: you are on "%CUR%", not "%BRANCH%".
+if /i "%CUR%"=="HEAD" (
+  echo Git: skipped pull, you are on a detached HEAD.
+  goto :pull_done
+)
+set "UPSTREAM="
+for /f "delims=" %%U in ('git rev-parse --abbrev-ref --symbolic-full-name "@{u}" 2^>nul') do set "UPSTREAM=%%U"
+if not defined UPSTREAM (
+  echo Git: skipped pull, "%CUR%" has no upstream branch.
   goto :pull_done
 )
 set "DIRTY="
 for /f "delims=" %%L in ('git status --porcelain --untracked-files=no 2^>nul') do set "DIRTY=1"
 if defined DIRTY (
-  echo       Skipped: you have uncommitted changes. Commit or stash them to pull.
+  echo Git: skipped pull, you have uncommitted changes. Commit or stash them to pull.
   goto :pull_done
 )
-git pull --ff-only
+set "OLDHEAD="
+for /f "delims=" %%H in ('git rev-parse HEAD 2^>nul') do set "OLDHEAD=%%H"
+git pull --ff-only >"%LOG%" 2>&1
 if errorlevel 1 (
+  type "%LOG%"
   echo.
-  echo ERROR: git pull --ff-only failed. Your branch has probably diverged from origin.
+  echo ERROR: git pull --ff-only failed on "%CUR%". It has probably diverged from "%UPSTREAM%".
   echo        Fix it by hand, for example with git status and git log, then try again.
   goto :failed
 )
+set "NEWHEAD="
+for /f "delims=" %%H in ('git rev-parse HEAD 2^>nul') do set "NEWHEAD=%%H"
+if "%OLDHEAD%"=="%NEWHEAD%" (
+  echo Git: already up to date.
+) else (
+  echo Git: updated %CUR%.
+)
 :pull_done
 
-echo [2/4] Pulling prebuilt images (for example Postgres)
-docker compose %DCARGS% pull --quiet --ignore-buildable
-if errorlevel 1 echo       Could not pull images (offline?). Continuing with what is installed.
+docker compose %DCARGS% pull --quiet --ignore-buildable >"%LOG%" 2>&1
+if errorlevel 1 echo Could not pull images (offline?). Continuing with what is installed.
 
-echo [3/4] Building (quiet; full log shown only if it fails)
 docker compose --progress quiet %DCARGS% build >"%LOG%" 2>&1
 if errorlevel 1 (
   type "%LOG%"
@@ -139,10 +121,8 @@ if errorlevel 1 (
   goto :failed
 )
 
-echo [4/4] Starting and waiting until healthy
-docker compose %DCARGS% up -d --build --quiet-pull --wait >"%LOG%" 2>&1
+docker compose %DCARGS% up -d --quiet-pull --wait
 if errorlevel 1 (
-  type "%LOG%"
   echo.
   echo ERROR: the containers did not start or did not become healthy.
   echo        Choose option 3 to read the logs.
@@ -180,7 +160,6 @@ if exist "%ENVFILE%" (
   )
 )
 echo.
-echo DriveLoom is healthy.
 echo   On this PC:  http://127.0.0.1:%PORT%
 if defined ORIGIN echo   Public URL:  %ORIGIN%  (through your reverse proxy)
 echo.
