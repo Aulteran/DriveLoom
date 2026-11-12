@@ -76,6 +76,28 @@ Status: proposed default, defined first so the vehicles lane (1.3) can build aga
 
 Decisions and open questions are in [ADR 0002](adr/0002-authentication.md). The HTTP surface is the `auth` tag in `openapi.yaml` (`/v1/auth/...`), and `tests/auth-contract.test.ts` fails if routes and document drift apart.
 
-**Operator configuration** (environment): `DRIVELOOM_PUBLIC_ORIGIN` (required, an origin such as `https://fuel.example.com`, fixed WebAuthn origin), `DRIVELOOM_SECRET_KEY` (at least 32 characters), `DRIVELOOM_RP_ID` (defaults to the origin host; keep stable once passkeys exist), `DRIVELOOM_REGISTRATION` (`open` or `closed`, default `closed`), `DRIVELOOM_PASSWORD_LOGIN` (`0` to disable), `DRIVELOOM_TRUSTED_PROXIES` (comma-separated IPs or CIDRs), `DRIVELOOM_SMTP_URL` and `DRIVELOOM_SMTP_FROM` (optional), `DRIVELOOM_REQUIRE_EMAIL_VERIFICATION=1` (needs SMTP), `DRIVELOOM_OIDC_ISSUER`, `DRIVELOOM_OIDC_CLIENT_ID`, `DRIVELOOM_OIDC_CLIENT_SECRET` (optional; the redirect URI is `<origin>/v1/auth/oidc/callback`). Start with `npm start` in `apps/api`.
+**Operator configuration** (environment): `DRIVELOOM_PUBLIC_ORIGIN` (required, an origin such as `https://fuel.example.com`, fixed WebAuthn origin), `DRIVELOOM_SECRET_KEY` (at least 32 characters), `DRIVELOOM_RP_ID` (defaults to the origin host; keep stable once passkeys exist), `DRIVELOOM_REGISTRATION` (`open` or `closed`, default `closed`), `DRIVELOOM_SETUP_TOKEN` (optional, at least 16 characters; the first account must present it), `DRIVELOOM_PASSWORD_LOGIN` (`0` to disable), `DRIVELOOM_TRUSTED_PROXIES` (comma-separated IPs or CIDRs), `DRIVELOOM_SMTP_URL` and `DRIVELOOM_SMTP_FROM` (optional), `DRIVELOOM_REQUIRE_EMAIL_VERIFICATION=1` (needs SMTP), `DRIVELOOM_OIDC_ISSUER`, `DRIVELOOM_OIDC_CLIENT_ID`, `DRIVELOOM_OIDC_CLIENT_SECRET` (optional; the redirect URI is `<origin>/v1/auth/oidc/callback`). Start with `npm start` in `apps/api`.
 
 **Auth tables** (all in migration 0003): `users`, `password_credentials`, `totp_credentials`, `recovery_codes`, `passkeys`, `oidc_identities`, `sessions`, `one_time_codes`, `auth_challenges`, `rate_limits`. Only the auth module writes them.
+
+## Vehicles and ownership (milestone 1.3)
+
+Code is in `apps/api/src/vehicles/`, schema in `0004_vehicles.sql`, HTTP shapes in the `vehicles` operations of the OpenAPI file. Authorization lives in `VehicleService`; `vehicleRoutes(service)` in `src/vehicles/routes.ts` exposes it as `Route[]` for the shared HTTP layer, and the application entry point (not yet written) passes those routes to `createApp`.
+
+| Role | May |
+| --- | --- |
+| viewer | read the vehicle and its member roster, leave |
+| editor | everything a viewer may, plus edit vehicle details (later: fuel records) |
+| owner | everything, plus archive, grant, change or remove members, transfer ownership |
+
+- **One owner per vehicle.** A partial unique index forbids a second owner. The service creates the owner row with the vehicle, never removes it, and swaps it only by transfer or recovery. Every mutation locks the vehicle row first, so concurrent transfers, removals and role changes serialise.
+- **404, not 403, for strangers.** A caller with no grant, including an instance admin, gets `vehicle_not_found` on every operation. A member lacking permission gets 403 `forbidden`.
+- **Transfer.** The owner hands ownership to an existing active member; the previous owner becomes an editor. The owner cannot be removed or have their role changed directly (`owner_required`, `owner_immutable`).
+- **Admin recovery.** `recoverOwnership` is the only vehicle operation open to instance admins. It needs a written reason, makes an active user the owner, keeps the previous owner as editor (dropped if that account is disabled or deleted), and never grants the admin vehicle access.
+- **Audit.** Each mutation writes an `audit_events` row in the same transaction: `vehicle.create|update|archive|unarchive`, `member.add|role_change|remove|leave`, `owner.transfer|recover`.
+- **Account removal.** Auth must not delete a user who owns a vehicle until the owner transfers it or an admin recovers it.
+
+- **Members by email.** `POST .../members` takes `userId` or `email`. An owner therefore learns whether an address has an active account on the instance; accepted because members are people the owner already knows and the instance is private. The roster shows each member's display name and email to the other members.
+- **Admin listing.** `GET /v1/admin/users/{userId}/owned-vehicles` returns only ids and archive state, is admin-only (404 for others) and writes an `admin.list_owned_vehicles` audit row.
+
+Owner decisions (2026-11-11): editors may edit vehicle details; the previous owner stays as editor after admin recovery; admins can list the vehicle ids a user owns.

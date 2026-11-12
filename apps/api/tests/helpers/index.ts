@@ -21,6 +21,7 @@ export async function createTestDb(): Promise<TestDb | null> {
     return null;
   }
   const admin = new pg.Client({ connectionString: url });
+  admin.on('error', () => undefined);
   await admin.connect();
   const name = `dl_test_${process.pid}_${uuidv7().replace(/-/g, '').slice(-12)}`;
   await admin.query(`CREATE DATABASE ${name}`);
@@ -36,6 +37,16 @@ export async function createTestDb(): Promise<TestDb | null> {
     pool,
     async drop() {
       await pool.end();
+      // pool.end() resolves before the server has reaped every backend. Dropping
+      // with FORCE while one is still alive makes the server terminate it, and
+      // the dying socket surfaces "terminating connection due to administrator
+      // command" in whichever test is running. Wait for the backends to exit;
+      // FORCE stays as a last resort for a connection some test leaked.
+      for (let i = 0; i < 100; i++) {
+        const { rows } = await admin.query<{ n: number }>('SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = $1', [name]);
+        if (rows[0]!.n === 0) break;
+        await new Promise((r) => setTimeout(r, 20));
+      }
       await admin.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
       await admin.end();
     },

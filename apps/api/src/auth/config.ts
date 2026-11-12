@@ -17,7 +17,11 @@ export interface AuthConfig {
   /** Takes effect only when SMTP is configured; config loading fails otherwise. */
   requireEmailVerification: boolean;
   oidc: OidcConfig | null;
-  /** Registration of new accounts through OIDC (when registration is open). */
+  /**
+   * When set, the bootstrap registration (first account, which becomes the
+   * administrator) must present this token. Unset keeps first-come bootstrap.
+   */
+  setupToken: string | null;
   /** 32-byte key for TOTP secrets at rest and code HMACs. */
   secretKey: Buffer;
   ipTrust: IpTrust;
@@ -40,6 +44,7 @@ export function defaultConfig(over: Partial<AuthConfig> & Pick<AuthConfig, 'publ
     passwordEnabled: true,
     requireEmailVerification: false,
     oidc: null,
+    setupToken: null,
     ipTrust: trustFromList([]),
     sessionTtlMs: 30 * 86_400_000,
     sessionIdleMs: 7 * 86_400_000,
@@ -77,9 +82,16 @@ export function configFromEnv(env: Record<string, string | undefined>, smtpConfi
     requireEmailVerification,
     passwordEnabled,
     oidc,
+    setupToken: setupToken(env),
     secureCookies: u.protocol === 'https:',
     ipTrust: trustFromList((env['DRIVELOOM_TRUSTED_PROXIES'] ?? '').split(',').map((s) => s.trim()).filter(Boolean)),
   });
+}
+function setupToken(env: Record<string, string | undefined>): string | null {
+  const t = env['DRIVELOOM_SETUP_TOKEN'];
+  if (!t) return null;
+  if (t.length < 16) throw new Error('DRIVELOOM_SETUP_TOKEN must be at least 16 characters');
+  return t;
 }
 function need(env: Record<string, string | undefined>, k: string): string {
   const v = env[k];

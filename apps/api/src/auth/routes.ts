@@ -45,7 +45,7 @@ export function authRoutes(ctx: AuthContext): Route[] {
   return [
     r('POST', '/v1/auth/register', 'none', async (req) => {
       const b = body(req);
-      const out = await acct.register(ctx, { email: b['email'], password: b['password'], displayName: b['display_name'] }, meta(req));
+      const out = await acct.register(ctx, { email: b['email'], password: b['password'], displayName: b['display_name'], setupToken: b['setup_token'] }, meta(req));
       return ok(202, { status: out.status });
     }),
     r('POST', '/v1/auth/verify-email', 'none', async (req) => {
@@ -100,7 +100,7 @@ export function authRoutes(ctx: AuthContext): Route[] {
     }),
     r('DELETE', '/v1/auth/password', 'required', async (req) => { await acct.removePassword(ctx, requirePrincipal(req.ctx)); return ok(); }),
     r('POST', '/v1/auth/recovery/request', 'none', async (req) => {
-      await acct.recoveryRequest(ctx, { email: body(req)['email'] }, meta(req));
+      await acct.recoveryRequest(ctx, { email: body(req)['email'] }, meta(req)); // delivery deliberately not awaited
       return ok(202, { status: 'accepted' });
     }),
     r('POST', '/v1/auth/recovery/complete', 'none', async (req) => {
