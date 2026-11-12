@@ -101,3 +101,18 @@ Code is in `apps/api/src/vehicles/`, schema in `0004_vehicles.sql`, HTTP shapes 
 - **Admin listing.** `GET /v1/admin/users/{userId}/owned-vehicles` returns only ids and archive state, is admin-only (404 for others) and writes an `admin.list_owned_vehicles` audit row.
 
 Owner decisions (2026-11-11): editors may edit vehicle details; the previous owner stays as editor after admin recovery; admins can list the vehicle ids a user owns.
+
+## Fuel, units and costs (milestone 1.4)
+
+Decisions are in [ADR 0003](adr/0003-fuel-units-costs.md). Code is in `apps/api/src/fuel/`, `src/decimal.ts`, `src/units.ts` and `src/preferences.ts`; schema in `0005_fuel.sql`; HTTP shapes under the `fuel` and `preferences` tags.
+
+- **Entry.** A fill-up carries `occurredAt`, `odometer {value, unit}`, `volume {value, unit}`, `full`, `missedPrevious`, optional `cost` and `notes`. Units are always explicit. The entered value and unit are stored and returned unchanged; `odometer_km` (6 decimals) and `volume_l` (9 decimals) are the normalised values every calculation uses.
+- **Order.** The authoritative order is `(occurred_at, odometer_km, id)`. The odometer may not run backwards in time: a reading must sit between its chronological neighbours (`odometer_out_of_sequence`, 422). Same vehicle, instant and reading is a duplicate (`duplicate_fill_up`, 409). Same instant with different readings is allowed.
+- **Economy.** Full-to-full. An interval runs from one full fill to the next; the starting fill is excluded, partial purchases and the closing fill are included. It is unavailable, with a reason, when there is no earlier full fill, when a purchase in it is flagged `missedPrevious`, or when it covers no distance. A partial fill closes nothing. Aggregates sum distance and volume first.
+- **No stored derivations.** Intervals and statistics are computed from the ordered records on every read, so a backdate, correction or deletion repairs its neighbours without a recalculation step.
+- **Display.** Responses are in the caller's preferences (`/v1/preferences`: distance, volume, economy unit, currency). Odometer readings are shown in the vehicle's `odometerUnit`, the unit of the physical odometer. Display scales: distance 1, volume 2, economy 2 decimals, money in the currency's minor units, rounded half away from zero.
+- **Money.** Each vehicle has one reporting `currency`. A cost keeps its source `amount` and `currency`. A purchase in another currency needs an explicit `exchangeRate` (reporting units per source unit) or `reportingAmount` (`reporting_amount_required`, 422); no rate is ever assumed. The reporting currency cannot change once costs exist (`currency_locked`, 409).
+- **Statistics.** `GET /v1/vehicles/{id}/stats?from&to` selects intervals by their closing fill. `spend` sums every costed purchase in the window and is separate from efficiency. `costPerDistance` uses only intervals whose purchases all have a cost.
+- **Access.** Viewers read; editors and owners write; an archived vehicle is read-only (`vehicle_archived`, 409). Every write locks the vehicle row and writes a `fill_up.*` audit event.
+
+**Naming.** Resource endpoints use camelCase fields. The `auth` endpoints from milestone 1.2 use snake_case. Both are stable within `/v1`; unifying them is a breaking change left for a future major version.

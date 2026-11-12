@@ -1,20 +1,13 @@
 // HTTP routes for vehicles and ownership. All authorization lives in VehicleService.
 import type { HttpRequest, Route } from '../http/app.ts';
 import { requirePrincipal } from '../identity.ts';
-import { invalid } from './errors.ts';
+import { invalid, obj } from '../http/validate.ts';
 import type { VehicleService } from './service.ts';
 
-/** Body must be a JSON object containing only the allowed keys (schemas use additionalProperties: false). */
-function obj(body: unknown, allowed: string[]): Record<string, unknown> {
-  if (typeof body !== 'object' || body === null || Array.isArray(body)) throw invalid('Request body must be a JSON object.');
-  const extra = Object.keys(body).filter((k) => !allowed.includes(k));
-  if (extra.length) throw invalid(`Unknown field: ${extra[0]}.`);
-  return body as Record<string, unknown>;
-}
 
 export function vehicleRoutes(svc: VehicleService): Route[] {
   const who = (r: HttpRequest) => requirePrincipal(r.ctx);
-  const fields = ['name', 'make', 'model', 'year'];
+  const fields = ['name', 'make', 'model', 'year', 'odometerUnit', 'currency'];
   return [
     { method: 'GET', path: '/v1/vehicles', async handler(r) {
       const items = await svc.list(who(r), { includeArchived: r.query.get('includeArchived') === 'true' });
