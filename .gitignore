@@ -6,3 +6,6 @@ DriveLoom-private-claude/
 # Self-hosting secrets and local backups
 deploy/.env
 deploy/backups/
+
+# Local compose overrides (e.g. Tailscale IP), see README
+deploy/compose.override.y*ml
