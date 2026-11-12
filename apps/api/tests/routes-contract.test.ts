@@ -7,14 +7,19 @@ import { parse } from 'yaml';
 import type { Route } from '../src/http/app.ts';
 import { vehicleRoutes } from '../src/vehicles/routes.ts';
 import { fuelRoutes } from '../src/fuel/routes.ts';
+import { imageRoutes } from '../src/vehicles/images.ts';
+import { portabilityRoutes } from '../src/portability/routes.ts';
+import { adminRoutes } from '../src/admin/routes.ts';
 import { friendRoutes } from '../src/friends/routes.ts';
 import { preferenceRoutes } from '../src/preferences.ts';
 import { API_VERSION } from '../src/version.ts';
 
 const doc = parse(await readFile(new URL('../openapi/openapi.yaml', import.meta.url), 'utf8'));
 const key = (m: string, p: string) => `${m.toUpperCase()} ${p.replace(/:(\w+)/g, '{$1}')}`;
-export const moduleRoutes: Route[] = [...vehicleRoutes({} as never), ...fuelRoutes({} as never), ...preferenceRoutes({} as never), ...friendRoutes({} as never)];
-const SYSTEM = new Set(['GET /v1/health', 'GET /v1/version']);
+import { systemRoutes } from '../src/application.ts';
+export const moduleRoutes: Route[] = [...systemRoutes({} as never), ...vehicleRoutes({} as never), ...fuelRoutes({} as never), ...preferenceRoutes({} as never), ...friendRoutes({} as never),
+  ...imageRoutes({} as never, {} as never), ...portabilityRoutes({} as never), ...adminRoutes({} as never)];
+const SYSTEM = new Set<string>();
 
 test('module routes and the OpenAPI document agree', () => {
   const implemented = new Set(moduleRoutes.map((r) => key(r.method, r.path)));

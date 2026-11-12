@@ -11,14 +11,26 @@
     ARCHITECTURE.md
     ROADMAP.md
     VERIFICATION.md
+    CONTRACTS.md
+    DEPLOYMENT.md
+    adr/
+  Dockerfile
   deploy/
+    compose.yml
     compose.dev.yml
+    .env.example
+    proxy/
   apps/
     api/
       openapi/
       migrations/
+      scripts/
       src/
       tests/
+    web/
+      index.html
+      styles.css
+      js/
     marketing/
       README.md
       ASSET-PROVENANCE.md
@@ -37,4 +49,4 @@ Work from the current default branch in a scoped feature branch. In the PR, iden
 
 See the [marketing README](apps/marketing/README.md) for commands and [verification](docs/VERIFICATION.md) for release checks.
 
-The API, web application, versioned API contract and self-hosting setup belong in this repository when their phases restart. Native Android and iOS each have a separate future repository.
+For the platform, from `apps/api` with a PostgreSQL in `DATABASE_URL` (`deploy/compose.dev.yml` starts one): `npm ci`, `npm run check` (types, OpenAPI, web modules), `npm test`, and `npm run test:browser` (needs a Playwright Chromium: `npx playwright install chromium`). The API, web client, versioned API contract and self-hosting setup live in this repository. Native Android and iOS each have a separate future repository.

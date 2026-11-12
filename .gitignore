@@ -2,3 +2,7 @@
 .project/
 private-claude/
 DriveLoom-private-claude/
+
+# Self-hosting secrets and local backups
+deploy/.env
+deploy/backups/

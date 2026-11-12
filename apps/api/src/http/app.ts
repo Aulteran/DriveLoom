@@ -37,6 +37,8 @@ export interface HttpRequest {
 export interface HttpResult {
   status: number;
   body?: unknown;
+  /** A non-JSON payload (image, CSV). Sent as-is with its own content type instead of `body`. */
+  raw?: { data: Buffer | string; contentType: string };
   headers?: Record<string, string | string[]>;
 }
 
@@ -52,6 +54,10 @@ export interface Route {
   /** e.g. `/v1/vehicles/:id` */
   path: string;
   auth?: AuthMode;
+  /** Overrides the app-wide JSON body limit for this route (imports). */
+  maxBodyBytes?: number;
+  /** Accept a binary body of one of these media types; `req.body` is then `{ type, data: Buffer }`. */
+  rawBody?: { types: readonly string[]; maxBytes: number };
   handler(req: HttpRequest): Promise<HttpResult>;
 }
 
@@ -65,6 +71,7 @@ export interface AppOptions {
 
 export const SESSION_COOKIE = 'dl_session';
 const UNSAFE = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+const DISCARD_BYTES = 32 * 1024 * 1024;
 
 interface Compiled { route: Route; re: RegExp; names: string[] }
 
@@ -88,16 +95,27 @@ function safeEqual(a: string, b: string): boolean {
   return x.length === y.length && timingSafeEqual(x, y);
 }
 
-async function readBody(req: IncomingMessage, max: number): Promise<unknown> {
+export interface RawBody { type: string; data: Buffer }
+
+async function readBody(req: IncomingMessage, max: number, raw?: Route['rawBody']): Promise<unknown> {
+  const limit = raw ? raw.maxBytes : max;
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const c of req) {
     size += (c as Buffer).length;
-    if (size > max) throw new HttpProblem(413, 'body_too_large', 'Request body too large');
-    chunks.push(c as Buffer);
+    // Past the limit, keep reading without keeping: a client that is still
+    // uploading gets a clean 413 instead of a reset connection. Far past it, hang up.
+    if (size > limit + DISCARD_BYTES) { req.destroy(); break; }
+    if (size <= limit) chunks.push(c as Buffer);
+  }
+  if (size > limit) throw new HttpProblem(413, 'body_too_large', 'Request body too large');
+  const type = req.headers['content-type'] ?? '';
+  if (raw) {
+    const media = type.split(';')[0]!.trim().toLowerCase();
+    if (!raw.types.includes(media)) throw new HttpProblem(415, 'unsupported_media_type', `Expected one of: ${raw.types.join(', ')}`);
+    return { type: media, data: Buffer.concat(chunks) } satisfies RawBody;
   }
   if (size === 0) return undefined;
-  const type = req.headers['content-type'] ?? '';
   if (!/^application\/json(\s*;|$)/i.test(type)) throw new HttpProblem(415, 'unsupported_media_type', 'Expected application/json');
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw new HttpProblem(400, 'invalid_json', 'Malformed JSON'); }
 }
@@ -106,10 +124,10 @@ export function createApp(opts: AppOptions): (req: IncomingMessage, res: ServerR
   const compiled = opts.routes.map(compile);
   const max = opts.maxBodyBytes ?? 64 * 1024;
 
-  function send(res: ServerResponse, status: number, body: unknown, headers: Record<string, string | string[]> = {}, problem = false): void {
-    const payload = body === undefined ? '' : JSON.stringify(body);
+  function send(res: ServerResponse, status: number, body: unknown, headers: Record<string, string | string[]> = {}, problem = false, raw?: HttpResult['raw']): void {
+    const payload = raw ? raw.data : body === undefined ? '' : JSON.stringify(body);
     res.writeHead(status, {
-      'content-type': problem ? 'application/problem+json' : 'application/json',
+      'content-type': raw ? raw.contentType : problem ? 'application/problem+json' : 'application/json',
       'cache-control': 'no-store',
       'x-content-type-options': 'nosniff',
       ...headers,
@@ -153,7 +171,7 @@ export function createApp(opts: AppOptions): (req: IncomingMessage, res: ServerR
         if (typeof sent !== 'string' || !safeEqual(sent, session.csrfToken)) throw new HttpProblem(403, 'csrf_failed', 'Request failed anti-forgery checks');
       }
 
-      const body = UNSAFE.has(method) ? await readBody(req, max) : undefined;
+      const body = UNSAFE.has(method) ? await readBody(req, match.c.route.maxBodyBytes ?? max, match.c.route.rawBody) : undefined;
       const result = await match.c.route.handler({
         ctx: { principal: session?.principal ?? null },
         session,
@@ -164,7 +182,7 @@ export function createApp(opts: AppOptions): (req: IncomingMessage, res: ServerR
         cookies,
         ip: clientIp(req.socket.remoteAddress ?? '', req.headers['x-forwarded-for'], opts.ipTrust),
       });
-      send(res, result.status, result.body, result.headers);
+      send(res, result.status, result.body, result.headers, false, result.raw);
     } catch (err) {
       const p = toProblem(err);
       if (p.status >= 500) console.error(err);

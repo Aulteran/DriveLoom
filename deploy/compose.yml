@@ -1,0 +1,59 @@
+# Self-hosted DriveLoom: PostgreSQL and the application. Put an HTTPS reverse
+# proxy in front (deploy/proxy/). Copy .env.example to .env and fill it in first.
+#   docker compose -f deploy/compose.yml --env-file deploy/.env up -d --build
+# See docs/DEPLOYMENT.md.
+name: driveloom
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: driveloom
+      POSTGRES_DB: driveloom
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+    networks: [internal]
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U driveloom -d driveloom']
+      interval: 5s
+      retries: 30
+
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: driveloom:local
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://driveloom:${POSTGRES_PASSWORD}@db:5432/driveloom
+      DRIVELOOM_PUBLIC_ORIGIN: ${DRIVELOOM_PUBLIC_ORIGIN:?set DRIVELOOM_PUBLIC_ORIGIN in deploy/.env}
+      DRIVELOOM_SECRET_KEY: ${DRIVELOOM_SECRET_KEY:?set DRIVELOOM_SECRET_KEY in deploy/.env}
+      DRIVELOOM_SETUP_TOKEN: ${DRIVELOOM_SETUP_TOKEN:-}
+      DRIVELOOM_REGISTRATION: ${DRIVELOOM_REGISTRATION:-closed}
+      DRIVELOOM_TRUSTED_PROXIES: ${DRIVELOOM_TRUSTED_PROXIES:-}
+      DRIVELOOM_PASSWORD_LOGIN: ${DRIVELOOM_PASSWORD_LOGIN:-1}
+      DRIVELOOM_SMTP_URL: ${DRIVELOOM_SMTP_URL:-}
+      DRIVELOOM_SMTP_FROM: ${DRIVELOOM_SMTP_FROM:-}
+      DRIVELOOM_REQUIRE_EMAIL_VERIFICATION: ${DRIVELOOM_REQUIRE_EMAIL_VERIFICATION:-0}
+      DRIVELOOM_EMAIL_SIGN_IN_CODES: ${DRIVELOOM_EMAIL_SIGN_IN_CODES:-0}
+      DRIVELOOM_OIDC_ISSUER: ${DRIVELOOM_OIDC_ISSUER:-}
+      DRIVELOOM_OIDC_CLIENT_ID: ${DRIVELOOM_OIDC_CLIENT_ID:-}
+      DRIVELOOM_OIDC_CLIENT_SECRET: ${DRIVELOOM_OIDC_CLIENT_SECRET:-}
+    # Published on the host's loopback only: the reverse proxy is the public entry.
+    ports:
+      - '127.0.0.1:${DRIVELOOM_PORT:-8080}:8080'
+    volumes:
+      - ./backups:/backups
+    networks: [internal, default]
+
+networks:
+  internal:
+    internal: true
+
+volumes:
+  dbdata:

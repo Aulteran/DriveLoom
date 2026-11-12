@@ -45,7 +45,7 @@ export function authRoutes(ctx: AuthContext): Route[] {
   return [
     r('POST', '/v1/auth/register', 'none', async (req) => {
       const b = body(req);
-      const out = await acct.register(ctx, { email: b['email'], password: b['password'], displayName: b['display_name'], setupToken: b['setup_token'] }, meta(req));
+      const out = await acct.register(ctx, { email: b['email'], password: b['password'], displayName: b['display_name'], setupToken: b['setup_token'], inviteToken: b['invite_token'] }, meta(req));
       return ok(202, { status: out.status });
     }),
     r('POST', '/v1/auth/verify-email', 'none', async (req) => {
@@ -56,11 +56,15 @@ export function authRoutes(ctx: AuthContext): Route[] {
     r('POST', '/v1/auth/login', 'none', async (req) => {
       const b = body(req);
       const out = await acct.login(ctx, { email: b['email'], password: b['password'] }, meta(req));
-      return sessionResult(ctx, out.session);
+      return sessionResult(ctx, out.session, out.mfaMethod ? { mfa_method: out.mfaMethod } : {});
     }),
     r('POST', '/v1/auth/mfa/totp', 'pending', async (req) => {
       const b = body(req);
       const out = await acct.completeMfa(ctx, { sessionId: req.session!.sessionId, userId: req.session!.userId }, { code: b['code'], recoveryCode: b['recovery_code'] }, meta(req));
+      return sessionResult(ctx, out.session);
+    }),
+    r('POST', '/v1/auth/mfa/email', 'pending', async (req) => {
+      const out = await acct.completeEmailMfa(ctx, { sessionId: req.session!.sessionId, userId: req.session!.userId }, { code: body(req)['code'] }, meta(req));
       return sessionResult(ctx, out.session);
     }),
     r('POST', '/v1/auth/logout', 'required', async (req) => {
@@ -76,6 +80,22 @@ export function authRoutes(ctx: AuthContext): Route[] {
       const b = body(req);
       await acct.reauthenticate(ctx, requirePrincipal(req.ctx), { password: b['password'], code: b['code'] }, meta(req));
       return ok();
+    }),
+    r('PATCH', '/v1/auth/account', 'required', async (req) => {
+      await acct.updateProfile(ctx, requirePrincipal(req.ctx), { displayName: body(req)['display_name'] });
+      return ok();
+    }),
+    r('DELETE', '/v1/auth/account', 'required', async (req) => {
+      await acct.deleteAccount(ctx, requirePrincipal(req.ctx));
+      return { status: 204, headers: { 'set-cookie': clearCookie(ctx, SESSION_COOKIE) } };
+    }),
+    // Public facts the sign-in screen needs before anyone is authenticated.
+    r('GET', '/v1/auth/instance', 'none', async () => {
+      const empty = !(await ctx.db.query('SELECT 1 FROM users LIMIT 1')).rowCount;
+      return ok(200, {
+        registration: ctx.config.registration, password_login: ctx.config.passwordEnabled, oidc: !!ctx.oidc, email_recovery: !!ctx.mailer,
+        needs_setup: empty, setup_token_required: empty && ctx.config.setupToken !== null,
+      });
     }),
     // --- sessions ---
     r('GET', '/v1/auth/sessions', 'required', async (req) => {
@@ -134,11 +154,20 @@ export function authRoutes(ctx: AuthContext): Route[] {
       return { status: 200, body: { authorization_url: out.url }, headers: { 'set-cookie': cookie(ctx, OIDC_BINDING_COOKIE, out.binding, 600, '/v1/auth/oidc') } };
     }),
     r('GET', '/v1/auth/oidc/callback', 'optional', async (req) => {
-      const out = await oidc.callback(ctx, { query: req.query, binding: req.cookies[OIDC_BINDING_COOKIE], principal: req.ctx.principal }, meta(req));
+      // A browser arriving from the identity provider is sent back into the web client; API clients get JSON.
+      const browser = /text\/html/.test(String(req.headers['accept'] ?? ''));
       const clear = clearCookie(ctx, OIDC_BINDING_COOKIE, '/v1/auth/oidc');
-      if (out.kind === 'linked') return { status: 200, body: { status: 'linked' }, headers: { 'set-cookie': clear } };
+      let out: Awaited<ReturnType<typeof oidc.callback>>;
+      try {
+        out = await oidc.callback(ctx, { query: req.query, binding: req.cookies[OIDC_BINDING_COOKIE], principal: req.ctx.principal }, meta(req));
+      } catch (e) {
+        if (!browser || !(e instanceof HttpProblem)) throw e;
+        return { status: 303, headers: { location: `/#/signin?error=${encodeURIComponent(e.code)}`, 'set-cookie': clear } };
+      }
+      if (out.kind === 'linked') return browser ? { status: 303, headers: { location: '/#/account?linked=1', 'set-cookie': clear } } : { status: 200, body: { status: 'linked' }, headers: { 'set-cookie': clear } };
       const res = sessionResult(ctx, out.signIn.session);
       res.headers = { 'set-cookie': [res.headers!['set-cookie'] as string, clear] };
+      if (browser) return { status: 303, headers: { ...res.headers, location: '/#/' } };
       return res;
     }),
     r('DELETE', '/v1/auth/oidc/identities/:id', 'required', async (req) => { await oidc.unlink(ctx, requirePrincipal(req.ctx), idParam(req)); return ok(); }),

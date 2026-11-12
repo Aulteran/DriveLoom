@@ -8,7 +8,7 @@
 
 **Copy.** Candidate lines include “Every mile tells a story” and “Your vehicle. Your data. Your server.” Final tagline and copy are open. Refer to fill-up logging, economy, units and shared vehicles as planned features. Avoid availability, install and date claims. Recommended follow action is a live GitHub repository link. Signup and analytics are optional owner decisions with a separate privacy and provider review if selected.
 
-## Future platform · Paused
+## Platform · Built 2026-11-12, in review
 
 | Area | Requirements and intended behavior |
 | --- | --- |

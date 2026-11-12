@@ -16,6 +16,8 @@ export interface AuthConfig {
   passwordEnabled: boolean;
   /** Takes effect only when SMTP is configured; config loading fails otherwise. */
   requireEmailVerification: boolean;
+  /** After a correct password, email a one-time code unless the account has an authenticator app. Needs SMTP. */
+  emailSignInCodes: boolean;
   oidc: OidcConfig | null;
   /**
    * When set, the bootstrap registration (first account, which becomes the
@@ -43,6 +45,7 @@ export function defaultConfig(over: Partial<AuthConfig> & Pick<AuthConfig, 'publ
     registration: 'closed',
     passwordEnabled: true,
     requireEmailVerification: false,
+    emailSignInCodes: false,
     oidc: null,
     setupToken: null,
     ipTrust: trustFromList([]),
@@ -67,6 +70,8 @@ export function configFromEnv(env: Record<string, string | undefined>, smtpConfi
   if (!secret || secret.length < 32) throw new Error('DRIVELOOM_SECRET_KEY must be at least 32 characters');
   const requireEmailVerification = env['DRIVELOOM_REQUIRE_EMAIL_VERIFICATION'] === '1';
   if (requireEmailVerification && !smtpConfigured) throw new Error('DRIVELOOM_REQUIRE_EMAIL_VERIFICATION=1 needs SMTP (DRIVELOOM_SMTP_URL and DRIVELOOM_SMTP_FROM)');
+  const emailSignInCodes = env['DRIVELOOM_EMAIL_SIGN_IN_CODES'] === '1';
+  if (emailSignInCodes && !smtpConfigured) throw new Error('DRIVELOOM_EMAIL_SIGN_IN_CODES=1 needs SMTP (DRIVELOOM_SMTP_URL and DRIVELOOM_SMTP_FROM)');
   const registration = env['DRIVELOOM_REGISTRATION'] === 'open' ? 'open' : 'closed';
   const issuer = env['DRIVELOOM_OIDC_ISSUER'];
   const oidc = issuer
@@ -80,6 +85,7 @@ export function configFromEnv(env: Record<string, string | undefined>, smtpConfi
     secretKey: createHash('sha256').update(secret).digest(),
     registration,
     requireEmailVerification,
+    emailSignInCodes,
     passwordEnabled,
     oidc,
     setupToken: setupToken(env),

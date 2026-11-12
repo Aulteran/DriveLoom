@@ -76,13 +76,15 @@ Status: proposed default, defined first so the vehicles lane (1.3) can build aga
 
 Decisions and open questions are in [ADR 0002](adr/0002-authentication.md). The HTTP surface is the `auth` tag in `openapi.yaml` (`/v1/auth/...`), and `tests/auth-contract.test.ts` fails if routes and document drift apart.
 
-**Operator configuration** (environment): `DRIVELOOM_PUBLIC_ORIGIN` (required, an origin such as `https://fuel.example.com`, fixed WebAuthn origin), `DRIVELOOM_SECRET_KEY` (at least 32 characters), `DRIVELOOM_RP_ID` (defaults to the origin host; keep stable once passkeys exist), `DRIVELOOM_REGISTRATION` (`open` or `closed`, default `closed`), `DRIVELOOM_SETUP_TOKEN` (optional, at least 16 characters; the first account must present it), `DRIVELOOM_PASSWORD_LOGIN` (`0` to disable), `DRIVELOOM_TRUSTED_PROXIES` (comma-separated IPs or CIDRs), `DRIVELOOM_SMTP_URL` and `DRIVELOOM_SMTP_FROM` (optional), `DRIVELOOM_REQUIRE_EMAIL_VERIFICATION=1` (needs SMTP), `DRIVELOOM_OIDC_ISSUER`, `DRIVELOOM_OIDC_CLIENT_ID`, `DRIVELOOM_OIDC_CLIENT_SECRET` (optional; the redirect URI is `<origin>/v1/auth/oidc/callback`). Start with `npm start` in `apps/api`.
+**Operator configuration** (environment): `DRIVELOOM_PUBLIC_ORIGIN` (required, an origin such as `https://fuel.example.com`, fixed WebAuthn origin), `DRIVELOOM_SECRET_KEY` (at least 32 characters), `DRIVELOOM_RP_ID` (defaults to the origin host; keep stable once passkeys exist), `DRIVELOOM_REGISTRATION` (`open` or `closed`, default `closed`), `DRIVELOOM_SETUP_TOKEN` (optional, at least 16 characters; the first account must present it), `DRIVELOOM_PASSWORD_LOGIN` (`0` to disable), `DRIVELOOM_TRUSTED_PROXIES` (comma-separated IPs or CIDRs), `DRIVELOOM_SMTP_URL` and `DRIVELOOM_SMTP_FROM` (optional), `DRIVELOOM_REQUIRE_EMAIL_VERIFICATION=1` (needs SMTP), `DRIVELOOM_EMAIL_SIGN_IN_CODES=1` (needs SMTP; see below), `DRIVELOOM_OIDC_ISSUER`, `DRIVELOOM_OIDC_CLIENT_ID`, `DRIVELOOM_OIDC_CLIENT_SECRET` (optional; the redirect URI is `<origin>/v1/auth/oidc/callback`). Start with `npm start` in `apps/api`.
+
+**Email sign-in codes** (added in the full build, migration 0008). With `DRIVELOOM_EMAIL_SIGN_IN_CODES=1`, a correct password on an account without an authenticator app emails an 8-digit code and returns `state: mfa_required, mfa_method: email`; `POST /v1/auth/mfa/email {code}` completes the sign-in with a new session. Codes follow the email-code rules (15 minutes, 5 attempts, single use, a newer one replaces the older). An account with an authenticator app always uses it instead, and an outstanding emailed code stops working once one is enrolled. A send failure answers 503 `email_unavailable` and creates no session.
 
 **Auth tables** (all in migration 0003): `users`, `password_credentials`, `totp_credentials`, `recovery_codes`, `passkeys`, `oidc_identities`, `sessions`, `one_time_codes`, `auth_challenges`, `rate_limits`. Only the auth module writes them.
 
 ## Vehicles and ownership (milestone 1.3)
 
-Code is in `apps/api/src/vehicles/`, schema in `0004_vehicles.sql`, HTTP shapes in the `vehicles` operations of the OpenAPI file. Authorization lives in `VehicleService`; `vehicleRoutes(service)` in `src/vehicles/routes.ts` exposes it as `Route[]` for the shared HTTP layer, and the application entry point (not yet written) passes those routes to `createApp`.
+Code is in `apps/api/src/vehicles/`, schema in `0004_vehicles.sql`, HTTP shapes in the `vehicles` operations of the OpenAPI file. Authorization lives in `VehicleService`; `vehicleRoutes(service)` in `src/vehicles/routes.ts` exposes it as `Route[]` for the shared HTTP layer, and `src/application.ts` composes every module's routes into one handler.
 
 | Role | May |
 | --- | --- |
@@ -127,3 +129,49 @@ Decisions are in [ADR 0004](adr/0004-friends-comparison.md). Code is in `apps/ap
 - **What crosses.** The friend's display name, the vehicle's name, make, model and year, and one economy figure for the window, rounded to one decimal, in the viewer's units. No ids, records, dates, distances, volumes or counts.
 - **Windows** are fixed (`30d`, `90d`, `365d`, `all`) and identical for every vehicle in a response. The response states the window.
 - **Costs** compare only when the vehicle's reporting currency equals the viewer's currency preference; otherwise `costPerDistance` is null with `costUnavailableReason: currency_mismatch`. No conversion is attempted.
+
+## Portability (milestone 1.6)
+
+Decisions are in [ADR 0005](adr/0005-portability-backup-web.md). Code is in `apps/api/src/portability/`, HTTP shapes under the `portability` tag.
+
+- **Export.** `GET /v1/vehicles/{id}/export?format=csv|json`, for any member. CSV is `driveloom fill-ups v1`: one row per purchase with the entered values and units (`occurred_at, odometer, odometer_unit, volume, volume_unit, full, missed_previous, cost_amount, cost_currency, exchange_rate, reporting_amount, reporting_currency, notes`). JSON is `{format: "driveloom.vehicle", version: 1, vehicle, fillUps}`. Neither carries ids, members, users or images, so a file can move between instances.
+- **Formula injection.** Text cells starting with `=`, `+`, `-`, `@`, tab or carriage return get a leading apostrophe on export; so does text that already starts with one. Import removes exactly one, so a round trip is lossless.
+- **Import into a vehicle.** `POST /v1/vehicles/{id}/import {format, data, dryRun}` for editors and owners. **Import as a new vehicle.** `POST /v1/vehicle-imports {data, dryRun}` takes the JSON format; the importer becomes the owner.
+- **Validation and preview.** Every row passes the same rules as manual entry. `dryRun` defaults to true and runs the same statements, then rolls back. The report lists `total`, `created`, `duplicates`, `invalid` and up to 100 row errors.
+- **Commit** is one transaction and all-or-nothing: any invalid row and nothing is written. A purchase with the same instant and odometer reading as an existing one is a duplicate and is skipped, so importing the same file twice adds nothing.
+- **Limits.** 8 MiB request body (413 `body_too_large`) and 5,000 rows.
+
+## Vehicle images (milestone 1.6)
+
+- `PUT /v1/vehicles/{id}/image` takes the raw bytes (editors and owners, not on archived vehicles); `GET` returns them to members; `DELETE` removes. One image per vehicle.
+- The declared type must be JPEG, PNG or WebP, and the leading bytes must agree; the stored type comes from the bytes. Anything else is 415 `unsupported_media_type` or 422 `validation_failed`. Limit 5 MiB.
+- Images live in PostgreSQL (`vehicle_images`), so they are covered by the same authorization, transactions and backups as the rest of the data. Responses send `content-security-policy: default-src 'none'; sandbox` and `nosniff`. The vehicle's `imageVersion` changes on every upload and is used as a cache-busting query parameter.
+
+## Administration (milestone 1.6)
+
+All under `/v1/admin`, admin-only, every change audited.
+
+- **Accounts.** `GET /users` lists accounts with role, status and number of owned vehicles. `PUT /users/{id}/status {active|disabled}` (disabling revokes every session) and `PUT /users/{id}/role {admin|user}`. An admin cannot change their own status or role (`cannot_change_self`), and the instance always keeps an active admin (`last_admin`); both checks run under one lock.
+- **Invitations.** `POST /invites {email?, expiresInDays}` needs a recent sign-in and returns a token once; only its SHA-256 is stored. `register` accepts `invite_token` when registration is closed; an invitation bound to an email admits only that address, and each works once. `GET /invites`, `DELETE /invites/{id}` (unused only).
+- **Audit log.** `GET /audit?limit&before` pages through `audit_events`, newest first. Events hold ids and actions, never fuel data or secrets.
+- **Not here.** Admins never see vehicle data through these routes. Password reset for a locked-out user is a server command (`scripts/auth-admin.ts`), not an API.
+
+## Instance backup and restore (milestone 1.6)
+
+Code is in `apps/api/src/backup.ts`; the operator CLI is `node scripts/backup.ts create|verify|restore <file> [--replace]`.
+
+- **Archive.** Gzip NDJSON: a header (`driveloom.backup` v1, schema version, instance id, time), each table with its columns and rows in parent-before-child order, then a trailer with row counts and a SHA-256 over everything before it. Values are PostgreSQL text, so decimals, timestamps, JSON and image bytes round-trip exactly.
+- **Consistency.** The dump runs in one `REPEATABLE READ` read-only transaction.
+- **Not archived.** `sessions`, `rate_limits`, `auth_challenges`, `one_time_codes`. Everyone signs in again after a restore.
+- **Restore** verifies the whole file first, then in one transaction: refuses a non-empty target unless `--replace` (which drops and rebuilds the schema inside the same transaction), applies this build's migrations up to the archive's schema version, loads rows cast to the target's own column types, checks counts, and applies newer migrations. Any failure rolls back and leaves the target untouched.
+- **Errors** carry a stable code: `not_a_backup`, `unsupported_version`, `corrupt`, `unreadable`, `newer_schema`, `schema_mismatch`, `target_not_empty`, `not_initialised`, `restore_incomplete`, `restore_failed`.
+
+## Application and web client
+
+- **One process, one origin.** `src/server.ts` reads the environment ([deployment](DEPLOYMENT.md)), waits for the database, runs migrations and serves `src/application.ts`: paths under `/v1` go to the API, everything else to the web client in `apps/web` (`DRIVELOOM_WEB_DIR` overrides).
+- **Static serving** (`src/http/static.ts`) resolves inside the web directory only. A path with an extension that does not exist is 404; any other path returns `index.html` for client-side routing. Every response carries a strict CSP (`default-src 'self'`, no inline script or style, `frame-ancestors 'none'`), `nosniff`, `no-referrer`, `X-Frame-Options: DENY` and, on HTTPS origins, HSTS.
+- **Web client.** Vanilla ES modules with no build step and no third-party code. Hash routes: `#/` vehicles, `#/vehicles/{id}/{log|stats|members|data|settings}`, `#/friends`, `#/settings/{preferences|profile|security}`, `#/admin/{users|invites|audit}`, and `#/signin`, `#/register`, `#/recover`, `#/mfa`. All DOM is built from text nodes and properties, never `innerHTML`. The client keeps no data in browser storage; the session is the HttpOnly cookie and the CSRF token is held in memory.
+- **Re-authentication.** When an action answers `reauth_required`, the client asks for the password or an authenticator code, calls `/v1/auth/reauth` and retries once. Passkey- or OIDC-only accounts sign in again instead.
+- **PWA.** A manifest and icon make the client installable. There is no service worker: offline reading and writing are deferred until their semantics are reviewed (roadmap 2.2).
+- **Checks.** `npm run check` also verifies that every web module parses and every named import exists (`scripts/check-web.ts`). `tests/application.test.ts` drives the composed handler; `npm run test:browser` runs the main journeys in Chromium with axe WCAG 2.2 AA checks in light and dark themes.
+
