@@ -45,7 +45,9 @@
       api.yml
 ```
 
-Work from the current default branch in a scoped feature branch. In the PR, identify the milestone, describe the change, and provide verification evidence. Include responsive screenshots for UI changes. Record provenance for new assets. Keep generated output and local environment files outside commits.
+Work happens on `dev`, the default branch: branch from `dev` and open PRs into `dev`. CI runs on every PR and on pushes to `dev`. To release, merge `dev` into `main` with a PR; a push to `main` builds the image and publishes it to `ghcr.io` (tags `latest` and the commit SHA, plus the version for a pushed `v*` tag) and deploys the marketing site to GitHub Pages. Do not commit directly to `main` except to release. Keep `.github/workflows/release.yml` as the only place that publishes the image.
+
+In a feature branch, In the PR, identify the milestone, describe the change, and provide verification evidence. Include responsive screenshots for UI changes. Record provenance for new assets. Keep generated output and local environment files outside commits.
 
 See the [marketing README](apps/marketing/README.md) for commands and [verification](docs/VERIFICATION.md) for release checks.
 

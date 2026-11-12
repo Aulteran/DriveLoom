@@ -27,6 +27,23 @@ DriveLoom runs as one Node 22 process that serves the API under `/v1` and the we
 
 Migrations run automatically at start-up. They are forward-only; take a backup before upgrading.
 
+## Run the published image
+
+Every release (a push to `main`) publishes a multi-architecture image (linux/amd64 and linux/arm64) to GitHub Container Registry as `ghcr.io/aulteran/driveloom`, tagged `latest`, with the full commit SHA, and with the version for a pushed `v*` tag. To use it instead of building from source, add this to `deploy/.env` (pin a SHA or version tag for repeatable upgrades):
+
+```sh
+DRIVELOOM_IMAGE=ghcr.io/aulteran/driveloom:latest
+```
+
+then pull and start without `--build`:
+
+```sh
+docker compose -f deploy/compose.yml --env-file deploy/.env pull app
+docker compose -f deploy/compose.yml --env-file deploy/.env up -d --wait
+```
+
+If the pull is refused as unauthorized, the package is still private: the owner must set it public in the package settings on GitHub, or you can `docker login ghcr.io` with a token that has `read:packages`. Take a backup before upgrading.
+
 ## Settings
 
 | Variable | Required | Meaning |

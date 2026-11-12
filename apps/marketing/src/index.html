@@ -14,95 +14,192 @@
   <meta property="og:image" content="{{siteUrl}}og-image.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="{{name}}: a self-hosted vehicle and fuel tracker, coming soon.">
+  <meta property="og:image:alt" content="{{name}}: a self-hosted fuel tracker. A dark dashboard shows an economy readout and a trend line.">
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="{{name}}">
   <meta name="twitter:description" content="{{description}}">
   <meta name="twitter:image" content="{{siteUrl}}og-image.png">
-  <meta name="twitter:image:alt" content="{{name}}: a self-hosted vehicle and fuel tracker, coming soon.">
-  <meta name="color-scheme" content="dark light">
+  <meta name="twitter:image:alt" content="{{name}}: a self-hosted fuel tracker. A dark dashboard shows an economy readout and a trend line.">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#edf1f8" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#05070e" media="(prefers-color-scheme: dark)">
+  <meta name="referrer" content="no-referrer">
+  <link rel="icon" href="{{basePath}}icon.svg" type="image/svg+xml">
+  <link rel="preload" href="{{basePath}}fonts/space-grotesk-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="{{basePath}}styles.css">
+  <script src="{{basePath}}demo.js" defer></script>
 </head>
 <body>
+  <svg class="sprite" aria-hidden="true" focusable="false">
+    <symbol id="i-car" viewBox="0 0 24 24"><path d="M5 16h14M4.5 16l1.6-5.2A2 2 0 0 1 8 9.4h8a2 2 0 0 1 1.9 1.4L19.5 16v2.5a.5.5 0 0 1-.5.5h-2a.5.5 0 0 1-.5-.5V18h-9v.5a.5.5 0 0 1-.5.5H5a.5.5 0 0 1-.5-.5Z M7.5 13.5h.01M16.5 13.5h.01"/></symbol>
+    <symbol id="i-fuel" viewBox="0 0 24 24"><path d="M4 20V5a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1v15M3 20h12M6.5 8h5M14 9h2a2 2 0 0 1 2 2v5a1.5 1.5 0 0 0 3 0V9l-3-3"/></symbol>
+    <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 4v16h16M7.5 15l3.5-4 3 2.5L19 8"/></symbol>
+    <symbol id="i-users" viewBox="0 0 24 24"><path d="M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7ZM2.5 20a6.5 6.5 0 0 1 13 0M16 4.3a3.5 3.5 0 0 1 0 6.4M18 14.5a6.5 6.5 0 0 1 3.5 5.5"/></symbol>
+    <symbol id="i-swap" viewBox="0 0 24 24"><path d="M7 4v13M3.5 13.5 7 17l3.5-3.5M17 20V7M13.5 10.5 17 7l3.5 3.5"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 4.5 6v5.5c0 4.5 3.2 8.2 7.5 9.5 4.3-1.3 7.5-5 7.5-9.5V6Z M9 12l2 2 4-4"/></symbol>
+    <symbol id="i-key" viewBox="0 0 24 24"><path d="M14.5 13a4.5 4.5 0 1 0-4.2-2.9L4 16.5V20h3.5v-2h2v-2h2l.9-.9A4.5 4.5 0 0 0 14.5 13ZM16 8h.01"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></symbol>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 15V4M7.5 8.5 12 4l4.5 4.5M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/></symbol>
+    <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M3 12h4l2.5-6 5 12 2.5-6H21"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0M16 4v4M10 10v4M18 16v4"/></symbol>
+    <symbol id="i-server" viewBox="0 0 24 24"><path d="M4 5h16v6H4ZM4 13h16v6H4ZM7.5 8h.01M7.5 16h.01M11 8h5M11 16h5"/></symbol>
+    <symbol id="i-code" viewBox="0 0 24 24"><path d="m8 7-5 5 5 5M16 7l5 5-5 5M13.5 4l-3 16"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+  </svg>
+
   <a class="skip" href="#main">Skip to content</a>
-  <header class="site-header">
-    <a class="brand" href="{{basePath}}">{{name}}</a>
+  <header class="topbar">
+    <a class="brand" href="{{basePath}}"><img src="{{basePath}}icon.svg" alt="" width="32" height="32"><span>{{name}}</span></a>
     <nav aria-label="Primary">
+      <a href="#tour">Tour</a>
       <a href="#features">Features</a>
-      <a href="#how">How it works</a>
+      <a href="#self-host">Self-host</a>
       <a href="#faq">FAQ</a>
-      <a class="btn btn-small" href="{{followUrl}}">Follow on GitHub</a>
     </nav>
+    <a class="button secondary gh" href="{{followUrl}}"><svg class="icon" aria-hidden="true"><use href="#i-code"/></svg><span>GitHub</span></a>
   </header>
 
   <main id="main">
-    <section class="hero">
-      <p class="eyebrow">Coming soon &middot; Self-hosted &middot; Open source</p>
-      <h1>Know what every mile really costs.</h1>
-      <p class="lead">{{name}} is a self-hosted vehicle and fuel tracker. Log fills and odometer readings, share vehicles with the people you drive with, and compare efficiency on your own server, with your data staying yours.</p>
-      <p class="cta-row">
-        <a class="btn" href="{{followUrl}}">Follow progress on GitHub</a>
-        <a class="btn btn-ghost" href="#features">See what's planned</a>
-      </p>
-      <p class="note">In development. Nothing to install yet.</p>
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-copy">
+        <p class="status"><span class="dot" aria-hidden="true"></span>Pre-release &middot; the web app is built and in review</p>
+        <h1 id="hero-title">Every mile, <span class="grad-text">accounted for.</span></h1>
+        <p class="lead">{{name}} is a self-hosted fuel tracker for the cars you drive and the people you share them with. Log fill-ups in whatever units the pump uses, get honest economy and cost figures, and keep the whole history on your own server.</p>
+        <p class="cta-row">
+          <a class="button" href="#tour">Take the tour<svg class="icon" aria-hidden="true"><use href="#i-arrow"/></svg></a>
+          <a class="button secondary" href="{{followUrl}}"><svg class="icon" aria-hidden="true"><use href="#i-code"/></svg>Follow on GitHub</a>
+        </p>
+        <ul class="chips" aria-label="At a glance">
+          <li>Open source, AGPL-3.0</li>
+          <li>Docker Compose</li>
+          <li>No telemetry</li>
+        </ul>
+      </div>
+
+      <figure class="hud" aria-labelledby="hud-caption">
+        <div class="hud-panel">
+          <div class="hud-head">
+            <span class="hud-title"><svg class="icon" aria-hidden="true"><use href="#i-pulse"/></svg>Blue Hatch</span>
+            <span class="badge accent">Last year</span>
+          </div>
+          <div class="hud-readout">
+            <span class="k">Average economy</span>
+            <span class="v">6.56<small>L/100 km</small></span>
+            <span class="small muted">over 13 full-to-full intervals</span>
+          </div>
+          <svg class="chart hud-chart" viewBox="0 0 400 120" role="img" aria-label="Sample economy trend over a year, between 6.2 and 7.0 litres per 100 kilometres.">
+            <defs>
+              <linearGradient id="hud-stroke" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="400" y2="0"><stop offset="0" class="stop-a"/><stop offset="1" class="stop-b"/></linearGradient>
+              <linearGradient id="hud-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" class="fill-a"/><stop offset="1" class="fill-b"/></linearGradient>
+            </defs>
+            <line class="axis" x1="0" x2="400" y1="30" y2="30"/><line class="axis" x1="0" x2="400" y1="70" y2="70"/><line class="axis" x1="0" x2="400" y1="110" y2="110"/>
+            <path class="area" fill="url(#hud-fill)" d="M8,52 L40,62 L72,66 L104,28 L136,88 L168,70 L200,63 L232,85 L264,84 L296,70 L328,58 L360,50 L392,46 L392,110 L8,110 Z"/>
+            <path class="line" stroke="url(#hud-stroke)" pathLength="1" d="M8,52 L40,62 L72,66 L104,28 L136,88 L168,70 L200,63 L232,85 L264,84 L296,70 L328,58 L360,50 L392,46"/>
+            <circle class="dot" cx="392" cy="46" r="4"/>
+          </svg>
+          <div class="hud-tiles">
+            <div><span class="k">Distance</span><span class="v">8,810 km</span></div>
+            <div><span class="k">Spent</span><span class="v">€965</span></div>
+            <div><span class="k">Per km</span><span class="v">€0.110</span></div>
+          </div>
+        </div>
+        <figcaption id="hud-caption" class="small muted">Illustrative: the statistics view with sample data.</figcaption>
+      </figure>
     </section>
 
-    <section id="what" class="band">
-      <h2>What it is</h2>
-      <p class="section-lead">One place for your vehicles, fuel and mileage, run on hardware you control instead of someone else's cloud.</p>
-      <div class="grid three">
-        <article class="card"><h3>Self-hosted</h3><p>Runs on your own server. No account with a third party and no data leaving your instance.</p></article>
-        <article class="card"><h3>Built for sharing</h3><p>Several people can track the same vehicle, such as a family car or a shared van, in one history.</p></article>
-        <article class="card"><h3>Open source</h3><p>Licensed under AGPL-3.0, so you can read, audit and run exactly what you're trusting with your data.</p></article>
+    <section id="tour" class="band" aria-labelledby="tour-title">
+      <div class="section-head">
+        <p class="eyebrow">Interactive demo</p>
+        <h2 id="tour-title">Try it right here</h2>
+        <p class="section-lead">A working mock-up of the real web app, built with its own styles and running on sample data in your browser. Switch units, add a fill-up, share a vehicle. Nothing is saved or sent anywhere.</p>
+      </div>
+      <div class="tour" data-tour>
+        <noscript><p class="notice">The interactive tour needs JavaScript. Everything else on this page works without it.</p></noscript>
       </div>
     </section>
 
-    <section id="features" class="band">
-      <h2>Planned features</h2>
-      <p class="section-lead">The direction for {{name}}. Details may change as it is built.</p>
-      <div class="grid two">
-        <article class="card"><h3>Fuel and odometer integrity</h3><p>Entries are checked against each other so a mistyped odometer reading is caught before it skews your numbers.</p></article>
-        <article class="card"><h3>Your units, everyone's units</h3><p>Enter fuel and distance in whatever units you used at the pump. Each person views everything in the units they prefer.</p></article>
-        <article class="card"><h3>Compare efficiency with friends</h3><p>Friends on the same instance can compare how efficiently they drive, with the data they choose to share.</p></article>
-        <article class="card"><h3>Flexible sign-in</h3><p>Password sign-in, with optional single sign-on through OIDC, plus TOTP and passkeys for stronger accounts.</p></article>
-        <article class="card"><h3>Your data, portable</h3><p>Back up and restore a whole instance, migrate between servers, and export or import individual vehicles.</p></article>
-        <article class="card"><h3>Fits your setup</h3><p>Designed to sit behind your reverse proxy, such as Nginx Proxy Manager. No bundled tunnel, and you decide how it is exposed.</p></article>
+    <section id="features" class="band" aria-labelledby="features-title">
+      <div class="section-head">
+        <p class="eyebrow">What it does</p>
+        <h2 id="features-title">Built for real fill-ups, not perfect ones</h2>
+        <p class="section-lead">People forget receipts, top up halfway and buy fuel abroad. {{name}} handles all of that without guessing.</p>
+      </div>
+      <div class="features">
+        <article class="feature"><svg class="icon" aria-hidden="true"><use href="#i-chart"/></svg><h3>Economy you can trust</h3><p>Full-to-full intervals, with partial top-ups folded into the next full tank. A missed purchase leaves that interval out instead of skewing your average.</p></article>
+        <article class="feature"><svg class="icon" aria-hidden="true"><use href="#i-sliders"/></svg><h3>Any units in, your units out</h3><p>Enter kilometres or miles, litres, US or imperial gallons. View everything in L/100&nbsp;km, km/L or either mpg. What you typed is kept exactly.</p></article>
+        <article class="feature"><svg class="icon" aria-hidden="true"><use href="#i-users"/></svg><h3>Shared vehicles</h3><p>One owner, plus editors who log and correct fill-ups and viewers who only read. Hand a car over by transferring ownership.</p></article>
+        <article class="feature"><svg class="icon" aria-hidden="true"><use href="#i-pulse"/></svg><h3>Compare with friends</h3><p>Friends on your instance see only the averages of vehicles you opt in, never fill-ups, dates or notes. Turning sharing off takes effect at once.</p></article>
+        <article class="feature"><svg class="icon" aria-hidden="true"><use href="#i-fuel"/></svg><h3>Costs without guesswork</h3><p>Each vehicle totals in one currency. A purchase in another currency needs your rate or the amount you were charged. No rate is ever assumed.</p></article>
+        <article class="feature"><svg class="icon" aria-hidden="true"><use href="#i-swap"/></svg><h3>Portable data</h3><p>Export a vehicle as CSV or JSON and import it on any instance. Imports preview first, skip duplicates and are all-or-nothing.</p></article>
+        <article class="feature"><svg class="icon" aria-hidden="true"><use href="#i-server"/></svg><h3>Backups that restore</h3><p>Administrators take a full backup, photos included, in one checksummed file, and can restore it into a fresh instance.</p></article>
+        <article class="feature"><svg class="icon" aria-hidden="true"><use href="#i-key"/></svg><h3>Sign-in your way</h3><p>Passwords, authenticator apps and passkeys. Registration is invite-only by default, and the first account needs a setup token.</p></article>
       </div>
     </section>
 
-    <section id="how" class="band">
-      <h2>How it works</h2>
-      <ol class="steps">
-        <li><h3>Run it yourself</h3><p>Deploy {{name}} on a server you control and put it behind your own reverse proxy.</p></li>
-        <li><h3>Add your vehicles</h3><p>Create vehicles and invite the people who share them.</p></li>
-        <li><h3>Log as you go</h3><p>Record fill-ups and odometer readings in the units you actually used.</p></li>
-        <li><h3>See the real picture</h3><p>Watch consumption and cost trends, and compare with friends if you choose to.</p></li>
+    <section id="self-host" class="band split" aria-labelledby="self-host-title">
+      <div>
+        <p class="eyebrow">Self-hosted</p>
+        <h2 id="self-host-title">Your vehicle. Your data. Your server.</h2>
+        <p class="section-lead">{{name}} is one Node process and a PostgreSQL database, started with Docker Compose. Put it behind the reverse proxy you already run; Caddy and nginx examples are included.</p>
+        <ul class="checks">
+          <li>No telemetry, analytics or call home</li>
+          <li>Vehicle photos stay in your database</li>
+          <li>The database is never published to the network</li>
+          <li>AGPL-3.0, so you can read and audit every line</li>
+        </ul>
+        <p><a href="{{followUrl}}/blob/HEAD/docs/DEPLOYMENT.md">Read the self-hosting guide</a></p>
+      </div>
+      <div class="terminal">
+        <div class="terminal-bar" aria-hidden="true"><span></span><span></span><span></span></div>
+<pre tabindex="0" aria-label="Quick start commands"><code><span class="c"># settings: public URL, secret key, passwords</span>
+cp deploy/.env.example deploy/.env
+
+<span class="c"># build and start the app and database</span>
+docker compose -f deploy/compose.yml \
+  --env-file deploy/.env up -d --build --wait
+
+<span class="c"># then point your proxy at 127.0.0.1:8080</span></code></pre>
+      </div>
+    </section>
+
+    <section id="status" class="band" aria-labelledby="status-title">
+      <div class="section-head">
+        <p class="eyebrow">Where it stands</p>
+        <h2 id="status-title">Honest status</h2>
+      </div>
+      <ol class="timeline">
+        <li class="done"><span class="badge good">Built</span><h3>The web app</h3><p>Vehicles, fuel log, statistics, sharing, friends, import and export, administration and backups. Tested in CI against a real PostgreSQL database, including accessibility checks in light and dark themes.</p></li>
+        <li class="now"><span class="badge accent">In review</span><h3>First release</h3><p>A security review and owner sign-off come before a tagged release. Until then, treat it as a preview.</p></li>
+        <li><span class="badge">Later</span><h3>Phone apps</h3><p>Native Android and iPhone apps that connect to your own server are planned but not started. The web app needs a connection and does not work offline.</p></li>
       </ol>
-      <p class="note">Android and iPhone apps are planned for later. They are not part of the first release.</p>
     </section>
 
-    <section id="faq" class="band">
-      <h2>FAQ</h2>
+    <section id="faq" class="band" aria-labelledby="faq-title">
+      <div class="section-head">
+        <p class="eyebrow">Questions</p>
+        <h2 id="faq-title">FAQ</h2>
+      </div>
       <div class="faq">
-        <details><summary>When will it be available?</summary><p>There is no release date yet. {{name}} is in early development. Following the GitHub project is the best way to see progress.</p></details>
-        <details><summary>Does this site track me?</summary><p>No. There are no analytics, no cookies, no forms and no third-party scripts on this page.</p></details>
+        <details><summary>Can I use it today?</summary><p>The code is on GitHub and runs from source with Docker Compose. There is no tagged release yet and the security review is still to come, so treat it as a preview rather than something to trust with years of records.</p></details>
+        <details><summary>Is the demo the real app?</summary><p>It is a mock-up built with the app's own styles and running on sample data in your browser. The screens and rules match the app, but nothing talks to a server.</p></details>
+        <details><summary>Does this site track me?</summary><p>No. There are no analytics, no cookies, no third-party requests and no sign-up forms. The demo keeps everything in memory and forgets it when you leave.</p></details>
+        <details><summary>Where does my data live?</summary><p>On your own server. {{name}} is self-hosted, so there is no central service holding your vehicle history, and it never phones home.</p></details>
         <details><summary>Is it free?</summary><p>It is open source under AGPL-3.0, so you can run it yourself at no cost beyond your own hosting.</p></details>
-        <details><summary>Where does my data live?</summary><p>On your own server. {{name}} is self-hosted, so there is no central service holding your vehicle history.</p></details>
-        <details><summary>Will there be mobile apps?</summary><p>Native Android and iPhone clients are planned for later, after the core platform.</p></details>
-        <details><summary>How do I follow along?</summary><p>Use the GitHub link below. This site does not collect email addresses.</p></details>
+        <details><summary>Will there be phone apps?</summary><p>Native Android and iPhone apps are planned for later, after the first release. They have not been started.</p></details>
       </div>
     </section>
 
-    <section class="band final">
-      <h2>Follow the build</h2>
-      <p class="section-lead">Watch or star the repository to see {{name}} take shape.</p>
-      <p class="cta-row"><a class="btn" href="{{followUrl}}">Follow on GitHub</a></p>
+    <section class="band final" aria-labelledby="final-title">
+      <h2 id="final-title">Follow the build</h2>
+      <p class="section-lead">Watch or star the repository to see {{name}} reach its first release.</p>
+      <p class="cta-row"><a class="button" href="{{followUrl}}"><svg class="icon" aria-hidden="true"><use href="#i-code"/></svg>Follow on GitHub</a></p>
     </section>
   </main>
 
   <footer class="site-footer">
     <p>&copy; {{year}} {{name}} &middot; Open source under AGPL-3.0 &middot; <a href="{{followUrl}}">GitHub</a></p>
-    <p class="small">This site sets no cookies and collects no personal data.</p>
+    <p class="small">This site sets no cookies and collects no personal data. Fonts: Space Grotesk and JetBrains Mono, SIL Open Font License.</p>
   </footer>
 </body>
 </html>
