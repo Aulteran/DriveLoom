@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: DriveLoom API
-  version: 0.3.0
+  version: 0.4.0
   summary: Versioned contract for the self-hosted DriveLoom API.
   description: >
     Contract for the self-hosted DriveLoom API under the compatibility policy
@@ -834,6 +834,119 @@ paths:
         '401': { $ref: '#/components/responses/Problem' }
         '404': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
+  # --- friends and aggregate comparison (milestone 1.5) ---
+  /v1/friends:
+    get:
+      operationId: listFriends
+      summary: Accepted friends and pending requests in both directions
+      tags: [friends]
+      responses:
+        '200':
+          description: Relationships of the caller.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FriendList' }
+        '401': { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: requestFriend
+      summary: Ask a user of this instance by email; asking back accepts
+      tags: [friends]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              additionalProperties: false
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '200':
+          description: Current state of the relationship.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, enum: [pending, accepted] }
+        '401': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+  /v1/friends/{friendshipId}:
+    parameters:
+      - { name: friendshipId, in: path, required: true, schema: { $ref: '#/components/schemas/Id' } }
+    put:
+      operationId: acceptFriend
+      summary: Accept a request addressed to the caller
+      tags: [friends]
+      responses:
+        '204': { description: Accepted. }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+    delete:
+      operationId: removeFriend
+      summary: Decline, cancel or unfriend; comparison access ends immediately
+      tags: [friends]
+      responses:
+        '204': { description: Removed. }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /v1/vehicles/{vehicleId}/comparison:
+    parameters:
+      - { $ref: '#/components/parameters/VehicleId' }
+    get:
+      operationId: getComparisonOptIn
+      summary: Whether this vehicle is shared for comparison with the owner's friends
+      tags: [friends]
+      responses:
+        '200':
+          description: Opt-in state.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ComparisonOptIn' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+    put:
+      operationId: setComparisonOptIn
+      summary: Opt a vehicle in or out (owner only). Off by default; opting out revokes immediately
+      tags: [friends]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ComparisonOptIn' }
+      responses:
+        '200':
+          description: New state.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ComparisonOptIn' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/comparisons:
+    get:
+      operationId: compareWithFriends
+      summary: Aggregate economy of the caller's vehicles and friends' opted-in vehicles over one window
+      description: >
+        Friends' vehicles carry a description and aggregates only: no ids,
+        records, dates, distances, volumes or counts. Values are in the
+        caller's units. Cost per distance appears only when the vehicle's
+        reporting currency equals the caller's currency preference.
+      tags: [friends]
+      parameters:
+        - { name: window, in: query, schema: { type: string, enum: ['30d', '90d', '365d', all], default: '90d' } }
+      responses:
+        '200':
+          description: Comparison.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Comparison' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
 components:
   securitySchemes:
     session:
@@ -1279,3 +1392,74 @@ components:
             properties:
               at: { $ref: '#/components/schemas/Timestamp' }
               economy: { $ref: '#/components/schemas/Decimal' }
+    FriendEntry:
+      type: object
+      required: [id, userId, displayName, email]
+      properties:
+        id: { $ref: '#/components/schemas/Id', description: Friendship id, used to accept or remove. }
+        userId: { $ref: '#/components/schemas/Id' }
+        displayName: { type: string }
+        email: { type: string, format: email }
+        since: { $ref: '#/components/schemas/Timestamp' }
+        requestedAt: { $ref: '#/components/schemas/Timestamp' }
+    FriendList:
+      type: object
+      required: [friends, incoming, outgoing]
+      properties:
+        friends: { type: array, items: { $ref: '#/components/schemas/FriendEntry' } }
+        incoming: { type: array, items: { $ref: '#/components/schemas/FriendEntry' } }
+        outgoing: { type: array, items: { $ref: '#/components/schemas/FriendEntry' } }
+    ComparisonOptIn:
+      type: object
+      required: [enabled]
+      additionalProperties: false
+      properties:
+        enabled: { type: boolean }
+    ComparedVehicle:
+      type: object
+      required: [name, make, model, year, economy, costPerDistance, costUnavailableReason]
+      properties:
+        vehicleId: { $ref: '#/components/schemas/Id', description: Present only on the caller's own vehicles. }
+        name: { type: string }
+        make: { type: [string, 'null'] }
+        model: { type: [string, 'null'] }
+        year: { type: [integer, 'null'] }
+        economy: { oneOf: [{ $ref: '#/components/schemas/Economy' }, { type: 'null' }], description: Null when the window has no complete interval. }
+        costPerDistance:
+          oneOf:
+            - type: object
+              required: [value, currency, per]
+              properties:
+                value: { $ref: '#/components/schemas/Decimal' }
+                currency: { $ref: '#/components/schemas/CurrencyCode' }
+                per: { $ref: '#/components/schemas/DistanceUnit' }
+            - type: 'null'
+        costUnavailableReason: { type: [string, 'null'], enum: [currency_mismatch, no_cost_data, null] }
+    Comparison:
+      type: object
+      required: [window, units, mine, friends]
+      properties:
+        window:
+          type: object
+          required: [key, from, to]
+          properties:
+            key: { type: string, enum: ['30d', '90d', '365d', all] }
+            from: { oneOf: [{ $ref: '#/components/schemas/Timestamp' }, { type: 'null' }] }
+            to: { $ref: '#/components/schemas/Timestamp' }
+        units:
+          type: object
+          required: [economy, distance, currency]
+          properties:
+            economy: { $ref: '#/components/schemas/EconomyUnit' }
+            distance: { $ref: '#/components/schemas/DistanceUnit' }
+            currency: { $ref: '#/components/schemas/CurrencyCode' }
+        mine: { type: array, items: { $ref: '#/components/schemas/ComparedVehicle' } }
+        friends:
+          type: array
+          items:
+            type: object
+            required: [userId, displayName, vehicles]
+            properties:
+              userId: { $ref: '#/components/schemas/Id' }
+              displayName: { type: string }
+              vehicles: { type: array, items: { $ref: '#/components/schemas/ComparedVehicle' } }
