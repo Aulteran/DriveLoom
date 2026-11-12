@@ -4,7 +4,7 @@ on:
   pull_request:
     paths: ['apps/marketing/**', '.github/workflows/marketing.yml']
   push:
-    branches: [main]
+    branches: [main, dev]
     paths: ['apps/marketing/**', '.github/workflows/marketing.yml']
   workflow_dispatch:
 

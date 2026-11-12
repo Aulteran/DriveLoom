@@ -17,13 +17,17 @@ The platform was built on 2026-11-12 and is in review: it has not had a security
 - [Self-hosting](docs/DEPLOYMENT.md)
 - [Repository layout and contributions](CONTRIBUTING.md)
 
+## Branches and releases
+
+All work happens on `dev`, the default branch. `main` is the release branch: merging `dev` into `main` publishes the Docker image to `ghcr.io/aulteran/driveloom` (see [Self-hosting](docs/DEPLOYMENT.md#run-the-published-image)).
+
 ## Local development launcher (Windows)
 
 Double-click `dev-up.cmd` in the repository root. It needs only Git and Docker Desktop, and shows a menu: start, stop, logs, restart and apply updates, wipe and start fresh, quit.
 
 - Copy `deploy/.env.example` to `deploy/.env` and fill it in first. The script reads that file and never changes it.
 - To layer on local settings (for example a Tailscale IP or hostname), create `deploy/compose.override.yml`. It is picked up automatically and is git-ignored.
-- "Restart and apply updates" runs `git pull --ff-only` only when you are on `main` with no uncommitted changes to tracked files. It then pulls images, rebuilds quietly (the log shows only if the build fails), starts the containers and waits until they are healthy. It prints the address but does not open a browser, so hard refresh with Ctrl+F5.
+- "Restart and apply updates" runs `git pull --ff-only` only when you are on `dev` with no uncommitted changes to tracked files. It then pulls images, rebuilds quietly (the log shows only if the build fails), starts the containers and waits until they are healthy. It prints the address but does not open a browser, so hard refresh with Ctrl+F5. While no account exists yet, it also prints the first-run setup token from `deploy\.env`, on screen only, and says nothing about it afterwards.
 - "Wipe everything" deletes the database and photos, and asks you to type `YES` first.
 
 The platform is licensed under [AGPL-3.0-only](LICENSE). Bundled third-party assets retain their applicable terms. See the [marketing asset register](apps/marketing/ASSET-PROVENANCE.md).

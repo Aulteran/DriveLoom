@@ -9,7 +9,7 @@ cd /d "%~dp0"
 title DriveLoom launcher
 
 rem ---- Settings you may want to change --------------------------------------
-set "BRANCH=main"
+set "BRANCH=dev"
 set "BASEFILE=deploy\compose.yml"
 set "OVERRIDE=deploy\compose.override.yml"
 set "OVERRIDE_ALT=deploy\compose.override.yaml"
@@ -170,17 +170,34 @@ goto :menu
 rem ---- Print the address to open (no browser is launched) --------------------------
 :print_url
 set "ORIGIN="
+set "TOKEN="
 set "PORT=8080"
 if exist "%ENVFILE%" (
   for /f "usebackq tokens=1,* delims==" %%A in ("%ENVFILE%") do (
     if /i "%%A"=="DRIVELOOM_PUBLIC_ORIGIN" set "ORIGIN=%%B"
     if /i "%%A"=="DRIVELOOM_PORT" if not "%%B"=="" set "PORT=%%B"
+    if /i "%%A"=="DRIVELOOM_SETUP_TOKEN" if not "%%B"=="" set "TOKEN=%%B"
   )
 )
 echo.
 echo DriveLoom is healthy.
 echo   On this PC:  http://127.0.0.1:%PORT%
 if defined ORIGIN echo   Public URL:  %ORIGIN%  (through your reverse proxy)
+echo.
+rem First-run setup: ask the app whether any account exists yet. Prints the token
+rem only while setup is still needed. It is read from deploy\.env and shown on
+rem screen only; it is never written to the log or a temp file.
+where curl >nul 2>&1
+if errorlevel 1 exit /b 0
+curl -s --max-time 5 "http://127.0.0.1:%PORT%/v1/auth/instance" 2>nul | findstr /r "needs_setup.:.true" >nul 2>&1
+if errorlevel 1 exit /b 0
+echo %ESC%[93mFirst-time setup is needed: no account exists yet.%ESC%[0m
+echo   Open http://127.0.0.1:%PORT% and register; the first account becomes the administrator.
+if defined TOKEN (
+  echo   Setup token: %TOKEN%
+) else (
+  echo   No setup token is set in %ENVFILE%, so none is asked for.
+)
 echo.
 exit /b 0
 
