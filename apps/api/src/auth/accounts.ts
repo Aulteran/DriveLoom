@@ -53,6 +53,9 @@ export async function register(ctx: AuthContext, input: { email: unknown; passwo
   const email = normaliseEmail(input.email);
   const password = checkPassword(ctx, input.password);
   const displayName = typeof input.displayName === 'string' ? input.displayName.trim().slice(0, 80) : '';
+  // With password sign-in off, a password account could never sign in, yet as the
+  // first account it would still take the administrator role from the operator.
+  if (!ctx.config.passwordEnabled) throw new HttpProblem(403, 'password_login_disabled', 'Password sign-in is disabled on this instance');
   await rateLimit(ctx, `register:ip:${meta.ip}`, 10, HOUR);
   const hash = await hashPassword(password); // hashed before any lookup so timing does not reveal existing accounts
   const verify = !!ctx.mailer && ctx.config.requireEmailVerification;
@@ -328,6 +331,8 @@ export async function totpConfirm(ctx: AuthContext, p: Principal, code: unknown)
     for (const c of codes) await tx.query('INSERT INTO recovery_codes (id, user_id, code_hash) VALUES ($1,$2,$3)', [uuidv7(), p.userId, hmacHex(ctx.config.secretKey, 'recovery', c)]);
     await audit(tx, p.userId, 'credential.totp_added', p.userId, {}, ctx.now());
   });
+  // Sessions signed in before the second factor existed must not outlive it.
+  await revokeAll(ctx, p.userId, p.sessionId, 'totp_added');
   return { recoveryCodes: codes };
 }
 

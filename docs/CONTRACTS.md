@@ -145,6 +145,7 @@ Decisions are in [ADR 0005](adr/0005-portability-backup-web.md). Code is in `app
 
 - `PUT /v1/vehicles/{id}/image` takes the raw bytes (editors and owners, not on archived vehicles); `GET` returns them to members; `DELETE` removes. One image per vehicle.
 - The declared type must be JPEG, PNG or WebP, and the leading bytes must agree; the stored type comes from the bytes. Anything else is 415 `unsupported_media_type` or 422 `validation_failed`. Limit 5 MiB.
+- Metadata is removed before storing, without re-encoding: JPEG EXIF, XMP, IPTC and comments (a non-default orientation is kept as the only EXIF field), PNG text, time and EXIF chunks, WebP EXIF and XMP chunks. A file whose structure cannot be walked is refused (422).
 - Images live in PostgreSQL (`vehicle_images`), so they are covered by the same authorization, transactions and backups as the rest of the data. Responses send `content-security-policy: default-src 'none'; sandbox` and `nosniff`. The vehicle's `imageVersion` changes on every upload and is used as a cache-busting query parameter.
 
 ## Administration (milestone 1.6)

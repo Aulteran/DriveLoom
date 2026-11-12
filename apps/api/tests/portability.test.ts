@@ -10,6 +10,7 @@ import { portabilityRoutes } from '../src/portability/routes.ts';
 import { parseCsv, toCsv, neutralise, denormalise, CsvError } from '../src/portability/csv.ts';
 import { createTestDb, createTestUser, type TestDb, type TestUser } from './helpers/index.ts';
 import { startApp, type TestApp } from './helpers/http.ts';
+import { jpeg, JFIF, png } from './helpers/images.ts';
 
 const skip = process.env['DATABASE_URL'] ? false : 'DATABASE_URL not set';
 
@@ -173,8 +174,8 @@ test('invalid, malformed, oversized and unauthorized imports change nothing', { 
   assert.deepEqual(twice.json.summary, { total: 2, created: 1, duplicates: 1, invalid: 0 });
 });
 
-const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(64, 1)]);
-const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(64, 2)]);
+const PNG = png();
+const JPEG = jpeg(JFIF);
 
 test('vehicle images: members only, type from content, size limit, replace and remove', { skip }, async () => {
   const v = await seeded(a);
