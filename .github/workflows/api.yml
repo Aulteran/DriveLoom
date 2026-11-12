@@ -2,10 +2,10 @@ name: api
 
 on:
   pull_request:
-    paths: ['apps/api/**', 'deploy/**', '.github/workflows/api.yml']
+    paths: ['apps/api/**', 'apps/web/**', 'deploy/**', 'Dockerfile', '.dockerignore', '.github/workflows/api.yml']
   push:
     branches: [main]
-    paths: ['apps/api/**', 'deploy/**', '.github/workflows/api.yml']
+    paths: ['apps/api/**', 'apps/web/**', 'deploy/**', 'Dockerfile', '.dockerignore', '.github/workflows/api.yml']
 
 permissions:
   contents: read
@@ -37,3 +37,31 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npm test
+
+  browser:
+    # The web client in Chromium against the real application.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 2s --health-retries 30
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      REQUIRE_DB: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: apps/api/.nvmrc
+          cache: npm
+          cache-dependency-path: apps/api/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:browser

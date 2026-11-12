@@ -1,35 +1,55 @@
-// Process entry point: `node src/server.ts`. Reads configuration from the environment.
+// Process entry point: `node src/server.ts`. Reads configuration from the
+// environment (docs/DEPLOYMENT.md), runs migrations, then serves the API under
+// /v1 and the web client everywhere else on one origin.
 import { createServer } from 'node:http';
-import { readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { migrate } from './migrate.ts';
-import { createApp, type Route } from './http/app.ts';
 import { configFromEnv } from './auth/config.ts';
-import { authenticator } from './auth/sessions.ts';
-import { authRoutes } from './auth/routes.ts';
 import { createSmtpMailer } from './auth/mailer.ts';
 import { createOidcProvider } from './auth/oidc.ts';
 import type { AuthContext } from './auth/context.ts';
-import { API_VERSION } from './version.ts';
+import { createApplication, SERVER_VERSION } from './application.ts';
 
 const env = process.env;
-const pool = new pg.Pool({ connectionString: env['DATABASE_URL'] });
-pool.on('error', (e) => console.error('idle database client error', e));
+if (!env['DATABASE_URL']) { console.error('DATABASE_URL is required'); process.exit(2); }
+const pool = new pg.Pool({ connectionString: env['DATABASE_URL'], max: Number(env['DATABASE_POOL_SIZE'] ?? 10) });
+pool.on('error', (e) => console.error('idle database client error', e.message));
 const smtp = env['DRIVELOOM_SMTP_URL'] && env['DRIVELOOM_SMTP_FROM'] ? createSmtpMailer(env['DRIVELOOM_SMTP_URL'], env['DRIVELOOM_SMTP_FROM']) : null;
 const config = configFromEnv(env, !!smtp);
-const c = await pool.connect();
-try { await migrate(c); } finally { c.release(); }
+
+// The database may still be starting (compose): retry the first connection for a while.
+let c: pg.PoolClient | undefined;
+for (let attempt = 1; !c; attempt++) {
+  try { c = await pool.connect(); } catch (e) {
+    if (attempt >= 30) throw e;
+    console.log(`waiting for the database (${(e as Error).message})`);
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+}
+try {
+  const applied = await migrate(c);
+  if (applied.length) console.log(`applied migrations: ${applied.join(', ')}`);
+  await c.query('INSERT INTO instance_meta (instance_id) SELECT gen_random_uuid() WHERE NOT EXISTS (SELECT 1 FROM instance_meta)');
+  const users = (await c.query('SELECT 1 FROM users LIMIT 1')).rowCount;
+  if (!users && !config.setupToken) console.warn('WARNING: no account exists yet. The first registration becomes the administrator. Register now, or set DRIVELOOM_SETUP_TOKEN if this instance is reachable by others.');
+} finally { c.release(); }
 
 const ctx: AuthContext = { db: pool, config, mailer: smtp, oidc: config.oidc ? createOidcProvider(config.oidc) : null, now: () => new Date() };
-const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
-const system: Route[] = [
-  { method: 'GET', path: '/v1/health', auth: 'none', handler: async () => { await pool.query('SELECT 1'); return { status: 200, body: { status: 'ok', database: 'ok' } }; } },
-  { method: 'GET', path: '/v1/version', auth: 'none', handler: async () => {
-    const { rows } = await pool.query<{ v: number | null }>('SELECT max(version) AS v FROM schema_migrations');
-    return { status: 200, body: { server: pkg.version, api: API_VERSION, schema: rows[0]!.v ?? 0 } };
-  } },
-];
-const routes: Route[] = [...system, ...authRoutes(ctx)];
-const app = createApp({ routes, authenticator: authenticator(ctx), publicOrigin: config.publicOrigin, ipTrust: config.ipTrust });
-const port = Number(env['PORT'] ?? 8080);
-createServer((req, res) => void app(req, res)).listen(port, env['HOST'] ?? '127.0.0.1', () => console.log(`driveloom api listening on ${port}`));
+const defaultWeb = fileURLToPath(new URL('../../web/', import.meta.url));
+const webDir = env['DRIVELOOM_WEB_DIR'] ?? (existsSync(defaultWeb) ? defaultWeb : null);
+const app = createApplication(ctx, { webDir });
+const server = createServer((req, res) => void app(req, res));
+server.requestTimeout = 60_000;
+server.headersTimeout = 20_000;
+const port = Number(env['PORT'] ?? 8080), host = env['HOST'] ?? '127.0.0.1';
+server.listen(port, host, () => console.log(`driveloom ${SERVER_VERSION} listening on http://${host}:${port} (public origin ${config.publicOrigin}${webDir ? ', web client on' : ', API only'})`));
+
+const stop = (signal: string) => {
+  console.log(`${signal}: shutting down`);
+  server.close(() => void pool.end().then(() => process.exit(0)));
+  setTimeout(() => process.exit(1), 10_000).unref();
+};
+process.on('SIGTERM', () => stop('SIGTERM'));
+process.on('SIGINT', () => stop('SIGINT'));

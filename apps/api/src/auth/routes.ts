@@ -150,11 +150,20 @@ export function authRoutes(ctx: AuthContext): Route[] {
       return { status: 200, body: { authorization_url: out.url }, headers: { 'set-cookie': cookie(ctx, OIDC_BINDING_COOKIE, out.binding, 600, '/v1/auth/oidc') } };
     }),
     r('GET', '/v1/auth/oidc/callback', 'optional', async (req) => {
-      const out = await oidc.callback(ctx, { query: req.query, binding: req.cookies[OIDC_BINDING_COOKIE], principal: req.ctx.principal }, meta(req));
+      // A browser arriving from the identity provider is sent back into the web client; API clients get JSON.
+      const browser = /text\/html/.test(String(req.headers['accept'] ?? ''));
       const clear = clearCookie(ctx, OIDC_BINDING_COOKIE, '/v1/auth/oidc');
-      if (out.kind === 'linked') return { status: 200, body: { status: 'linked' }, headers: { 'set-cookie': clear } };
+      let out: Awaited<ReturnType<typeof oidc.callback>>;
+      try {
+        out = await oidc.callback(ctx, { query: req.query, binding: req.cookies[OIDC_BINDING_COOKIE], principal: req.ctx.principal }, meta(req));
+      } catch (e) {
+        if (!browser || !(e instanceof HttpProblem)) throw e;
+        return { status: 303, headers: { location: `/#/signin?error=${encodeURIComponent(e.code)}`, 'set-cookie': clear } };
+      }
+      if (out.kind === 'linked') return browser ? { status: 303, headers: { location: '/#/account?linked=1', 'set-cookie': clear } } : { status: 200, body: { status: 'linked' }, headers: { 'set-cookie': clear } };
       const res = sessionResult(ctx, out.signIn.session);
       res.headers = { 'set-cookie': [res.headers!['set-cookie'] as string, clear] };
+      if (browser) return { status: 303, headers: { ...res.headers, location: '/#/' } };
       return res;
     }),
     r('DELETE', '/v1/auth/oidc/identities/:id', 'required', async (req) => { await oidc.unlink(ctx, requirePrincipal(req.ctx), idParam(req)); return ok(); }),

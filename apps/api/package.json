@@ -9,10 +9,11 @@
   },
   "scripts": {
     "typecheck": "tsc",
-    "check": "tsc && node scripts/check-openapi.ts",
+    "check": "tsc && node scripts/check-openapi.ts && node scripts/check-web.ts",
     "migrate": "node scripts/migrate.ts",
     "start": "node src/server.ts",
-    "test": "node --test tests/*.test.ts"
+    "test": "node --test tests/*.test.ts",
+    "test:browser": "node --test tests/browser/*.test.ts"
   },
   "dependencies": {
     "@simplewebauthn/server": "14.1.0",
@@ -25,6 +26,7 @@
     "@types/node": "22.20.5",
     "@types/nodemailer": "8.0.2",
     "@types/pg": "8.23.1",
+    "playwright": "1.63.0",
     "typescript": "7.0.2",
     "yaml": "2.9.1"
   }

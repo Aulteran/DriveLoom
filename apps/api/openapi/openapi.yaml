@@ -465,6 +465,8 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/OidcCallbackResult' }
+        '303':
+          description: 'When the request accepts text/html: redirect into the web client (`/#/`, `/#/account?linked=1` or `/#/signin?error=<code>`).'
         default:
           $ref: '#/components/responses/Problem'
   /v1/auth/oidc/identities/{id}:
