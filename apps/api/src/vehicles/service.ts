@@ -14,13 +14,13 @@ import type { GrantableRole, Member, Role, Vehicle, VehicleAccess, VehicleInput,
 type Q = pg.PoolClient;
 interface VehicleRow {
   id: Id; name: string; make: string | null; model: string | null; model_year: number | null;
-  archived_at: Date | null; created_at: Date; updated_at: Date; role: Role; odometer_unit: DistanceUnit; currency: string;
+  archived_at: Date | null; created_at: Date; updated_at: Date; role: Role; odometer_unit: DistanceUnit; currency: string; image_version: string | null;
 }
 const toVehicle = (r: VehicleRow): Vehicle => ({
-  id: r.id, name: r.name, make: r.make, model: r.model, year: r.model_year, archived: r.archived_at !== null, odometerUnit: r.odometer_unit, currency: r.currency,
+  id: r.id, name: r.name, make: r.make, model: r.model, year: r.model_year, archived: r.archived_at !== null, odometerUnit: r.odometer_unit, currency: r.currency, imageVersion: r.image_version,
   createdAt: r.created_at.toISOString(), updatedAt: r.updated_at.toISOString(), role: r.role,
 });
-const COLS = 'v.id, v.name, v.make, v.model, v.model_year, v.archived_at, v.created_at, v.updated_at, m.role, v.odometer_unit, v.currency';
+const COLS = 'v.id, v.name, v.make, v.model, v.model_year, v.archived_at, v.created_at, v.updated_at, m.role, v.odometer_unit, v.currency, (SELECT (extract(epoch FROM i.updated_at) * 1000)::bigint::text FROM vehicle_images i WHERE i.vehicle_id = v.id) AS image_version';
 
 function text(v: unknown, field: string, required: boolean): string | null {
   if (v === undefined || v === null) { if (required) throw invalid(`${field} is required.`); return null; }
@@ -102,20 +102,22 @@ export class VehicleService {
     return toVehicle(rows[0]!);
   }
 
-  async create(p: Principal, input: VehicleInput): Promise<Vehicle> {
+  async create(p: Principal, input: VehicleInput, within?: Q): Promise<Vehicle> {
     const name = text(input.name, 'name', true), make = text(input.make, 'make', false), model = text(input.model, 'model', false);
     const y = year(input.year);
     // Unit and currency default to the creator's display preferences.
     const prefs = input.odometerUnit === undefined || input.currency === undefined ? await getPreferences(this.#pool, p.userId) : null;
     const unit = input.odometerUnit === undefined ? prefs!.distanceUnit : odometerUnit(input.odometerUnit);
     const cur = input.currency === undefined ? prefs!.currency : currency(input.currency);
-    return this.#tx(async (c) => {
+    const insert = async (c: Q) => {
       const vid = uuidv7();
       await c.query('INSERT INTO vehicles (id, name, make, model, model_year, odometer_unit, currency) VALUES ($1,$2,$3,$4,$5,$6,$7)', [vid, name, make, model, y, unit, cur]);
       await c.query("INSERT INTO vehicle_members (vehicle_id, user_id, role, granted_by) VALUES ($1,$2,'owner',$2)", [vid, p.userId]);
       await this.#audit(c, p.userId, 'vehicle.create', vid);
       return this.#load(c, p, vid);
-    });
+    };
+    // `within` lets import create the vehicle inside its own transaction.
+    return within ? insert(within) : this.#tx(insert);
   }
 
   async list(p: Principal, opts: { includeArchived?: boolean } = {}): Promise<Vehicle[]> {

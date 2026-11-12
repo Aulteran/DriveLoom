@@ -45,7 +45,7 @@ export function authRoutes(ctx: AuthContext): Route[] {
   return [
     r('POST', '/v1/auth/register', 'none', async (req) => {
       const b = body(req);
-      const out = await acct.register(ctx, { email: b['email'], password: b['password'], displayName: b['display_name'], setupToken: b['setup_token'] }, meta(req));
+      const out = await acct.register(ctx, { email: b['email'], password: b['password'], displayName: b['display_name'], setupToken: b['setup_token'], inviteToken: b['invite_token'] }, meta(req));
       return ok(202, { status: out.status });
     }),
     r('POST', '/v1/auth/verify-email', 'none', async (req) => {
@@ -76,6 +76,22 @@ export function authRoutes(ctx: AuthContext): Route[] {
       const b = body(req);
       await acct.reauthenticate(ctx, requirePrincipal(req.ctx), { password: b['password'], code: b['code'] }, meta(req));
       return ok();
+    }),
+    r('PATCH', '/v1/auth/account', 'required', async (req) => {
+      await acct.updateProfile(ctx, requirePrincipal(req.ctx), { displayName: body(req)['display_name'] });
+      return ok();
+    }),
+    r('DELETE', '/v1/auth/account', 'required', async (req) => {
+      await acct.deleteAccount(ctx, requirePrincipal(req.ctx));
+      return { status: 204, headers: { 'set-cookie': clearCookie(ctx, SESSION_COOKIE) } };
+    }),
+    // Public facts the sign-in screen needs before anyone is authenticated.
+    r('GET', '/v1/auth/instance', 'none', async () => {
+      const empty = !(await ctx.db.query('SELECT 1 FROM users LIMIT 1')).rowCount;
+      return ok(200, {
+        registration: ctx.config.registration, password_login: ctx.config.passwordEnabled, oidc: !!ctx.oidc, email_recovery: !!ctx.mailer,
+        needs_setup: empty, setup_token_required: empty && ctx.config.setupToken !== null,
+      });
     }),
     // --- sessions ---
     r('GET', '/v1/auth/sessions', 'required', async (req) => {

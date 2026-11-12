@@ -49,7 +49,7 @@ async function consumeCode(ctx: AuthContext, userId: Id, purpose: 'verify_email'
 // ---------- registration ----------
 export type RegisterResult = { status: 'created' } | { status: 'verification_sent' };
 
-export async function register(ctx: AuthContext, input: { email: unknown; password: unknown; displayName?: unknown; setupToken?: unknown }, meta: Meta): Promise<RegisterResult> {
+export async function register(ctx: AuthContext, input: { email: unknown; password: unknown; displayName?: unknown; setupToken?: unknown; inviteToken?: unknown }, meta: Meta): Promise<RegisterResult> {
   const email = normaliseEmail(input.email);
   const password = checkPassword(ctx, input.password);
   const displayName = typeof input.displayName === 'string' ? input.displayName.trim().slice(0, 80) : '';
@@ -59,7 +59,16 @@ export async function register(ctx: AuthContext, input: { email: unknown; passwo
   return withTx(ctx.db, async (tx) => {
     await tx.query('SELECT pg_advisory_xact_lock($1)', [BOOTSTRAP_LOCK]);
     const first = (await tx.query<{ n: number }>('SELECT count(*)::int AS n FROM users')).rows[0]!.n === 0;
-    if (!first && ctx.config.registration !== 'open') throw new HttpProblem(403, 'registration_closed', 'Registration is closed on this instance');
+    // Closed registration still admits the holder of an unused, unexpired invitation.
+    let inviteId: Id | null = null;
+    if (!first && ctx.config.registration !== 'open') {
+      const invite = typeof input.inviteToken === 'string' && input.inviteToken
+        ? (await tx.query<{ id: Id; email: string | null }>(
+          'SELECT id, email FROM invites WHERE token_hash = $1 AND used_at IS NULL AND expires_at > $2 FOR UPDATE', [sha256Hex(input.inviteToken), ctx.now()])).rows[0]
+        : undefined;
+      if (!invite || (invite.email !== null && invite.email !== email)) throw new HttpProblem(403, 'registration_closed', 'Registration is closed on this instance');
+      inviteId = invite.id;
+    }
     // Bootstrap: the first account becomes the administrator. An operator who
     // exposes the instance before registering can require a setup token.
     if (first && ctx.config.setupToken !== null && (typeof input.setupToken !== 'string' || !safeEqual(sha256Hex(input.setupToken), sha256Hex(ctx.config.setupToken)))) {
@@ -74,7 +83,8 @@ export async function register(ctx: AuthContext, input: { email: unknown; passwo
     const id = uuidv7();
     await tx.query('INSERT INTO users (id, email, display_name, instance_role, created_at) VALUES ($1,$2,$3,$4,$5)', [id, email, displayName, first ? 'admin' : 'user', ctx.now()]);
     await tx.query('INSERT INTO password_credentials (user_id, hash, updated_at) VALUES ($1,$2,$3)', [id, hash, ctx.now()]);
-    await audit(tx, id, 'account.registered', id, { bootstrap_admin: first }, ctx.now());
+    await audit(tx, id, 'account.registered', id, { bootstrap_admin: first, invited: inviteId !== null }, ctx.now());
+    if (inviteId) await tx.query('UPDATE invites SET used_at = $2, used_by = $3 WHERE id = $1', [inviteId, ctx.now(), id]);
     if (verify) {
       const code = await issueCode(ctx, tx, id, 'verify_email');
       try { await ctx.mailer!.send(email, 'Verify your DriveLoom email', `Your verification code is ${code}. It expires in ${Math.round(ctx.config.codeTtlMs / 60000)} minutes.`); }
@@ -324,4 +334,38 @@ export async function describeAccount(ctx: AuthContext, p: Principal) {
       passkeys: pk.rows, oidc: oidc.rows,
     },
   };
+}
+
+// ---------- profile and account removal ----------
+export async function updateProfile(ctx: AuthContext, p: Principal, input: { displayName?: unknown }): Promise<void> {
+  if (typeof input.displayName !== 'string' || input.displayName.trim().length > 80) throw problem.invalidInput('display_name must be text of at most 80 characters');
+  await ctx.db.query('UPDATE users SET display_name = $2 WHERE id = $1', [p.userId, input.displayName.trim()]);
+}
+
+/**
+ * Remove the caller's own account. Refused while they own a vehicle (transfer
+ * it first, or ask an administrator to recover it) and for the last active
+ * administrator. Credentials, sessions, memberships, friendships and
+ * preferences are deleted; the user row stays as an anonymised tombstone so
+ * audit history and records they entered on shared vehicles keep a referent.
+ */
+export async function deleteAccount(ctx: AuthContext, p: Principal): Promise<void> {
+  requireFresh(ctx, p);
+  await withTx(ctx.db, async (tx) => {
+    const u = (await tx.query<{ instance_role: string }>('SELECT instance_role FROM users WHERE id = $1 FOR UPDATE', [p.userId])).rows[0]!;
+    const owned = await tx.query<{ vehicle_id: Id }>("SELECT vehicle_id FROM vehicle_members WHERE user_id = $1 AND role = 'owner' ORDER BY vehicle_id", [p.userId]);
+    if (owned.rowCount) throw new HttpProblem(409, 'owns_vehicles', 'Transfer ownership of your vehicles before deleting your account', undefined, { vehicleIds: owned.rows.map((r) => r.vehicle_id) });
+    if (u.instance_role === 'admin') {
+      await tx.query('SELECT pg_advisory_xact_lock($1)', [BOOTSTRAP_LOCK]);
+      const others = await tx.query("SELECT 1 FROM users WHERE instance_role = 'admin' AND status = 'active' AND id <> $1 LIMIT 1", [p.userId]);
+      if (!others.rowCount) throw new HttpProblem(409, 'last_admin', 'The last administrator cannot be removed; promote another user first');
+    }
+    for (const t of ['vehicle_members', 'user_preferences', 'password_credentials', 'totp_credentials', 'recovery_codes', 'passkeys', 'oidc_identities', 'one_time_codes', 'auth_challenges']) {
+      await tx.query(`DELETE FROM ${t} WHERE user_id = $1`, [p.userId]);
+    }
+    await tx.query('DELETE FROM friendships WHERE requester_id = $1 OR addressee_id = $1', [p.userId]);
+    await tx.query('UPDATE sessions SET revoked_at = $2 WHERE user_id = $1 AND revoked_at IS NULL', [p.userId, ctx.now()]);
+    await tx.query("UPDATE users SET status = 'deleted', email = $2, display_name = '', email_verified_at = NULL WHERE id = $1", [p.userId, `deleted-${p.userId}@deleted.invalid`]);
+    await audit(tx, p.userId, 'account.deleted', p.userId, {}, ctx.now());
+  });
 }

@@ -17,7 +17,7 @@ import type { VehicleService } from '../vehicles/service.ts';
 import type { VehicleAccess } from '../vehicles/types.ts';
 import { aggregate, intervals, inWindow, type Fill, type Interval, type Window } from './economy.ts';
 
-interface Row {
+export interface FillUpRow {
   id: Id; vehicle_id: Id; occurred_at: Date;
   odometer_input: string; odometer_unit: DistanceUnit; odometer_km: string;
   volume_input: string; volume_unit: VolumeUnit; volume_l: string;
@@ -29,7 +29,7 @@ const COLS = `id, vehicle_id, occurred_at, odometer_input::text, odometer_unit, 
   is_full, missed_previous, cost_amount::text, cost_currency, exchange_rate::text, reporting_amount::text, notes, created_by, created_at, updated_at`;
 const ORDER = 'occurred_at, odometer_km, id';
 
-const toFill = (r: Row): Fill => ({
+const toFill = (r: FillUpRow): Fill => ({
   id: r.id, occurredAt: r.occurred_at, odometerKm: Dec.parse(r.odometer_km), volumeL: Dec.parse(r.volume_l),
   full: r.is_full, missedPrevious: r.missed_previous, reportingCost: r.reporting_amount === null ? null : Dec.parse(r.reporting_amount),
 });
@@ -54,7 +54,7 @@ export interface IntervalView {
 
 const notFound = () => new HttpProblem(404, 'fill_up_not_found', 'Fill-up not found');
 
-interface Parsed {
+export interface ParsedFillUp {
   occurredAt: Date; odometer: string; odometerUnit: DistanceUnit; odometerKm: Dec; volume: string; volumeUnit: VolumeUnit; volumeL: Dec;
   full: boolean; missedPrevious: boolean; notes: string;
   cost: { amount: string; currency: string; exchangeRate: string | null; reportingAmount: string } | null;
@@ -69,7 +69,7 @@ function quantity<U>(v: unknown, field: string, isUnit: (u: unknown) => u is U, 
 export const FILL_UP_FIELDS = ['occurredAt', 'odometer', 'volume', 'full', 'missedPrevious', 'cost', 'notes'] as const;
 
 /** Validate a complete fill-up body against the vehicle's reporting currency. */
-export function parseFillUp(body: Record<string, unknown>, vehicleCurrency: string, now: Date): Parsed {
+export function parseFillUp(body: Record<string, unknown>, vehicleCurrency: string, now: Date): ParsedFillUp {
   const occurredAt = instant(body['occurredAt'], 'occurredAt');
   if (occurredAt.getTime() > now.getTime() + 86_400_000) throw invalid('occurredAt is in the future.');
   if (occurredAt.getUTCFullYear() < 1900) throw invalid('occurredAt is too far in the past.');
@@ -79,7 +79,7 @@ export function parseFillUp(body: Record<string, unknown>, vehicleCurrency: stri
   const missedPrevious = body['missedPrevious'] === undefined ? false : bool(body['missedPrevious'], 'missedPrevious');
   const notes = body['notes'] === undefined || body['notes'] === null ? '' : body['notes'];
   if (typeof notes !== 'string' || notes.length > 500) throw invalid('notes must be text of at most 500 characters.');
-  let cost: Parsed['cost'] = null;
+  let cost: ParsedFillUp['cost'] = null;
   if (body['cost'] !== undefined && body['cost'] !== null) {
     const c = obj(body['cost'], ['amount', 'currency', 'exchangeRate', 'reportingAmount', 'reportingCurrency'], 'cost');
     const amount = decimal(c['amount'], 'cost.amount', { maxScale: 4, max: '1000000000' });
@@ -109,7 +109,7 @@ export function parseFillUp(body: Record<string, unknown>, vehicleCurrency: stri
 }
 
 /** The body a stored row would have been created from (for PATCH merging and export). */
-export function rowToBody(r: Row): Record<string, unknown> {
+export function rowToBody(r: FillUpRow): Record<string, unknown> {
   return {
     occurredAt: r.occurred_at.toISOString(),
     odometer: { value: r.odometer_input, unit: r.odometer_unit },
@@ -130,7 +130,7 @@ function intervalView(i: Interval, prefs: Preferences): IntervalView {
   };
 }
 
-function view(r: Row, v: VehicleAccess, prefs: Preferences, byEnd: Map<Id, Interval>): FillUpView {
+function view(r: FillUpRow, v: VehicleAccess, prefs: Preferences, byEnd: Map<Id, Interval>): FillUpView {
   const i = byEnd.get(r.id);
   return {
     id: r.id, vehicleId: r.vehicle_id, occurredAt: r.occurred_at.toISOString(),
@@ -162,8 +162,8 @@ export class FuelService {
   readonly #now: () => Date;
   constructor(pool: pg.Pool, vehicles: VehicleService, now: () => Date = () => new Date()) { this.#pool = pool; this.#vehicles = vehicles; this.#now = now; }
 
-  async #rows(q: Pick<pg.Pool, 'query'>, vehicleId: Id): Promise<Row[]> {
-    return (await q.query<Row>(`SELECT ${COLS} FROM fill_ups WHERE vehicle_id = $1 ORDER BY ${ORDER}`, [vehicleId])).rows;
+  async #rows(q: Pick<pg.Pool, 'query'>, vehicleId: Id): Promise<FillUpRow[]> {
+    return (await q.query<FillUpRow>(`SELECT ${COLS} FROM fill_ups WHERE vehicle_id = $1 ORDER BY ${ORDER}`, [vehicleId])).rows;
   }
 
   async list(p: Principal, vehicleId: unknown, opts: { limit?: number; offset?: number } = {}): Promise<{ items: FillUpView[]; total: number }> {
@@ -208,7 +208,7 @@ export class FuelService {
   }
 
   /** The odometer may never run backwards in time: a reading must sit between its chronological neighbours. */
-  async #checkSequence(c: pg.PoolClient, vehicleId: Id, f: Parsed, selfId: Id | null): Promise<void> {
+  async #checkSequence(c: pg.PoolClient, vehicleId: Id, f: ParsedFillUp, selfId: Id | null): Promise<void> {
     const { rows } = await c.query<{ lo: string | null; hi: string | null }>(
       `SELECT (SELECT max(odometer_km)::text FROM fill_ups WHERE vehicle_id = $1 AND occurred_at < $2 AND ($3::uuid IS NULL OR id <> $3)) AS lo,
               (SELECT min(odometer_km)::text FROM fill_ups WHERE vehicle_id = $1 AND occurred_at > $2 AND ($3::uuid IS NULL OR id <> $3)) AS hi`,
@@ -226,7 +226,7 @@ export class FuelService {
   }
 
   /** Insert without authorization or audit; used by create and by import inside their own transaction. */
-  async insertParsed(c: pg.PoolClient, vehicleId: Id, f: Parsed, createdBy: Id): Promise<Id> {
+  async insertParsed(c: pg.PoolClient, vehicleId: Id, f: ParsedFillUp, createdBy: Id): Promise<Id> {
     await this.#checkSequence(c, vehicleId, f, null);
     const id = uuidv7();
     await c.query(
@@ -253,7 +253,7 @@ export class FuelService {
     if (!Object.keys(patch).length) throw invalid('At least one field is required.');
     return this.#write(p, vehicleId, async (c, v) => {
       if (!isUuid(fillUpId)) throw notFound();
-      const cur = (await c.query<Row>(`SELECT ${COLS} FROM fill_ups WHERE id = $1 AND vehicle_id = $2`, [fillUpId, v.id])).rows[0];
+      const cur = (await c.query<FillUpRow>(`SELECT ${COLS} FROM fill_ups WHERE id = $1 AND vehicle_id = $2`, [fillUpId, v.id])).rows[0];
       if (!cur) throw notFound();
       const f = parseFillUp({ ...rowToBody(cur), ...patch }, v.currency, this.#now());
       await this.#checkSequence(c, v.id, f, cur.id);
@@ -278,7 +278,7 @@ export class FuelService {
   }
 
   /** Raw ordered rows for export. The caller has already authorized. */
-  exportRows(q: Pick<pg.Pool, 'query'>, vehicleId: Id): Promise<Row[]> { return this.#rows(q, vehicleId); }
+  exportRows(q: Pick<pg.Pool, 'query'>, vehicleId: Id): Promise<FillUpRow[]> { return this.#rows(q, vehicleId); }
 
   /**
    * Aggregate economy for one vehicle in a window, in the viewer's units. No

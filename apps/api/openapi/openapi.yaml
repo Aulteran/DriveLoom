@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: DriveLoom API
-  version: 0.4.0
+  version: 0.5.0
   summary: Versioned contract for the self-hosted DriveLoom API.
   description: >
     Contract for the self-hosted DriveLoom API under the compatibility policy
@@ -153,6 +153,59 @@ paths:
         content:
           application/json:
             schema: { $ref: '#/components/schemas/ReauthRequest' }
+      responses:
+        '204':
+          description: Done.
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/auth/instance:
+    get:
+      operationId: getInstanceInfo
+      tags: [auth]
+      summary: 'Public sign-in options of this instance'
+      security: []
+      responses:
+        '200':
+          description: Success.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [registration, password_login, oidc, email_recovery, needs_setup, setup_token_required]
+                properties:
+                  registration: { type: string, enum: [open, closed] }
+                  password_login: { type: boolean }
+                  oidc: { type: boolean }
+                  email_recovery: { type: boolean }
+                  needs_setup: { type: boolean, description: 'No account exists yet; the first registration becomes the administrator.' }
+                  setup_token_required: { type: boolean }
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/auth/account:
+    patch:
+      operationId: updateAccount
+      tags: [auth]
+      summary: 'Change the display name'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [display_name]
+              additionalProperties: false
+              properties:
+                display_name: { type: string, maxLength: 80 }
+      responses:
+        '204':
+          description: Done.
+        default:
+          $ref: '#/components/responses/Problem'
+    delete:
+      operationId: deleteAccount
+      tags: [auth]
+      summary: 'Delete the caller''s account'
+      description: 'Needs recent authentication. Refused with `owns_vehicles` while the caller owns a vehicle and with `last_admin` for the only administrator.'
       responses:
         '204':
           description: Done.
@@ -947,6 +1000,275 @@ paths:
               schema: { $ref: '#/components/schemas/Comparison' }
         '401': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
+  # --- portability, images and administration (milestone 1.6) ---
+  /v1/vehicles/{vehicleId}/image:
+    parameters:
+      - { $ref: '#/components/parameters/VehicleId' }
+    get:
+      operationId: getVehicleImage
+      summary: The vehicle's image (members only)
+      tags: [vehicles]
+      responses:
+        '200':
+          description: Image bytes.
+          content:
+            image/jpeg: { schema: { type: string, format: binary } }
+            image/png: { schema: { type: string, format: binary } }
+            image/webp: { schema: { type: string, format: binary } }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+    put:
+      operationId: setVehicleImage
+      summary: Upload or replace the image (editor or owner). JPEG, PNG or WebP up to 5 MiB; the type is taken from the content
+      tags: [vehicles]
+      requestBody:
+        required: true
+        content:
+          image/jpeg: { schema: { type: string, format: binary } }
+          image/png: { schema: { type: string, format: binary } }
+          image/webp: { schema: { type: string, format: binary } }
+      responses:
+        '204': { description: Stored. }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '413': { $ref: '#/components/responses/Problem' }
+        '415': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+    delete:
+      operationId: deleteVehicleImage
+      summary: Remove the image
+      tags: [vehicles]
+      responses:
+        '204': { description: Removed. }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /v1/vehicles/{vehicleId}/export:
+    parameters:
+      - { $ref: '#/components/parameters/VehicleId' }
+    get:
+      operationId: exportVehicle
+      summary: Download the vehicle's purchases as CSV or as a versioned JSON document
+      description: Contains no ids, members or users. Text cells that a spreadsheet could read as a formula are prefixed with an apostrophe.
+      tags: [portability]
+      parameters:
+        - { name: format, in: query, required: true, schema: { type: string, enum: [csv, json] } }
+      responses:
+        '200':
+          description: The export, as an attachment.
+          content:
+            text/csv: { schema: { type: string } }
+            application/json: { schema: { $ref: '#/components/schemas/VehicleExport' } }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/vehicles/{vehicleId}/import:
+    parameters:
+      - { $ref: '#/components/parameters/VehicleId' }
+    post:
+      operationId: importIntoVehicle
+      summary: Preview or commit an import of purchases (editor or owner)
+      description: >
+        `dryRun` defaults to true: the same statements run and are rolled back.
+        A commit is all-or-nothing (`import_invalid` with the report when any
+        row fails). Purchases that already exist are skipped, so importing the
+        same file twice changes nothing.
+      tags: [portability]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [format, data]
+              additionalProperties: false
+              properties:
+                format: { type: string, enum: [csv, json] }
+                data: { description: CSV text, or a VehicleExport document. }
+                dryRun: { type: boolean, default: true }
+      responses:
+        '200':
+          description: Report.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImportReport' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '413': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/vehicle-imports:
+    post:
+      operationId: importNewVehicle
+      summary: Create a vehicle owned by the caller from a JSON export
+      tags: [portability]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [data]
+              additionalProperties: false
+              properties:
+                data: { $ref: '#/components/schemas/VehicleExport' }
+                dryRun: { type: boolean, default: true }
+      responses:
+        '200':
+          description: Report; includes the new vehicle when committed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ImportReport' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '413': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/admin/users:
+    get:
+      operationId: adminListUsers
+      summary: Accounts on this instance (administrators only)
+      tags: [admin]
+      responses:
+        '200':
+          description: Users.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/AdminUser' } }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+  /v1/admin/users/{userId}/status:
+    parameters:
+      - { name: userId, in: path, required: true, schema: { $ref: '#/components/schemas/Id' } }
+    put:
+      operationId: adminSetUserStatus
+      summary: Disable or re-enable an account; disabling revokes its sessions
+      description: Needs recent authentication. Not on your own account; the instance keeps at least one active administrator (`last_admin`).
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              additionalProperties: false
+              properties:
+                status: { type: string, enum: [active, disabled] }
+      responses:
+        '204': { description: Done. }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/admin/users/{userId}/role:
+    parameters:
+      - { name: userId, in: path, required: true, schema: { $ref: '#/components/schemas/Id' } }
+    put:
+      operationId: adminSetUserRole
+      summary: Promote to or demote from administrator
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              additionalProperties: false
+              properties:
+                role: { type: string, enum: [admin, user] }
+      responses:
+        '204': { description: Done. }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/admin/invites:
+    get:
+      operationId: adminListInvites
+      summary: Invitations (tokens are never listed)
+      tags: [admin]
+      responses:
+        '200':
+          description: Invitations.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Invite' } }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: adminCreateInvite
+      summary: Create an invitation; the token is returned once
+      tags: [admin]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                email: { type: [string, 'null'], format: email, description: Restrict the invitation to this address. }
+                expiresInDays: { type: integer, minimum: 1, maximum: 30, default: 7 }
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, token, email, expiresAt]
+                properties:
+                  id: { $ref: '#/components/schemas/Id' }
+                  token: { type: string }
+                  email: { type: [string, 'null'] }
+                  expiresAt: { $ref: '#/components/schemas/Timestamp' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/admin/invites/{inviteId}:
+    parameters:
+      - { name: inviteId, in: path, required: true, schema: { $ref: '#/components/schemas/Id' } }
+    delete:
+      operationId: adminRevokeInvite
+      summary: Revoke an unused invitation
+      tags: [admin]
+      responses:
+        '204': { description: Revoked. }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /v1/admin/audit:
+    get:
+      operationId: adminListAudit
+      summary: Audit events, newest first
+      tags: [admin]
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: before, in: query, description: Return events older than this event id., schema: { $ref: '#/components/schemas/Id' } }
+      responses:
+        '200':
+          description: Events.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/AuditEvent' } }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
 components:
   securitySchemes:
     session:
@@ -1029,6 +1351,7 @@ components:
       properties:
         odometerUnit: { $ref: '#/components/schemas/DistanceUnit' }
         currency: { $ref: '#/components/schemas/CurrencyCode' }
+        imageVersion: { type: [string, 'null'], description: Opaque value that changes when the image changes; null when there is none. }
         id: { $ref: '#/components/schemas/Id' }
         name: { type: string }
         make: { type: [string, 'null'] }
@@ -1057,6 +1380,7 @@ components:
         password: { type: string, minLength: 12, maxLength: 256 }
         display_name: { type: string, maxLength: 80 }
         setup_token: { type: string, maxLength: 256, description: 'Required for the first account when the operator set DRIVELOOM_SETUP_TOKEN.' }
+        invite_token: { type: string, maxLength: 256, description: 'Admits one registration while registration is closed.' }
     RegisterResult:
       type: object
       required: [status]
@@ -1463,3 +1787,77 @@ components:
               userId: { $ref: '#/components/schemas/Id' }
               displayName: { type: string }
               vehicles: { type: array, items: { $ref: '#/components/schemas/ComparedVehicle' } }
+    VehicleExport:
+      type: object
+      required: [format, version, vehicle, fillUps]
+      properties:
+        format: { type: string, const: driveloom.vehicle }
+        version: { type: integer, const: 1 }
+        exportedAt: { $ref: '#/components/schemas/Timestamp' }
+        vehicle:
+          type: object
+          required: [name]
+          properties:
+            name: { type: string }
+            make: { type: [string, 'null'] }
+            model: { type: [string, 'null'] }
+            year: { type: [integer, 'null'] }
+            odometerUnit: { $ref: '#/components/schemas/DistanceUnit' }
+            currency: { $ref: '#/components/schemas/CurrencyCode' }
+        fillUps: { type: array, maxItems: 5000, items: { $ref: '#/components/schemas/FillUpInput' } }
+    ImportReport:
+      type: object
+      required: [dryRun, committed, summary, errors]
+      properties:
+        dryRun: { type: boolean }
+        committed: { type: boolean }
+        summary:
+          type: object
+          required: [total, created, duplicates, invalid]
+          properties:
+            total: { type: integer }
+            created: { type: integer }
+            duplicates: { type: integer }
+            invalid: { type: integer }
+        errors:
+          type: array
+          description: At most 100. `row` counts data rows from 1.
+          items:
+            type: object
+            required: [row, code, message]
+            properties:
+              row: { type: integer }
+              code: { type: string }
+              message: { type: string }
+        vehicle: { $ref: '#/components/schemas/Vehicle' }
+    AdminUser:
+      type: object
+      required: [id, email, displayName, instanceRole, status, createdAt, ownedVehicleCount]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        email: { type: string, format: email }
+        displayName: { type: string }
+        instanceRole: { type: string, enum: [admin, user] }
+        status: { type: string, enum: [active, disabled] }
+        createdAt: { $ref: '#/components/schemas/Timestamp' }
+        ownedVehicleCount: { type: integer }
+    Invite:
+      type: object
+      required: [id, email, createdAt, expiresAt, usedAt]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        email: { type: [string, 'null'] }
+        createdAt: { $ref: '#/components/schemas/Timestamp' }
+        expiresAt: { $ref: '#/components/schemas/Timestamp' }
+        usedAt: { oneOf: [{ $ref: '#/components/schemas/Timestamp' }, { type: 'null' }] }
+    AuditEvent:
+      type: object
+      required: [id, occurredAt, actorId, action, subjectType, subjectId, details]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        occurredAt: { $ref: '#/components/schemas/Timestamp' }
+        actorId: { oneOf: [{ $ref: '#/components/schemas/Id' }, { type: 'null' }] }
+        action: { type: string }
+        subjectType: { type: [string, 'null'] }
+        subjectId: { oneOf: [{ $ref: '#/components/schemas/Id' }, { type: 'null' }] }
+        details: { type: object }

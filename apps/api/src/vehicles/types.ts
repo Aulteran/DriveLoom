@@ -14,6 +14,8 @@ export interface Vehicle {
   odometerUnit: DistanceUnit;
   /** Reporting currency (ISO 4217) for this vehicle's costs. */
   currency: string;
+  /** Changes whenever the image changes (cache key); null when there is no image. */
+  imageVersion: string | null;
   createdAt: string;
   updatedAt: string;
   /** The calling user's role on this vehicle. */

@@ -1,2 +1,2 @@
 /** API contract version; must equal `info.version` in openapi/openapi.yaml (checked by a test). */
-export const API_VERSION = '0.4.0';
+export const API_VERSION = '0.5.0';
