@@ -60,5 +60,5 @@ From `apps/api` with `DATABASE_URL` set, `npm run test:browser` exercises every 
 
 ## Follow-ups
 
-- The marketing site in `apps/marketing` still uses its original look and could be restyled to match.
+- The marketing site in `apps/marketing` uses the same tokens and fonts (restyled 2026-11-12); its interactive tour reuses the panel, tab, statistics, table and chart components.
 - A manual light/dark override (instead of following the OS) would need a small preference and is not built.

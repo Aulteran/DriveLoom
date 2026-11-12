@@ -8,6 +8,8 @@
 
 **Copy.** Candidate lines include “Every mile tells a story” and “Your vehicle. Your data. Your server.” Final tagline and copy are open. Refer to fill-up logging, economy, units and shared vehicles as planned features. Avoid availability, install and date claims. Recommended follow action is a live GitHub repository link. Signup and analytics are optional owner decisions with a separate privacy and provider review if selected.
 
+**Revamp (2026-11-12).** With the platform built, the site moved from coming-soon to pre-release: Loom HUD styling, copy describing tested features only (no OIDC, email delivery, offline or native-app claims), an honest status section, and a no-backend interactive demo on sample data. No sign-up, analytics or third-party requests.
+
 ## Platform · Built 2026-11-12, in review
 
 | Area | Requirements and intended behavior |
