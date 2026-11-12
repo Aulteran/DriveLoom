@@ -11,11 +11,26 @@ const read = (f) => readFileSync(join(dist, f), 'utf8');
 if (!existsSync(join(dist, 'index.html'))) fail('dist/index.html missing (run npm run build)');
 const html = read('index.html');
 if (/\{\{/.test(html)) fail('unresolved template variable');
-for (const re of [/<html lang="[^"]+"/, /<title>[^<]+<\/title>/, /<main id="main">/, /<h1>[^<]+<\/h1>/, /name="viewport"/,
+for (const re of [/<html lang="[^"]+"/, /<title>[^<]+<\/title>/, /<main id="main">/, /<h1[^>]*>[\s\S]+?<\/h1>/, /name="viewport"/,
   /<link rel="canonical" href="https?:\/\/[^"]+"/, /property="og:title"/, /property="og:url"/, /name="twitter:card" content="summary_large_image"/, /property="og:image" content="https?:\/\/[^"]+\/og-image\.png"/, /name="twitter:image" content="https?:\/\/[^"]+\/og-image\.png"/])
   if (!re.test(html)) fail('missing ' + re);
 if (!existsSync(join(dist, 'og-image.png'))) fail('og-image.png missing');
 if (!existsSync(join(dist, 'styles.css'))) fail('styles.css missing');
+for (const f of ['demo.js', 'icon.svg', 'fonts/space-grotesk-latin-wght-normal.woff2', 'fonts/jetbrains-mono-latin-wght-normal.woff2', 'fonts/OFL-SpaceGrotesk.txt', 'fonts/OFL-JetBrainsMono.txt'])
+  if (!existsSync(join(dist, f))) fail(`${f} missing`);
+
+// Privacy: everything the page loads is same-origin. Absolute URLs may appear only as links.
+const css = read('styles.css');
+if (/@import|url\(\s*["']?(https?:)?\/\//i.test(css)) fail('styles.css loads something from another origin');
+for (const m of html.matchAll(/<(script|link|img|iframe|source|video|audio)\b[^>]*>/gi)) {
+  const tag = m[0];
+  if (/^<link\b/i.test(tag) && /rel="canonical"/.test(tag)) continue;
+  if (/(src|href)="(https?:)?\/\//i.test(tag)) fail(`external resource in ${tag}`);
+}
+if (/<script(?![^>]*\bsrc=)/i.test(html)) fail('inline script found; scripts must be same-origin files');
+const js = read('demo.js');
+for (const re of [/\bfetch\s*\(/, /XMLHttpRequest/, /sendBeacon/, /WebSocket/, /EventSource/, /localStorage|sessionStorage|indexedDB/, /document\.cookie/, /https?:\/\/(?!www\.w3\.org\/2000\/svg|fuel\.example\.com)/])
+  if (re.test(js)) fail(`demo.js must not use the network or storage (${re})`);
 
 // Discovery policy: meta robots, robots.txt and sitemap must agree.
 const noindex = /<meta name="robots" content="noindex">/.test(html);

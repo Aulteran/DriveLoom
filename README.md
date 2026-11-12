@@ -4,7 +4,7 @@ DriveLoom is an open-source, self-hosted fuel tracker for recording fill-ups, un
 
 - `apps/api`: the server (Node 22, TypeScript, PostgreSQL 16). It serves the API under `/v1` and the web client.
 - `apps/web`: the web client, an installable web app with no build step.
-- `apps/marketing`: the coming-soon website, live on GitHub Pages.
+- `apps/marketing`: the project website with an interactive demo, published to GitHub Pages from `main`.
 - `deploy/`: Docker Compose and reverse-proxy examples. Start with the [self-hosting guide](docs/DEPLOYMENT.md).
 
 The platform was built on 2026-11-12 and is in review: it has not had a security review or a release yet. DriveLoom is the working name.
