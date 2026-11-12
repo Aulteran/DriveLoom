@@ -22,3 +22,7 @@ The owner approved first publication on 2026-11-09 and the site is live at the p
 - Contract and end-to-end tests verify documented API shapes and authorization errors. Exercise the major web journeys and a Compose deployment behind the trusted HTTPS proxy. Native phases test real sign-in, OS secure storage, connectivity failures and supported server versions.
 
 [WCAG 2.2](https://www.w3.org/TR/WCAG22/)
+
+## Milestone 1.2 evidence
+
+`apps/api/tests/auth*.test.ts` and `passkeys-oidc.test.ts` run against real PostgreSQL in CI (`REQUIRE_DB=1`). Coverage maps to the auth matrix above: SMTP misconfiguration (startup and send failure), expired, reused and attempt-limited codes, TOTP replay and window, login enumeration, passkey origin, RP and user-verification binding and challenge replay, OIDC state, nonce, binding and verified linking, last-credential removal (including a concurrent race), rate limits, session invalidation on credential change and recovery, and a spoofed forwarding header from an untrusted peer. WebAuthn tests use a software authenticator in `tests/helpers/webauthn.ts`; the OIDC provider is faked at the `OidcProvider` boundary, so the `openid-client` discovery and token exchange path is not exercised against a live provider and needs a manual check against a real issuer before release.

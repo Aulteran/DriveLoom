@@ -9,6 +9,7 @@ Status: proposed defaults for owner review, per the roadmap. Nothing here is a p
 | `apps/api/openapi/openapi.yaml` | contract | Versioned OpenAPI 3.1 skeleton, source of truth for HTTP shapes |
 | `apps/api/migrations/` | persistence | Forward-only numbered SQL migrations |
 | `apps/api/src/` | API | Identifier, shared types and migration runner (TypeScript); later milestones add modules |
+| `apps/api/src/identity.ts`, `apps/api/src/auth/` | auth (1.2) | Principal and request-context interface; authentication module |
 | `apps/api/tests/` | tests | Unit, contract and PostgreSQL integration tests, plus `fixtures/` |
 | `deploy/compose.dev.yml` | dev | Local PostgreSQL only |
 
@@ -54,3 +55,27 @@ Each migration is owned by the milestone that introduces its tables. Foreign key
 ## Test data
 
 `apps/api/tests/fixtures/decimal-cases.json` holds shared cases: unit constants, the full-to-full example (500 km, 20 L partial plus 30 L closing is 10 L/100 km, starting fill excluded), an incomplete interval that must be unavailable, and unit round trips. Later milestones consume these and add fixtures beside them. Test databases are created per test and dropped afterwards. Tests never use shared or production data.
+
+## Identity and authorization interface (milestone 1.2)
+
+Status: proposed default, defined first so the vehicles lane (1.3) can build against it in parallel.
+
+**What auth provides.** `apps/api/src/identity.ts` exports `Principal` (`userId`, `sessionId`, `instanceRole`, `authenticatedAt`), `RequestContext`, `requirePrincipal(ctx)`, `requireInstanceAdmin(ctx)` and `AuthError`. Route handlers receive a `RequestContext`; only the auth module creates a `Principal`. Anonymous routes declare `security: []` in OpenAPI; all others use the `session` security scheme and call `requirePrincipal` first.
+
+**What auth does not decide.** Vehicle ownership, membership grants and every per-resource check belong to the vehicles lane. Auth proves who the caller is; vehicles decides what that user may do, server-side, on every read, mutation and export. `instanceRole = 'admin'` is for instance administration and audited recovery only and must not imply vehicle-data visibility. When a resource exists but the caller has no grant, respond 404 rather than 403 so existence is not leaked.
+
+**Data contract.** Table `users(id uuid, email, display_name, instance_role, status, created_at)` is created by migration `0003_accounts.sql`. Other lanes may reference `users(id)` with a foreign key and must not write to `users` or any other auth table. Users are never hard-deleted by other lanes: account removal sets `status = 'deleted'` through the auth module, and a user who owns a vehicle must have ownership resolved by the vehicles lane's own policy first. Migration numbering: auth owns `0003`, vehicles starts at `0004`, merge order is auth migration first.
+
+**Test helper.** `tests/helpers/` (added by auth) creates a user and a ready `RequestContext` without going through sign-in, so vehicles tests can act as separate actors.
+
+**Errors.** `AuthError` codes: `unauthenticated` (401), `forbidden`, `csrf_failed`, `reauth_required` (403). The HTTP layer renders them as RFC 9457 problems with that `code`.
+
+**HTTP layer.** `apps/api/src/http/app.ts` owns routing, JSON bodies (64 KiB default limit), cookie parsing, session resolution, the `Origin` and `X-CSRF-Token` checks for unsafe methods, trusted-proxy client IP resolution and problem+json rendering. A feature module exports `Route[]` (`method`, `path` such as `/v1/vehicles/:id`, `auth` mode, `handler`). The default `auth` mode is `required`, so a route is private unless it opts out, and handlers read `req.ctx` and call `requirePrincipal`. Handlers throw `HttpProblem(status, code, title)` for expected errors. Other lanes add their routes to the list passed to `createApp` and use `tests/helpers/` (`createTestDb`, `createTestUser`, `fakeAuthenticator`) for isolated databases and actors.
+
+## Authentication (milestone 1.2)
+
+Decisions and open questions are in [ADR 0002](adr/0002-authentication.md). The HTTP surface is the `auth` tag in `openapi.yaml` (`/v1/auth/...`), and `tests/auth-contract.test.ts` fails if routes and document drift apart.
+
+**Operator configuration** (environment): `DRIVELOOM_PUBLIC_ORIGIN` (required, an origin such as `https://fuel.example.com`, fixed WebAuthn origin), `DRIVELOOM_SECRET_KEY` (at least 32 characters), `DRIVELOOM_RP_ID` (defaults to the origin host; keep stable once passkeys exist), `DRIVELOOM_REGISTRATION` (`open` or `closed`, default `closed`), `DRIVELOOM_PASSWORD_LOGIN` (`0` to disable), `DRIVELOOM_TRUSTED_PROXIES` (comma-separated IPs or CIDRs), `DRIVELOOM_SMTP_URL` and `DRIVELOOM_SMTP_FROM` (optional), `DRIVELOOM_REQUIRE_EMAIL_VERIFICATION=1` (needs SMTP), `DRIVELOOM_OIDC_ISSUER`, `DRIVELOOM_OIDC_CLIENT_ID`, `DRIVELOOM_OIDC_CLIENT_SECRET` (optional; the redirect URI is `<origin>/v1/auth/oidc/callback`). Start with `npm start` in `apps/api`.
+
+**Auth tables** (all in migration 0003): `users`, `password_credentials`, `totp_credentials`, `recovery_codes`, `passkeys`, `oidc_identities`, `sessions`, `one_time_codes`, `auth_challenges`, `rate_limits`. Only the auth module writes them.

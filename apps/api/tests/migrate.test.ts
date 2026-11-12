@@ -52,7 +52,7 @@ test('migrates from a prior snapshot (schema at 0001)', { skip }, async () => {
   await c.query(await readFile(new URL('./fixtures/snapshot-0001.sql', import.meta.url), 'utf8'));
   await c.query("INSERT INTO instance_meta (instance_id) VALUES ('018f3b1e-7c4a-7d2e-9a10-5b6c7d8e9f01')");
   const applied = await migrate(c);
-  assert.deepEqual(applied, ['0002_audit_events.sql']);
+  assert.deepEqual(applied, (await loadMigrations()).map((m) => m.name).slice(1));
   const { rows } = await c.query('SELECT instance_id FROM instance_meta');
   assert.equal(rows.length, 1, 'existing data preserved');
   await c.end();

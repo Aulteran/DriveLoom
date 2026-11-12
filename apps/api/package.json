@@ -11,14 +11,19 @@
     "typecheck": "tsc",
     "check": "tsc && node scripts/check-openapi.ts",
     "migrate": "node scripts/migrate.ts",
+    "start": "node src/server.ts",
     "test": "node --test tests/*.test.ts"
   },
   "dependencies": {
+    "@simplewebauthn/server": "14.1.0",
+    "nodemailer": "10.5.0",
+    "openid-client": "6.8.9",
     "pg": "8.23.1"
   },
   "devDependencies": {
     "@seriousme/openapi-schema-validator": "2.11.0",
     "@types/node": "22.20.5",
+    "@types/nodemailer": "8.0.2",
     "@types/pg": "8.23.1",
     "typescript": "7.0.2",
     "yaml": "2.9.1"
