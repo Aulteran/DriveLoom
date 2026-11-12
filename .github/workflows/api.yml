@@ -4,7 +4,7 @@ on:
   pull_request:
     paths: ['apps/api/**', 'apps/web/**', 'deploy/**', 'Dockerfile', '.dockerignore', '.github/workflows/api.yml']
   push:
-    branches: [main]
+    branches: [main, dev]
     paths: ['apps/api/**', 'apps/web/**', 'deploy/**', 'Dockerfile', '.dockerignore', '.github/workflows/api.yml']
 
 permissions:
