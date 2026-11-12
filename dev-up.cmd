@@ -72,6 +72,31 @@ if "%CHOICE%"=="1" goto :do_start
 if "%CHOICE%"=="2" goto :do_stop
 if "%CHOICE%"=="3" goto :do_logs
 if "%CHOICE%"=="4" goto :do_update
+if "%CHOICE%"=="5" goto :do_reset
+if "%CHOICE%"=="6" goto :quit
+echo Please type a number from 1 to 6.
+goto :menu
+
+rem ---- 1: start ---------------------------------------------------------------
+:do_start
+docker compose %DCARGS% up -d --quiet-pull --wait
+if errorlevel 1 goto :failed
+call :print_url
+goto :menu
+
+rem ---- 2: stop (containers removed, database volume kept) ---------------------
+:do_stop
+docker compose %DCARGS% down
+if errorlevel 1 goto :failed
+goto :menu
+
+rem ---- 3: logs ----------------------------------------------------------------
+:do_logs
+docker compose %DCARGS% logs -f --tail 100
+goto :menu
+
+rem ---- 4: restart and apply updates --------------------------------------------
+:do_update
 rem Pull the branch you are on (fast-forward only), but only when it is safe.
 set "CUR="
 for /f "delims=" %%B in ('git rev-parse --abbrev-ref HEAD 2^>nul') do set "CUR=%%B"
