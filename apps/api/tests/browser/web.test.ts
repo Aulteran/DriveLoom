@@ -8,6 +8,7 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { chromium, type Page } from 'playwright';
+import { AxeBuilder } from '@axe-core/playwright';
 import { createApplication } from '../../src/application.ts';
 import { defaultConfig } from '../../src/auth/config.ts';
 import { trustFromList } from '../../src/http/ip.ts';
@@ -41,9 +42,16 @@ test('web client journeys', { skip, timeout: 180_000 }, async (t: TestContext) =
   page.setDefaultTimeout(8000);
   const noErrorPage = async () => assert.equal(await page.getByText('Something went wrong').count(), 0);
 
+  let vehicle = '';
+  const axe = async (label: string) => {
+    const r = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']).analyze();
+    return r.violations.map((v) => `${label}: ${v.id} (${v.impact}) ${v.nodes.slice(0, 3).map((n) => n.target.join(' ')).join(' | ')}`);
+  };
   try {
     await t.test('first account registers and lands on the garage', async () => {
       await page.goto(`${base}/`);
+      await page.getByLabel('Email').waitFor();
+      assert.deepEqual(await axe('register'), []);
       await page.getByLabel('Email').fill(ADMIN.email);
       await page.getByLabel('Password').first().fill(ADMIN.password);
       await page.getByRole('button', { name: /create|register/i }).click();
@@ -55,6 +63,8 @@ test('web client journeys', { skip, timeout: 180_000 }, async (t: TestContext) =
       await page.getByLabel('Make').fill('VW');
       await page.getByRole('button', { name: 'Add vehicle' }).last().click();
       await page.getByRole('heading', { name: 'Golf' }).waitFor();
+      vehicle = new URL(page.url()).hash.replace(/^#\//, '').split('/').slice(0, 2).join('/');
+      assert.match(vehicle, /^vehicles\/[0-9a-f-]{36}$/);
       // Recent dates, so the default statistics period always includes them.
       const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10) + 'T10:00';
       for (const [when, odo, vol, amount] of [[daysAgo(40), '10000', '40', '70'], [daysAgo(25), '10600', '42', '73.5'], [daysAgo(10), '11150', '38.5', '68']] as const) {
@@ -88,6 +98,21 @@ test('web client journeys', { skip, timeout: 180_000 }, async (t: TestContext) =
         await page.locator('main h1').first().waitFor();
         await noErrorPage();
       }
+    });
+
+    await t.test('screens pass automated WCAG 2.2 AA checks', async () => {
+      const findings: string[] = [];
+      for (const colorScheme of ['light', 'dark'] as const) {
+        await page.emulateMedia({ colorScheme });
+        for (const hash of ['', vehicle, `${vehicle}/stats`, `${vehicle}/members`, `${vehicle}/data`, `${vehicle}/settings`, 'friends', 'settings/preferences', 'settings/security', 'admin/users', 'admin/invites', 'admin/audit']) {
+          await page.goto(`${base}/#/${hash}`);
+          await page.waitForLoadState('networkidle');
+          await page.locator('main h1').first().waitFor();
+          findings.push(...await axe(`${colorScheme} #/${hash}`));
+        }
+      }
+      await page.emulateMedia({ colorScheme: 'light' });
+      assert.deepEqual(findings, []);
     });
 
     await t.test('preferences change the units shown', async () => {
