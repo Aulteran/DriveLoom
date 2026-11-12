@@ -7,7 +7,7 @@ import type { Id } from '../types.ts';
 import type { Principal } from '../identity.ts';
 import { audit, checkPassword, normaliseEmail, problem, rateLimit, type AuthContext } from './context.ts';
 import {
-  base32, decryptSecret, dummyHash, encryptSecret, hashPassword, hmacHex, matchTotp, numericCode, randomToken, recoveryCode, safeEqual, verifyPassword,
+  base32, decryptSecret, dummyHash, encryptSecret, hashPassword, hmacHex, matchTotp, numericCode, randomToken, recoveryCode, safeEqual, sha256Hex, verifyPassword,
 } from './crypto.ts';
 import { createSession, requireFresh, revokeAll, touchReauth, type NewSession } from './sessions.ts';
 
@@ -49,7 +49,7 @@ async function consumeCode(ctx: AuthContext, userId: Id, purpose: 'verify_email'
 // ---------- registration ----------
 export type RegisterResult = { status: 'created' } | { status: 'verification_sent' };
 
-export async function register(ctx: AuthContext, input: { email: unknown; password: unknown; displayName?: unknown }, meta: Meta): Promise<RegisterResult> {
+export async function register(ctx: AuthContext, input: { email: unknown; password: unknown; displayName?: unknown; setupToken?: unknown }, meta: Meta): Promise<RegisterResult> {
   const email = normaliseEmail(input.email);
   const password = checkPassword(ctx, input.password);
   const displayName = typeof input.displayName === 'string' ? input.displayName.trim().slice(0, 80) : '';
@@ -60,6 +60,11 @@ export async function register(ctx: AuthContext, input: { email: unknown; passwo
     await tx.query('SELECT pg_advisory_xact_lock($1)', [BOOTSTRAP_LOCK]);
     const first = (await tx.query<{ n: number }>('SELECT count(*)::int AS n FROM users')).rows[0]!.n === 0;
     if (!first && ctx.config.registration !== 'open') throw new HttpProblem(403, 'registration_closed', 'Registration is closed on this instance');
+    // Bootstrap: the first account becomes the administrator. An operator who
+    // exposes the instance before registering can require a setup token.
+    if (first && ctx.config.setupToken !== null && (typeof input.setupToken !== 'string' || !safeEqual(sha256Hex(input.setupToken), sha256Hex(ctx.config.setupToken)))) {
+      throw new HttpProblem(403, 'setup_token_required', 'A valid setup token is required to create the first account');
+    }
     const existing = await findUser(tx, email);
     if (existing) {
       if (!verify) throw new HttpProblem(409, 'email_taken', 'An account with this email already exists');
@@ -208,16 +213,26 @@ export const removePassword = (ctx: AuthContext, p: Principal) =>
   removeGuarded(ctx, p, async (tx) => (await tx.query('DELETE FROM password_credentials WHERE user_id = $1', [p.userId])).rowCount ?? 0, 'credential.password_removed', {});
 
 // ---------- recovery by email ----------
-export async function recoveryRequest(ctx: AuthContext, input: { email: unknown }, meta: Meta): Promise<void> {
+/**
+ * Validation and rate limits run inline. The account lookup, code issue and
+ * SMTP round trip happen in the returned `delivery` promise: the HTTP route
+ * answers without waiting for it, so response time cannot reveal whether the
+ * address has an account. Direct callers (tests, CLI) may await `delivery`.
+ */
+export async function recoveryRequest(ctx: AuthContext, input: { email: unknown }, meta: Meta): Promise<{ delivery: Promise<void> }> {
   if (!ctx.mailer) throw new HttpProblem(501, 'email_not_configured', 'Email recovery is not available on this instance; ask an administrator');
+  const mailer = ctx.mailer;
   const email = normaliseEmail(input.email);
   await rateLimit(ctx, `recover:ip:${meta.ip}`, 20, HOUR);
   await rateLimit(ctx, `recover:acct:${email}`, 5, HOUR);
-  const u = await findUser(ctx.db, email);
-  if (!u || u.status !== 'active') return; // identical response either way
-  const code = await issueCode(ctx, ctx.db, u.id, 'recover_account');
-  await audit(ctx.db, u.id, 'recovery.requested', u.id, {}, ctx.now());
-  await ctx.mailer.send(email, 'DriveLoom account recovery', `Your recovery code is ${code}. It expires in ${Math.round(ctx.config.codeTtlMs / 60000)} minutes. If you did not request this, ignore this message.`).catch(() => undefined);
+  const delivery = (async () => {
+    const u = await findUser(ctx.db, email);
+    if (!u || u.status !== 'active') return;
+    const code = await issueCode(ctx, ctx.db, u.id, 'recover_account');
+    await audit(ctx.db, u.id, 'recovery.requested', u.id, {}, ctx.now());
+    await mailer.send(email, 'DriveLoom account recovery', `Your recovery code is ${code}. It expires in ${Math.round(ctx.config.codeTtlMs / 60000)} minutes. If you did not request this, ignore this message.`);
+  })().catch((err) => { console.error('recovery email was not delivered:', err instanceof Error ? err.message : err); });
+  return { delivery };
 }
 
 export async function recoveryComplete(ctx: AuthContext, input: { email: unknown; code: unknown; newPassword: unknown }, meta: Meta): Promise<void> {

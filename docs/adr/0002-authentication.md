@@ -16,9 +16,12 @@ Status: proposed defaults. Owner review of the open questions below before 1.3 s
 - **Operator recovery** without SMTP: `DRIVELOOM_NEW_PASSWORD=... node scripts/auth-admin.ts reset-password <email>`, audited, revokes all sessions. Instance admins have no HTTP route to read or change another user's credentials.
 - **Audit.** Sign-ins, failures, credential changes, recovery and revocations write `audit_events` without secrets.
 
+- **Bootstrap administrator (decided 2026-11-12).** An empty instance accepts one registration even when registration is `closed`, and that account is the administrator. This is deliberate: a self-hosted instance needs a first account without extra tooling. The risk is an instance that is reachable before its operator registers. Operators who expose it first set `DRIVELOOM_SETUP_TOKEN`; the bootstrap registration must then send the same value as `setup_token` (`setup_token_required` otherwise). The server logs a warning at startup while no account exists and no token is set. OIDC bootstrap is unchanged: the identity provider decides who can sign in.
+- **Recovery timing (decided 2026-11-12).** `POST /v1/auth/recovery/request` validates and rate-limits inline, then answers 202. The account lookup, code issue and SMTP send run after the response, so latency does not depend on whether the address has an account. A failed send is logged, never reported to the caller.
+
 ## Open questions for the owner
 
-1. **First account is the administrator.** Registration is `closed` by default, but an empty instance accepts the first registration (password or OIDC) and makes it admin. Alternative: require a one-time setup token printed at startup.
+1. Resolved, see "Bootstrap administrator" above.
 2. **Registration without SMTP reveals taken emails** (409 `email_taken`). Hiding it needs email delivery, so the choice is usability on small instances versus enumeration. Default: reveal.
 3. **Rate-limit lockout.** Per-account login limits let an attacker slow a victim's sign-in for 10 minutes. Alternative: per-account plus IP pair keys, which weakens distributed guessing protection.
 4. **Passkey-only accounts reauthenticate by signing in again**, since `reauth` accepts password or TOTP.

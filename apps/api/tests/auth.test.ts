@@ -105,9 +105,9 @@ test('password recovery: generic request, single-use code, revokes every session
   const a = await signUp(h, 'a@example.test');
   const before = await h.auth.resolveSession(a.session.token);
   assert.ok(before?.principal);
-  await acct.recoveryRequest(h.ctx, { email: 'ghost@example.test' }, meta); // no error, no mail
+  await (await acct.recoveryRequest(h.ctx, { email: 'ghost@example.test' }, meta)).delivery; // no error, no mail
   assert.equal(h.mailer.sent.length, 0);
-  await acct.recoveryRequest(h.ctx, { email: 'a@example.test' }, meta);
+  await (await acct.recoveryRequest(h.ctx, { email: 'a@example.test' }, meta)).delivery;
   const c = h.mailer.lastCode('a@example.test')!;
   assert.equal(await code(acct.recoveryComplete(h.ctx, { email: 'a@example.test', code: c, newPassword: 'a brand new passphrase' }, meta)), 'no_error');
   assert.equal(await h.auth.resolveSession(a.session.token), null, 'old session revoked');
@@ -219,4 +219,27 @@ test('disabled accounts lose access immediately', { skip }, () => using({}, {}, 
   await h.ctx.db.query("UPDATE users SET status = 'disabled'");
   assert.equal(await h.auth.resolveSession(a.session.token), null);
   assert.equal(await code(acct.login(h.ctx, { email: 'a@example.test', password: PW }, meta)), 'invalid_credentials');
+}));
+
+test('bootstrap can require a setup token', { skip }, () => using({ registration: 'closed', setupToken: 'a-long-setup-token-value' }, {}, async (h) => {
+  assert.equal(await code(acct.register(h.ctx, { email: 'a@example.test', password: PW }, meta)), 'setup_token_required');
+  assert.equal(await code(acct.register(h.ctx, { email: 'a@example.test', password: PW, setupToken: 'wrong' }, meta)), 'setup_token_required');
+  assert.equal((await h.ctx.db.query('SELECT 1 FROM users')).rowCount, 0);
+  await acct.register(h.ctx, { email: 'a@example.test', password: PW, setupToken: 'a-long-setup-token-value' }, meta);
+  const r = await h.ctx.db.query("SELECT instance_role FROM users WHERE email = 'a@example.test'");
+  assert.equal(r.rows[0].instance_role, 'admin');
+}));
+
+test('recovery request answers before mail delivery, for known and unknown addresses alike', { skip }, () => using({}, {}, async (h) => {
+  await signUp(h, 'a@example.test');
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  const send = h.mailer.send.bind(h.mailer);
+  h.mailer.send = async (...a) => { await gate; return send(...a); };
+  const known = await acct.recoveryRequest(h.ctx, { email: 'a@example.test' }, meta); // resolves while SMTP is still blocked
+  const unknown = await acct.recoveryRequest(h.ctx, { email: 'ghost@example.test' }, meta);
+  assert.equal(h.mailer.sent.length, 0);
+  release();
+  await Promise.all([known.delivery, unknown.delivery]);
+  assert.equal(h.mailer.sent.length, 1);
 }));

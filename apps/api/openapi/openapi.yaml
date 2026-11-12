@@ -51,7 +51,7 @@ paths:
       tags: [auth]
       summary: 'Create an account'
       security: []
-      description: 'The first account on an instance becomes its administrator. Later registration follows the instance policy.'
+      description: 'The first account on an instance becomes its administrator; when the operator configured a setup token, that registration must present it (`setup_token_required`). Later registration follows the instance policy.'
       requestBody:
         required: true
         content:
@@ -427,6 +427,270 @@ paths:
           description: Done.
         default:
           $ref: '#/components/responses/Problem'
+  # --- vehicles and ownership (milestone 1.3) ---
+  /v1/vehicles:
+    get:
+      operationId: listVehicles
+      summary: Vehicles the caller is a member of
+      tags: [vehicles]
+      parameters:
+        - name: includeArchived
+          in: query
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Vehicles with the caller's role on each.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/Vehicle' } }
+        '401': { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: createVehicle
+      summary: Create a vehicle; the caller becomes its owner
+      tags: [vehicles]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VehicleInput' }
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Vehicle' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/vehicles/{vehicleId}:
+    parameters:
+        - { $ref: '#/components/parameters/VehicleId' }
+    get:
+      operationId: getVehicle
+      summary: Read a vehicle (any member). Non-members receive 404.
+      tags: [vehicles]
+      responses:
+        '200':
+          description: The vehicle.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Vehicle' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+    patch:
+      operationId: updateVehicle
+      summary: Edit vehicle details (owner or editor)
+      tags: [vehicles]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VehiclePatch' }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Vehicle' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/vehicles/{vehicleId}/archive:
+    parameters:
+        - { $ref: '#/components/parameters/VehicleId' }
+    put:
+      operationId: setVehicleArchived
+      summary: Archive or unarchive a vehicle (owner only)
+      tags: [vehicles]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [archived]
+              additionalProperties: false
+              properties:
+                archived: { type: boolean }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Vehicle' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/vehicles/{vehicleId}/members:
+    parameters:
+        - { $ref: '#/components/parameters/VehicleId' }
+    get:
+      operationId: listVehicleMembers
+      summary: Members and roles (any member)
+      tags: [vehicles]
+      responses:
+        '200':
+          description: Roster.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/VehicleMember' } }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: addVehicleMember
+      summary: Grant an active user access (owner only)
+      tags: [vehicles]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              additionalProperties: false
+              description: Name the user by `userId` or by `email` (one is required).
+              properties:
+                userId: { $ref: '#/components/schemas/Id' }
+                email: { type: string, format: email }
+                role: { $ref: '#/components/schemas/GrantableRole' }
+      responses:
+        '201':
+          description: Granted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VehicleMember' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/vehicles/{vehicleId}/members/{userId}:
+    parameters:
+        - { $ref: '#/components/parameters/VehicleId' }
+        - { name: userId, in: path, required: true, schema: { $ref: '#/components/schemas/Id' } }
+    put:
+      operationId: changeVehicleMemberRole
+      summary: Change a non-owner member's role (owner only)
+      tags: [vehicles]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role]
+              additionalProperties: false
+              properties:
+                role: { $ref: '#/components/schemas/GrantableRole' }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VehicleMember' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+    delete:
+      operationId: removeVehicleMember
+      summary: Remove a member (owner), or leave (any non-owner member removing themselves)
+      tags: [vehicles]
+      responses:
+        '204': { description: Removed. }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/vehicles/{vehicleId}/owner:
+    parameters:
+        - { $ref: '#/components/parameters/VehicleId' }
+    put:
+      operationId: transferVehicleOwnership
+      summary: Transfer ownership to an existing member (owner only); the previous owner becomes an editor
+      tags: [vehicles]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId]
+              additionalProperties: false
+              properties:
+                userId: { $ref: '#/components/schemas/Id' }
+      responses:
+        '200':
+          description: Transferred.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Vehicle' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/admin/vehicles/{vehicleId}/owner:
+    parameters:
+        - { $ref: '#/components/parameters/VehicleId' }
+    put:
+      operationId: recoverVehicleOwnership
+      summary: Instance-admin recovery of ownership. Audited; grants no access to vehicle data.
+      tags: [vehicles]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [userId, reason]
+              additionalProperties: false
+              properties:
+                userId: { $ref: '#/components/schemas/Id' }
+                reason: { type: string, minLength: 3, maxLength: 500 }
+      responses:
+        '204': { description: Ownership recovered. }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/admin/users/{userId}/owned-vehicles:
+    parameters:
+      - { name: userId, in: path, required: true, schema: { $ref: '#/components/schemas/Id' } }
+    get:
+      operationId: listOwnedVehicleIds
+      summary: Instance-admin list of the vehicles a user owns. Ids and archive state only; audited.
+      tags: [vehicles]
+      responses:
+        '200':
+          description: Owned vehicle ids.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, archived]
+                      properties:
+                        id: { $ref: '#/components/schemas/Id' }
+                        archived: { type: boolean }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
 components:
   securitySchemes:
     session:
@@ -436,6 +700,12 @@ components:
       description: >
         HttpOnly, SameSite=Lax session cookie issued by sign-in. A session in
         state `mfa_required` is accepted only by `/v1/auth/mfa/totp`.
+  parameters:
+    VehicleId:
+      name: vehicleId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/Id' }
   responses:
     Problem:
       description: 'Error in RFC 9457 problem details form.'
@@ -469,6 +739,53 @@ components:
     VolumeUnit:
       type: string
       enum: [l, gal_us, gal_imp]
+    Role:
+      type: string
+      enum: [owner, editor, viewer]
+    GrantableRole:
+      type: string
+      enum: [editor, viewer]
+    VehicleInput:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 80 }
+        make: { type: [string, 'null'], minLength: 1, maxLength: 80 }
+        model: { type: [string, 'null'], minLength: 1, maxLength: 80 }
+        year: { type: [integer, 'null'], minimum: 1886 }
+    VehiclePatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1, maxLength: 80 }
+        make: { type: [string, 'null'], minLength: 1, maxLength: 80 }
+        model: { type: [string, 'null'], minLength: 1, maxLength: 80 }
+        year: { type: [integer, 'null'], minimum: 1886 }
+    Vehicle:
+      type: object
+      required: [id, name, make, model, year, archived, role, createdAt, updatedAt]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        name: { type: string }
+        make: { type: [string, 'null'] }
+        model: { type: [string, 'null'] }
+        year: { type: [integer, 'null'] }
+        archived: { type: boolean }
+        role: { $ref: '#/components/schemas/Role' }
+        createdAt: { $ref: '#/components/schemas/Timestamp' }
+        updatedAt: { $ref: '#/components/schemas/Timestamp' }
+    VehicleMember:
+      type: object
+      required: [userId, role, grantedBy, createdAt]
+      properties:
+        userId: { $ref: '#/components/schemas/Id' }
+        role: { $ref: '#/components/schemas/Role' }
+        grantedBy: { oneOf: [{ $ref: '#/components/schemas/Id' }, { type: 'null' }] }
+        createdAt: { $ref: '#/components/schemas/Timestamp' }
+        displayName: { type: string }
+        email: { type: string, format: email }
     RegisterRequest:
       type: object
       required: [email, password]
@@ -477,6 +794,7 @@ components:
         email: { type: string, format: email, maxLength: 254 }
         password: { type: string, minLength: 12, maxLength: 256 }
         display_name: { type: string, maxLength: 80 }
+        setup_token: { type: string, maxLength: 256, description: 'Required for the first account when the operator set DRIVELOOM_SETUP_TOKEN.' }
     RegisterResult:
       type: object
       required: [status]
