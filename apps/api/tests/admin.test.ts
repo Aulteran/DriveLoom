@@ -40,7 +40,8 @@ async function world(over: Parameters<typeof harness>[0], fn: (w: { h: Harness; 
 
 test('invitations admit one registration while registration is closed', { skip }, () => world({ registration: 'closed' }, async ({ h, anon, signUp }) => {
   const admin = await signUp('admin@example.test');
-  assert.deepEqual((await anon('GET', '/v1/auth/instance')).json, { registration: 'closed', password_login: true, oidc: true, email_recovery: true, needs_setup: false, setup_token_required: false });
+  assert.deepEqual((await anon('GET', '/v1/auth/instance')).json, { registration: 'closed', password_login: true, oidc: true, email_recovery: true, needs_setup: false, setup_token_required: false,
+    default_units: { distanceUnit: 'km', volumeUnit: 'l', economyUnit: 'l_per_100km', currency: 'USD' } });
   assert.equal((await anon('POST', '/v1/auth/register', { email: 'b@example.test', password: PW })).json.code, 'registration_closed');
   const open = await admin('POST', '/v1/admin/invites', {});
   assert.equal(open.status, 201);

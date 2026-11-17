@@ -1,25 +1,25 @@
-// One vehicle: fuel log, statistics, members, data (export/import) and settings.
+// One vehicle: dashboard, fuel log, members, data (export/import) and settings.
+// The sidebar in main.js links the sections; each returns its own heading.
 import { api, get, post, patch, put, del } from '../api.js';
 import { h, form, field, select, toast, confirmDialog, download } from '../ui.js';
 import { go, render, state } from '../main.js';
 import { qty, date, dateTime, money, REASONS, ROLE, UNIT, localInput, toInstant } from '../format.js';
-import { economyChart } from './chart.js';
-import { currencyOptions } from './vehicles.js';
+import { economyChart, barChart } from './chart.js';
+import { currencyOptions, pageHead } from './vehicles.js';
 import { icon } from '../icons.js';
 
-const TABS = [['log', 'Fuel log', 'fuel'], ['stats', 'Statistics', 'chart'], ['members', 'Members', 'users'], ['data', 'Import & export', 'swap'], ['settings', 'Settings', 'gear']];
+const SECTIONS = { overview: 'Dashboard', log: 'Fuel log', members: 'Members', data: 'Import & export', settings: 'Vehicle settings' };
+
+const meta = (v) => [[v.year, v.make, v.model].filter(Boolean).join(' '), ' ', h('span', { class: `badge ${v.role === 'owner' ? 'accent' : ''}` }, ROLE[v.role]), v.archived ? h('span', { class: 'badge warn' }, 'Archived') : null];
 
 export async function vehicleView(id, tab, query) {
   const v = await get(`/v1/vehicles/${id}`);
+  if (!SECTIONS[tab]) tab = 'overview';
   const canEdit = v.role !== 'viewer' && !v.archived;
-  const body = tab === 'stats' ? await statsTab(v, query) : tab === 'members' ? await membersTab(v) : tab === 'data' ? dataTab(v, canEdit)
+  if (tab === 'overview') return { vehicle: v, title: SECTIONS[tab], view: await overviewTab(v, canEdit, query) };
+  const body = tab === 'members' ? await membersTab(v) : tab === 'data' ? dataTab(v, canEdit)
     : tab === 'settings' ? await settingsTab(v) : await logTab(v, canEdit, query);
-  return h('div', {},
-    h('a', { class: 'back', href: '#/' }, icon('back'), 'All vehicles'),
-    h('div', { class: 'hero' },
-      h('div', {}, h('h1', {}, v.name), h('p', { class: 'muted' }, [v.year, v.make, v.model].filter(Boolean).join(' ') || '', ' ', h('span', { class: 'badge' }, ROLE[v.role]), v.archived ? h('span', { class: 'badge' }, ' Archived') : null))),
-    h('nav', { class: 'tabs', 'aria-label': 'Vehicle sections' }, TABS.map(([key, label, ic]) => h('a', { href: `#/vehicles/${v.id}/${key}`, 'aria-current': key === tab ? 'page' : undefined }, icon(ic), label))),
-    body);
+  return { vehicle: v, title: SECTIONS[tab], view: h('div', {}, pageHead(v.name, SECTIONS[tab], meta(v)), body) };
 }
 
 // ---------- fuel log ----------
@@ -82,6 +82,12 @@ async function logTab(v, canEdit, query) {
         if (!(await confirmDialog(`Delete the fill-up of ${dateTime(f.occurredAt)}?`, 'Delete'))) return;
         await del(`/v1/vehicles/${v.id}/fill-ups/${f.id}`); toast('Fill-up deleted.'); render();
       } }, 'Delete')) : null);
+  // The dashboard's "Add fill-up" lands here with ?add=1; drop it so a re-render does not reopen the form.
+  if (canEdit && query.get('add') === '1') {
+    history.replaceState(null, '', `#/vehicles/${v.id}/log`);
+    open(null);
+    setTimeout(() => slot.querySelector('input')?.focus(), 0);
+  }
   return h('div', {},
     canEdit ? h('div', { class: 'row', style: 'margin-bottom:16px' }, h('button', { onclick: () => open(null) }, icon('plus'), 'Add fill-up')) : null,
     slot,
@@ -96,26 +102,147 @@ async function logTab(v, canEdit, query) {
       : h('div', { class: 'panel empty' }, h('p', {}, 'No fill-ups yet.'), h('p', { class: 'small' }, 'Economy appears after two full fills: the first one sets the starting point.')));
 }
 
-// ---------- statistics ----------
-const WINDOWS = [['30', 'Last 30 days'], ['90', 'Last 90 days'], ['365', 'Last year'], ['all', 'All time']];
+// ---------- dashboard ----------
+const WINDOWS = [['30', 'Last 30 days'], ['90', 'Last 90 days'], ['365', 'Last 12 months'], ['all', 'All time']];
+const DAY = 86_400_000;
 
-async function statsTab(v, query) {
-  const win = query.get('window') ?? '365';
-  const from = win === 'all' ? null : new Date(Date.now() - Number(win) * 86_400_000).toISOString();
-  const st = await get(`/v1/vehicles/${v.id}/stats${from ? `?from=${encodeURIComponent(from)}` : ''}`);
-  const stat = (k, val, note) => h('div', { class: 'stat' }, h('div', { class: 'v' }, val), h('div', { class: 'k' }, k), note ? h('div', { class: 'small muted' }, note) : null);
-  return h('div', {},
-    h('div', { class: 'row', style: 'margin-bottom:16px' }, h('label', { for: 'win', style: 'margin:0' }, 'Period'),
-      select('window', WINDOWS, win, { id: 'win', style: 'width:auto', onchange: (e) => go(`#/vehicles/${v.id}/stats?window=${e.target.value}`) })),
-    h('div', { class: 'panel' },
-      h('div', { class: 'stats' },
-        stat('Average economy', st.economy ? qty(st.economy) : '—', st.economy ? `over ${st.intervalCount} full-to-full intervals` : 'needs two full fills in the period'),
-        stat('Distance', qty(st.distance)), stat('Fuel', qty(st.volume)),
-        stat('Spent', money(st.spend.amount, st.spend.currency), `${st.spend.costedFillCount} of ${st.fillCount} fill-ups have a cost`),
-        stat('Cost per distance', st.costPerDistance ? `${money(st.costPerDistance.value, st.costPerDistance.currency)} / ${st.costPerDistance.per}` : '—')),
-      st.unavailableIntervalCount ? h('p', { class: 'small muted', style: 'margin-top:12px' }, `${st.unavailableIntervalCount} interval(s) in this period are left out because a purchase was missed or the distance is zero.`) : null),
-    h('div', { class: 'panel' }, h('h2', {}, `Economy (${UNIT[state.prefs.economyUnit]})`), economyChart(st.series, state.prefs.economyUnit)),
-    h('p', { class: 'small muted' }, 'Units follow your preferences under Settings. Averages sum distance and fuel first, then divide.'));
+const statsUrl = (v, from, to) => {
+  const q = new URLSearchParams();
+  if (from) q.set('from', from.toISOString());
+  if (to) q.set('to', to.toISOString());
+  return `/v1/vehicles/${v.id}/stats${q.size ? `?${q}` : ''}`;
+};
+
+/** The last twelve calendar months in local time, oldest first. */
+function lastMonths(n = 12) {
+  const now = new Date();
+  return Array.from({ length: n }, (_, i) => {
+    const from = new Date(now.getFullYear(), now.getMonth() - (n - 1 - i), 1);
+    const to = new Date(from.getFullYear(), from.getMonth() + 1, 1);
+    return { from, to, label: from.toLocaleDateString(undefined, { month: 'short' }), long: from.toLocaleDateString(undefined, { month: 'long', year: 'numeric' }) };
+  });
+}
+
+/** Whether economy `a` is better than `b`; consumption units are better when lower. */
+const better = (a, b, unit) => (unit === 'l_per_100km' ? Number(a) < Number(b) : Number(a) > Number(b));
+
+function kpi(label, ic, value, note, extra) {
+  return h('div', { class: `kpi${extra ? ` ${extra}` : ''}` },
+    h('div', { class: 'kpi-k' }, icon(ic), label),
+    h('div', { class: 'kpi-v' }, value),
+    note ? h('div', { class: 'kpi-note' }, note) : null);
+}
+
+function trend(cur, prev, periodName) {
+  if (!cur || !prev || cur.value === prev.value) return prev ? `Same as the previous ${periodName}` : null;
+  const up = better(cur.value, prev.value, cur.unit);
+  // Direction is in words and an arrow as well as colour.
+  return h('span', { class: `delta ${up ? 'good' : 'bad'}` }, h('span', { 'aria-hidden': 'true' }, up ? '▲ ' : '▼ '),
+    `${up ? 'Better' : 'Worse'} than the previous ${periodName} (${qty(prev)})`);
+}
+
+const prevNote = (text, periodName) => `Previous ${periodName}: ${text}`;
+
+function compactMoney(currency) {
+  try {
+    const f = new Intl.NumberFormat(undefined, { style: 'currency', currency, notation: 'compact', maximumFractionDigits: 1 });
+    return (n) => f.format(n);
+  } catch { return (n) => String(n); }
+}
+
+function chartPanel(title, sub, body, cls = '') {
+  return h('section', { class: `panel chart-panel ${cls}` }, h('div', { class: 'panel-head' }, h('h2', {}, title), sub ? h('span', { class: 'small muted' }, sub) : null), body);
+}
+
+function daysAgo(iso) {
+  const d = Math.floor((Date.now() - Date.parse(iso)) / DAY);
+  return d <= 0 ? 'today' : d === 1 ? 'yesterday' : `${d} days ago`;
+}
+
+async function overviewTab(v, canEdit, query) {
+  const win = WINDOWS.some(([k]) => k === query.get('window')) ? query.get('window') : '90';
+  const days = win === 'all' ? null : Number(win);
+  const now = Date.now();
+  const from = days ? new Date(now - days * DAY) : null;
+  const prevFrom = days ? new Date(now - 2 * days * DAY) : null;
+  const periodName = days === 365 ? '12 months' : `${days} days`;
+  // Only compare with the previous period when it has data, so new vehicles do not show zeros.
+  const months = lastMonths();
+  const [cur, prev, recent, ...monthly] = await Promise.all([
+    get(statsUrl(v, from, null)),
+    days ? get(statsUrl(v, prevFrom, from)) : Promise.resolve(null),
+    get(`/v1/vehicles/${v.id}/fill-ups?limit=5`),
+    ...months.map((m) => get(statsUrl(v, m.from, m.to))),
+  ]);
+  const unit = state.prefs.economyUnit;
+  const cmp = days && prev.fillCount > 0;
+  const addFill = canEdit ? h('a', { class: 'button', href: `#/vehicles/${v.id}/log?add=1` }, icon('plus'), 'Add fill-up') : null;
+  const period = h('div', { class: 'period' }, h('label', { for: 'win' }, 'Period'),
+    select('window', WINDOWS, win, { id: 'win', onchange: (e) => go(`#/vehicles/${v.id}?window=${e.target.value}`) }));
+  const head = pageHead('Dashboard', v.name, meta(v), [period, addFill]);
+
+  if (!recent.total) {
+    return h('div', {}, head,
+      h('section', { class: 'panel empty-dash' },
+        h('div', { class: 'empty-art', 'aria-hidden': 'true' }, icon('chart')),
+        h('h2', {}, 'No fill-ups yet'),
+        h('p', { class: 'muted' }, 'Charts and reports appear here once you log fill-ups. Economy needs two full fills: the first sets the starting point.'),
+        canEdit ? h('div', { class: 'row center' }, addFill, h('a', { class: 'button secondary', href: `#/vehicles/${v.id}/data` }, icon('upload'), 'Import a CSV')) : null));
+  }
+
+  // ---- headline figures ----
+  const kpis = h('div', { class: 'kpis' },
+    kpi('Average economy', 'gauge', cur.economy ? qty(cur.economy) : '—',
+      cur.economy ? (cmp && trend(cur.economy, prev.economy, periodName)) || `Over ${cur.intervalCount} full-to-full intervals` : 'Needs two full fills in the period', 'hero'),
+    kpi('Spent', 'wallet', money(cur.spend.amount, cur.spend.currency), cmp ? prevNote(money(prev.spend.amount, prev.spend.currency), periodName) : `${cur.spend.costedFillCount} of ${cur.fillCount} fill-ups have a cost`),
+    kpi('Distance', 'route', qty(cur.distance), cmp ? prevNote(qty(prev.distance), periodName) : 'Closed full-to-full intervals'),
+    kpi('Fuel', 'drop', qty(cur.volume), cmp ? prevNote(qty(prev.volume), periodName) : 'Closed full-to-full intervals'),
+    kpi('Cost per distance', 'chart', cur.costPerDistance ? `${money(cur.costPerDistance.value, cur.costPerDistance.currency)} / ${cur.costPerDistance.per}` : '—',
+      cmp && prev.costPerDistance ? prevNote(`${money(prev.costPerDistance.value, prev.costPerDistance.currency)} / ${prev.costPerDistance.per}`, periodName) : null),
+    kpi('Fill-ups', 'fuel', String(cur.fillCount), cmp ? prevNote(String(prev.fillCount), periodName) : `${recent.total} recorded in total`));
+
+  // ---- at a glance ----
+  const last = recent.items[0];
+  const pick = (cmp) => cur.series.reduce((best, p) => (!best || cmp(p.economy, best.economy) ? p : best), null);
+  const best = pick((a, b) => better(a, b, unit)), worst = pick((a, b) => better(b, a, unit));
+  const glanceRow = (k, val, sub) => h('li', {}, h('span', { class: 'muted' }, k), h('span', { class: 'glance-v' }, val, sub ? h('span', { class: 'small muted' }, sub) : null));
+  const glance = h('section', { class: 'panel glance' },
+    h('div', { class: 'panel-head' }, h('h2', {}, 'At a glance')),
+    h('ul', { class: 'glance-list' },
+      glanceRow('Last fill-up', date(last.occurredAt), daysAgo(last.occurredAt)),
+      glanceRow('Odometer', qty(last.display.odometer)),
+      glanceRow('Fill-ups recorded', String(recent.total)),
+      glanceRow('Best interval', best ? `${best.economy} ${UNIT[unit]}` : '—', best ? date(best.at) : null),
+      glanceRow('Worst interval', worst ? `${worst.economy} ${UNIT[unit]}` : '—', worst ? date(worst.at) : null)),
+    cur.unavailableIntervalCount ? h('p', { class: 'small muted' }, `${cur.unavailableIntervalCount} interval(s) in this period are left out because a purchase was missed or the distance is zero.`) : null);
+
+  // ---- monthly reports ----
+  const bucket = (pickValue) => months.map((m, i) => ({ label: m.label, long: m.long, ...pickValue(monthly[i]) }));
+  const spendItems = bucket((st) => ({ value: Number(st.spend.amount), text: money(st.spend.amount, st.spend.currency) }));
+  const distItems = bucket((st) => ({ value: Number(st.distance.value), text: qty(st.distance) }));
+  const fuelItems = bucket((st) => ({ value: Number(st.volume.value), text: qty(st.volume) }));
+  const distUnit = UNIT[monthly[0].distance.unit], volUnit = UNIT[monthly[0].volume.unit];
+
+  // ---- recent fill-ups ----
+  const recentList = h('section', { class: 'panel recent' },
+    h('div', { class: 'panel-head' }, h('h2', {}, 'Recent fill-ups'), h('a', { class: 'small', href: `#/vehicles/${v.id}/log` }, 'Full log', icon('arrow'))),
+    h('ul', { class: 'recent-list' }, recent.items.map((f) => h('li', {},
+      h('span', { class: 'recent-icon', 'aria-hidden': 'true' }, icon('fuel')),
+      h('div', { class: 'recent-main' }, h('strong', {}, date(f.occurredAt)), h('div', { class: 'small muted' }, `${qty(f.display.volume)}${f.full ? '' : ' · partial'} · ${qty(f.display.odometer)}`)),
+      h('div', { class: 'recent-side' },
+        f.cost ? h('div', {}, money(f.cost.amount, f.cost.currency)) : h('div', { class: 'muted' }, '—'),
+        h('div', { class: 'small muted' }, f.interval?.available ? qty(f.interval.economy) : (REASONS[f.interval?.reason] ?? '')))))));
+
+  const periodLabel = WINDOWS.find(([k]) => k === win)[1].toLowerCase();
+  return h('div', { class: 'dashboard' }, head, kpis,
+    h('div', { class: 'dash-grid' },
+      chartPanel(`Economy (${UNIT[unit]})`, periodLabel, economyChart(cur.series, unit), 'span-8'),
+      glance,
+      chartPanel('Monthly spending', 'last 12 months', barChart({ items: spendItems, label: `spending per month in ${v.currency}`, unitLabel: `Spent (${v.currency})`, tick: compactMoney(v.currency), empty: 'No costs recorded in the last 12 months.' }), 'span-6'),
+      chartPanel(`Distance per month (${distUnit})`, 'last 12 months', barChart({ items: distItems, label: `distance per month in ${distUnit}`, unitLabel: `Distance (${distUnit})`, empty: 'Distance appears once full-to-full intervals close.' }), 'span-6'),
+      chartPanel(`Fuel per month (${volUnit})`, 'last 12 months', barChart({ items: fuelItems, label: `fuel per month in ${volUnit}`, unitLabel: `Fuel (${volUnit})`, empty: 'Fuel appears once full-to-full intervals close.' }), 'span-6'),
+      recentList),
+    h('p', { class: 'small muted' }, 'Units follow your preferences under Settings. Averages sum distance and fuel first, then divide. Distance and fuel count closed full-to-full intervals; spending counts every costed purchase.'));
 }
 
 // ---------- members ----------
@@ -228,7 +355,7 @@ async function settingsTab(v) {
       h('h2', {}, v.archived ? 'Archived' : 'Archive'),
       h('p', { class: 'muted' }, v.archived ? 'Archived vehicles are read-only and hidden from the main list.' : 'Archive a vehicle you no longer drive. Its history stays and can be exported.'),
       h('button', { class: 'secondary', onclick: async () => { await put(`/v1/vehicles/${v.id}/archive`, { archived: !v.archived }); render(); } }, v.archived ? 'Unarchive' : 'Archive vehicle'),
-      h('p', { class: 'small muted', style: 'margin-top:12px' }, 'To hand this vehicle to someone else, add them as a member, then use “Make owner” on the Members tab.')));
+      h('p', { class: 'small muted', style: 'margin-top:12px' }, 'To hand this vehicle to someone else, add them as a member, then use “Make owner” on the Members page.')));
   }
   return h('div', {}, parts);
 }

@@ -10,6 +10,7 @@ import {
   base32, decryptSecret, dummyHash, encryptSecret, hashPassword, hmacHex, matchTotp, numericCode, randomToken, recoveryCode, safeEqual, sha256Hex, verifyPassword,
 } from './crypto.ts';
 import { createSession, requireFresh, revokeAll, touchReauth, type NewSession } from './sessions.ts';
+import { applySignupUnits, parseUnits } from '../preferences.ts';
 
 const BOOTSTRAP_LOCK = 7_165_202;
 const TEN_MIN = 10 * 60_000, HOUR = 3_600_000;
@@ -49,10 +50,14 @@ async function consumeCode(ctx: AuthContext, userId: Id, purpose: CodePurpose, c
 // ---------- registration ----------
 export type RegisterResult = { status: 'created' } | { status: 'verification_sent' };
 
-export async function register(ctx: AuthContext, input: { email: unknown; password: unknown; displayName?: unknown; setupToken?: unknown; inviteToken?: unknown }, meta: Meta): Promise<RegisterResult> {
+export async function register(ctx: AuthContext, input: { email: unknown; password: unknown; displayName?: unknown; setupToken?: unknown; inviteToken?: unknown; units?: unknown }, meta: Meta): Promise<RegisterResult> {
   const email = normaliseEmail(input.email);
   const password = checkPassword(ctx, input.password);
+  const units = input.units === undefined || input.units === null ? {} : parseUnits(input.units, 'units', false);
   const displayName = typeof input.displayName === 'string' ? input.displayName.trim().slice(0, 80) : '';
+  // With password sign-in off, a password account could never sign in, yet as the
+  // first account it would still take the administrator role from the operator.
+  if (!ctx.config.passwordEnabled) throw new HttpProblem(403, 'password_login_disabled', 'Password sign-in is disabled on this instance');
   await rateLimit(ctx, `register:ip:${meta.ip}`, 10, HOUR);
   const hash = await hashPassword(password); // hashed before any lookup so timing does not reveal existing accounts
   const verify = !!ctx.mailer && ctx.config.requireEmailVerification;
@@ -83,6 +88,7 @@ export async function register(ctx: AuthContext, input: { email: unknown; passwo
     const id = uuidv7();
     await tx.query('INSERT INTO users (id, email, display_name, instance_role, created_at) VALUES ($1,$2,$3,$4,$5)', [id, email, displayName, first ? 'admin' : 'user', ctx.now()]);
     await tx.query('INSERT INTO password_credentials (user_id, hash, updated_at) VALUES ($1,$2,$3)', [id, hash, ctx.now()]);
+    await applySignupUnits(tx, id, first, units);
     await audit(tx, id, 'account.registered', id, { bootstrap_admin: first, invited: inviteId !== null }, ctx.now());
     if (inviteId) await tx.query('UPDATE invites SET used_at = $2, used_by = $3 WHERE id = $1', [inviteId, ctx.now(), id]);
     if (verify) {
@@ -328,6 +334,8 @@ export async function totpConfirm(ctx: AuthContext, p: Principal, code: unknown)
     for (const c of codes) await tx.query('INSERT INTO recovery_codes (id, user_id, code_hash) VALUES ($1,$2,$3)', [uuidv7(), p.userId, hmacHex(ctx.config.secretKey, 'recovery', c)]);
     await audit(tx, p.userId, 'credential.totp_added', p.userId, {}, ctx.now());
   });
+  // Sessions signed in before the second factor existed must not outlive it.
+  await revokeAll(ctx, p.userId, p.sessionId, 'totp_added');
   return { recoveryCodes: codes };
 }
 

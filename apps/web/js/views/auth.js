@@ -2,6 +2,7 @@
 import { get, post, setCsrf, passkeysSupported, getPasskey } from '../api.js';
 import { h, form, field } from '../ui.js';
 import { go, refreshSession, state } from '../main.js';
+import { unitFields, readUnits } from '../units.js';
 
 const ERRORS = {
   oidc_link_required: 'An account with this email already exists. Sign in with your password, then link your identity provider under Settings → Security.',
@@ -62,17 +63,44 @@ function signInView(info, query) {
 function registerView(info, query) {
   const setup = info.needs_setup;
   const invite = query.get('invite') ?? '';
+  const defaults = info.default_units ?? { distanceUnit: 'km', volumeUnit: 'l', economyUnit: 'l_per_100km', currency: 'USD' };
+  // At setup the administrator picks the instance defaults; later, each new
+  // person picks their own, prefilled with those defaults.
+  const unitsBlock = h('fieldset', {},
+    h('legend', {}, setup ? 'Default units for this instance' : 'Your units'),
+    h('p', { class: 'small muted' }, setup
+      ? 'Every account, yours included, starts with these. Each person can choose their own later in Settings, and you can change the defaults under Administration.'
+      : "Prefilled with this instance's defaults. You can change them any time in Settings."),
+    unitFields(defaults));
+  // Setup sends every field; a new user sends only what differs, so the rest keeps following the defaults.
+  const chosenUnits = () => {
+    const u = readUnits(unitsBlock);
+    if (setup) return u;
+    const diff = Object.fromEntries(Object.entries(u).filter(([k, v]) => v !== defaults[k]));
+    return Object.keys(diff).length ? diff : undefined;
+  };
+  const passwordForm = info.password_login !== false;
+  // With an identity provider, the account can also be created through it: the administrator on an empty instance, or anyone while registration is open.
+  const viaOidc = info.oidc && (setup || info.registration === 'open')
+    ? form({}, [
+      setup && info.setup_token_required ? field('Setup token', h('input', { name: 'setup_token', required: true, autocomplete: 'off' }), 'Set by the operator in DRIVELOOM_SETUP_TOKEN.') : null,
+      h('button', { class: 'secondary', type: 'submit', style: 'width:100%;justify-content:center' }, setup ? 'Set up with your identity provider' : 'Sign up with your identity provider'),
+    ], async (v) => {
+      location.assign((await post('/v1/auth/oidc/start', { mode: 'login', setup_token: v.setup_token || undefined, units: chosenUnits() })).authorization_url);
+    })
+    : null;
   return shell(setup ? 'Set up this instance' : 'Create your account',
     setup ? 'No account exists yet. The account you create now is the administrator.' : info.registration === 'open' ? null : 'Registration is by invitation on this instance.',
-    form({}, [
+    passwordForm ? form({}, [
       field('Name', h('input', { name: 'display_name', autocomplete: 'name', maxlength: 80 })),
       field('Email', h('input', { name: 'email', type: 'email', autocomplete: 'username', required: true })),
       field('Password', h('input', { name: 'password', type: 'password', autocomplete: 'new-password', required: true, minlength: 12 }), 'At least 12 characters. A passphrase works well.'),
       info.setup_token_required ? field('Setup token', h('input', { name: 'setup_token', required: true, autocomplete: 'off' }), 'Set by the operator in DRIVELOOM_SETUP_TOKEN.') : null,
       !setup && info.registration !== 'open' ? field('Invitation code', h('input', { name: 'invite_token', required: true, value: invite, autocomplete: 'off' })) : null,
+      unitsBlock,
       h('button', { type: 'submit', style: 'width:100%;justify-content:center' }, setup ? 'Create administrator account' : 'Create account'),
     ], async (v, el) => {
-      const body = { email: v.email, password: v.password, display_name: v.display_name || undefined, setup_token: v.setup_token || undefined, invite_token: v.invite_token || undefined };
+      const body = { email: v.email, password: v.password, display_name: v.display_name || undefined, setup_token: v.setup_token || undefined, invite_token: v.invite_token || undefined, units: chosenUnits() };
       const r = await post('/v1/auth/register', body);
       state.instance = await get('/v1/auth/instance');
       if (r.status === 'verification_sent') {
@@ -80,7 +108,8 @@ function registerView(info, query) {
         return;
       }
       await signedIn(await post('/v1/auth/login', { email: v.email, password: v.password }));
-    }),
+    }) : (viaOidc ? unitsBlock : null),
+    viaOidc ? h('div', { class: 'stack', style: 'margin-top:16px' }, viaOidc) : null,
     h('p', { class: 'small', style: 'margin-top:16px' }, h('a', { href: '#/signin' }, 'Already have an account? Sign in')));
 }
 

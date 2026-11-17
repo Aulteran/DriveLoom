@@ -69,7 +69,7 @@ export async function friendsView(query) {
       h('div', { class: 'row spread' }, h('h2', {}, 'Comparison'),
         select('window', WINDOWS, win, { 'aria-label': 'Comparison period', onchange: (e) => { location.hash = `#/friends?window=${e.target.value}`; } })),
       comparisonTable(cmp),
-      h('p', { class: 'small muted' }, 'Share a vehicle from its Settings tab. Only owners can share, and sharing can be turned off at any time.')),
+      h('p', { class: 'small muted' }, 'Share a vehicle from its Vehicle settings page. Only owners can share, and sharing can be turned off at any time.')),
     list.incoming.length ? people('Requests for you', list.incoming, (r) => [
       act('Accept', () => put(`/v1/friends/${r.id}`), ''),
       act('Decline', () => del(`/v1/friends/${r.id}`)),

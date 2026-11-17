@@ -1,4 +1,5 @@
 // HTTP surface of the auth module. Contract: openapi.yaml, tag `auth`.
+import { getInstanceDefaults } from '../preferences.ts';
 import { SESSION_COOKIE, type AuthMode, type HttpRequest, type HttpResult, type Route } from '../http/app.ts';
 import { HttpProblem } from '../http/problem.ts';
 import { requirePrincipal } from '../identity.ts';
@@ -45,7 +46,7 @@ export function authRoutes(ctx: AuthContext): Route[] {
   return [
     r('POST', '/v1/auth/register', 'none', async (req) => {
       const b = body(req);
-      const out = await acct.register(ctx, { email: b['email'], password: b['password'], displayName: b['display_name'], setupToken: b['setup_token'], inviteToken: b['invite_token'] }, meta(req));
+      const out = await acct.register(ctx, { email: b['email'], password: b['password'], displayName: b['display_name'], setupToken: b['setup_token'], inviteToken: b['invite_token'], units: b['units'] }, meta(req));
       return ok(202, { status: out.status });
     }),
     r('POST', '/v1/auth/verify-email', 'none', async (req) => {
@@ -95,6 +96,7 @@ export function authRoutes(ctx: AuthContext): Route[] {
       return ok(200, {
         registration: ctx.config.registration, password_login: ctx.config.passwordEnabled, oidc: !!ctx.oidc, email_recovery: !!ctx.mailer,
         needs_setup: empty, setup_token_required: empty && ctx.config.setupToken !== null,
+        default_units: await getInstanceDefaults(ctx.db),
       });
     }),
     // --- sessions ---
@@ -149,8 +151,9 @@ export function authRoutes(ctx: AuthContext): Route[] {
     r('POST', '/v1/auth/passkeys/login/verify', 'none', async (req) => sessionResult(ctx, (await pk.loginVerify(ctx, body(req)['response'], meta(req))).session)),
     // --- OIDC ---
     r('POST', '/v1/auth/oidc/start', 'optional', async (req) => {
-      const mode = body(req)['mode'] === 'link' ? 'link' : 'login';
-      const out = await oidc.start(ctx, { mode, principal: req.ctx.principal }, meta(req));
+      const b = body(req);
+      const mode = b['mode'] === 'link' ? 'link' : 'login';
+      const out = await oidc.start(ctx, { mode, principal: req.ctx.principal, setupToken: b['setup_token'], units: b['units'] }, meta(req));
       return { status: 200, body: { authorization_url: out.url }, headers: { 'set-cookie': cookie(ctx, OIDC_BINDING_COOKIE, out.binding, 600, '/v1/auth/oidc') } };
     }),
     r('GET', '/v1/auth/oidc/callback', 'optional', async (req) => {

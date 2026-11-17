@@ -1,11 +1,13 @@
 // Vehicle images: private, one per vehicle, readable by members only. The type
-// is decided from the file's leading bytes, never from what the client claims.
+// is decided from the file's leading bytes, never from what the client claims,
+// and metadata such as the location a photo was taken is removed before storing.
 import type pg from 'pg';
 import type { HttpRequest, RawBody, Route } from '../http/app.ts';
 import { HttpProblem } from '../http/problem.ts';
 import { requirePrincipal } from '../identity.ts';
 import { uuidv7 } from '../ids.ts';
 import type { VehicleService } from './service.ts';
+import { stripImageMetadata } from './image-metadata.ts';
 
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
@@ -49,9 +51,11 @@ export function imageRoutes(pool: pg.Pool, vehicles: VehicleService): Route[] {
       const body = r.body as RawBody;
       const type = sniffImage(body.data);
       if (!type) throw new HttpProblem(422, 'validation_failed', 'Validation failed', 'The file is not a JPEG, PNG or WebP image.');
+      const clean = stripImageMetadata(body.data, type);
+      if (!clean) throw new HttpProblem(422, 'validation_failed', 'Validation failed', 'The image file is damaged.');
       await write(r, 'vehicle.image_set', (c, id) => c.query(
         `INSERT INTO vehicle_images (vehicle_id, content_type, data, uploaded_by) VALUES ($1,$2,$3,$4)
-         ON CONFLICT (vehicle_id) DO UPDATE SET content_type = $2, data = $3, uploaded_by = $4, updated_at = now()`, [id, type, body.data, who(r).userId]));
+         ON CONFLICT (vehicle_id) DO UPDATE SET content_type = $2, data = $3, uploaded_by = $4, updated_at = now()`, [id, type, clean, who(r).userId]));
       return { status: 204 };
     } },
     { method: 'DELETE', path, async handler(r) {
