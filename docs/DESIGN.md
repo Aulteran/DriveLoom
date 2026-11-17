@@ -2,7 +2,7 @@
 
 The `apps/web` client uses one visual system, "Loom HUD": a dense, console-style dashboard on frosted glass surfaces, with an indigo accent and a cyan secondary for data. It lives entirely in [`apps/web/styles.css`](../apps/web/styles.css) and [`apps/web/js/icons.js`](../apps/web/js/icons.js). There is no build step, no framework and no third-party request.
 
-Before and after screenshots of the revamp (2026-11-12) are in [`docs/design/`](design/).
+Screenshots of the 2026-11-12 revamp, before the sidebar dashboard and frosted-glass restyle, are in [`docs/design/`](design/).
 
 ## Principles
 

@@ -187,7 +187,7 @@ async function overviewTab(v, canEdit, query) {
         h('div', { class: 'empty-art', 'aria-hidden': 'true' }, icon('chart')),
         h('h2', {}, 'No fill-ups yet'),
         h('p', { class: 'muted' }, 'Charts and reports appear here once you log fill-ups. Economy needs two full fills: the first sets the starting point.'),
-        h('div', { class: 'row center' }, addFill, h('a', { class: 'button secondary', href: `#/vehicles/${v.id}/data` }, icon('upload'), 'Import a CSV'))));
+        canEdit ? h('div', { class: 'row center' }, addFill, h('a', { class: 'button secondary', href: `#/vehicles/${v.id}/data` }, icon('upload'), 'Import a CSV')) : null));
   }
 
   // ---- headline figures ----
@@ -355,7 +355,7 @@ async function settingsTab(v) {
       h('h2', {}, v.archived ? 'Archived' : 'Archive'),
       h('p', { class: 'muted' }, v.archived ? 'Archived vehicles are read-only and hidden from the main list.' : 'Archive a vehicle you no longer drive. Its history stays and can be exported.'),
       h('button', { class: 'secondary', onclick: async () => { await put(`/v1/vehicles/${v.id}/archive`, { archived: !v.archived }); render(); } }, v.archived ? 'Unarchive' : 'Archive vehicle'),
-      h('p', { class: 'small muted', style: 'margin-top:12px' }, 'To hand this vehicle to someone else, add them as a member, then use “Make owner” on the Members tab.')));
+      h('p', { class: 'small muted', style: 'margin-top:12px' }, 'To hand this vehicle to someone else, add them as a member, then use “Make owner” on the Members page.')));
   }
   return h('div', {}, parts);
 }

@@ -4,7 +4,7 @@ import { h } from './ui.js';
 import { icon } from './icons.js';
 
 const KEY = 'driveloom.theme';
-const COLORS = { light: '#edf1f8', dark: '#05070e' };
+const COLORS = { light: '#eef0f6', dark: '#08090f' };
 const MODES = [['system', 'System', 'monitor'], ['light', 'Light', 'sun'], ['dark', 'Dark', 'moon']];
 const controls = new Set();
 

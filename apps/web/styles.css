@@ -77,7 +77,8 @@
 *, *::before, *::after { box-sizing: border-box; }
 [hidden] { display: none !important; }
 html { -webkit-text-size-adjust: 100%; background: var(--bg); }
-body { margin: 0; min-height: 100vh; min-height: 100dvh; background: var(--bg); color: var(--text); font: 15px/1.55 var(--font); -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+/* No body background: it would paint over the fixed colour fields (z-index -1) behind the glass. */
+body { margin: 0; min-height: 100vh; min-height: 100dvh; color: var(--text); font: 15px/1.55 var(--font); -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
 /* Colors never transition, so a theme switch is instant and text contrast is
    always the final value. */
 /* Ambient backdrop: soft colour fields for the frosted glass to diffuse. */
@@ -417,7 +418,7 @@ button.icon-only .icon { width: 22px; height: 22px; }
 .chart .guide { stroke: var(--line-strong); stroke-width: 1; }
 .chart .dot.hover { r: 6; fill: var(--data); }
 .chart .axis.base { stroke: var(--line-strong); stroke-dasharray: none; }
-.chart .bar-mark { fill: color-mix(in srgb, var(--data) 55%, transparent); animation: rise-bar .7s var(--ease) both; transform-box: fill-box; transform-origin: bottom; }
+.chart .bar-mark { fill: color-mix(in srgb, var(--data) 72%, transparent); animation: rise-bar .7s var(--ease) both; transform-box: fill-box; transform-origin: bottom; }
 .chart .bar-mark.latest { fill: var(--data); }
 .chart .bar-mark.hover { fill: var(--data-2); }
 @keyframes rise-bar { from { transform: scaleY(0); } }
@@ -439,7 +440,8 @@ button.icon-only .icon { width: 22px; height: 22px; }
   body.signed-in .app { display: block; }
   .mobilebar {
     position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 8px; min-height: 56px; padding: 6px 10px;
-    background: color-mix(in srgb, var(--surface-solid) 94%, transparent); border-bottom: 1px solid var(--line);
+    background: var(--surface); border-bottom: 1px solid var(--line);
+    backdrop-filter: var(--glass-blur); -webkit-backdrop-filter: var(--glass-blur);
   }
   .mobilebar[hidden] { display: none; }
   .sidebar {
