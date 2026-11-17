@@ -4,7 +4,6 @@ import { h, s } from '../ui.js';
 import { UNIT, date } from '../format.js';
 
 let seq = 0;
-const W = 640, WB = 480; // line and bar viewBox widths
 
 /** Round-number ticks from 0 (or `lo`) to at least `hi`. */
 function niceTicks(lo, hi, count = 4) {
@@ -20,15 +19,24 @@ function niceTicks(lo, hi, count = 4) {
 }
 const tickText = (v) => (Math.abs(v) >= 1000 ? `${Number((v / 1000).toFixed(1))}k` : String(Number(v.toFixed(2))));
 
-/** Wraps an SVG with a hover tooltip; any element with data-tip gets one. */
-function frame(svg, table) {
+/**
+ * Wraps a chart with a hover tooltip; any element with data-tip gets one.
+ * `build(width)` draws the SVG at its real pixel width, so text and marks keep
+ * their size on every screen; it is redrawn when the frame is resized.
+ */
+function frame(build, table) {
   const tip = h('div', { class: 'chart-tip', 'aria-hidden': 'true', hidden: true });
-  const guide = svg.querySelector('.guide');
+  let width = 640;
+  let svg = build(width);
   const wrap = h('div', { class: 'chart-frame' }, svg, tip, table);
-  const hide = () => { tip.hidden = true; if (guide) guide.setAttribute('visibility', 'hidden'); svg.querySelector('.hover')?.classList.remove('hover'); };
-  svg.addEventListener('pointerover', (e) => {
+  const hide = () => {
+    tip.hidden = true;
+    svg.querySelector('.guide')?.setAttribute('visibility', 'hidden');
+    svg.querySelector('.hover')?.classList.remove('hover');
+  };
+  wrap.addEventListener('pointerover', (e) => {
     const t = e.target.closest?.('[data-tip]');
-    if (!t) return;
+    if (!t || !svg.contains(t)) return;
     svg.querySelector('.hover')?.classList.remove('hover');
     const mark = t.dataset.mark ? svg.querySelector(`#${t.dataset.mark}`) : null;
     mark?.classList.add('hover');
@@ -38,9 +46,21 @@ function frame(svg, table) {
     const x = r.left + r.width / 2 - box.left;
     tip.style.left = `${Math.min(Math.max(x, 70), box.width - 70)}px`;
     tip.style.top = `${r.top - box.top}px`;
+    const guide = svg.querySelector('.guide');
     if (guide && t.dataset.x) { guide.setAttribute('x1', t.dataset.x); guide.setAttribute('x2', t.dataset.x); guide.setAttribute('visibility', 'visible'); }
   });
-  svg.addEventListener('pointerleave', hide);
+  wrap.addEventListener('pointerleave', hide);
+  if (typeof ResizeObserver === 'function') {
+    new ResizeObserver(([entry]) => {
+      const w = Math.round(entry.contentRect.width);
+      if (w < 120 || Math.abs(w - width) < 2) return;
+      width = w;
+      hide();
+      const next = build(width);
+      svg.replaceWith(next);
+      svg = next;
+    }).observe(wrap);
+  }
   return wrap;
 }
 
@@ -59,6 +79,7 @@ export function economyChart(series, unit) {
   if (series.length < 2) return h('p', { class: 'muted chart-empty' }, 'The chart appears once two complete full-to-full intervals exist.');
   const id = `c${++seq}`;
   const H = 240, P = { l: 44, r: 14, t: 16, b: 28 };
+  const build = (W) => {
   const xs = series.map((p) => Date.parse(p.at)), ys = series.map((p) => Number(p.economy));
   const [x0, x1] = [Math.min(...xs), Math.max(...xs)];
   const pad = (Math.max(...ys) - Math.min(...ys) || Math.abs(ys[0]) || 1) * 0.2;
@@ -70,7 +91,7 @@ export function economyChart(series, unit) {
   const area = `${path} L${X(xs.at(-1)).toFixed(1)},${H - P.b} L${X(xs[0]).toFixed(1)},${H - P.b} Z`;
   const values = series.map((p) => p.economy);
   const desc = `Line chart of economy in ${UNIT[unit]} for ${series.length} intervals from ${date(series[0].at)} to ${date(series.at(-1).at)}.`;
-  const svg = s('svg', { class: 'chart', viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': desc },
+  return s('svg', { class: 'chart', viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: 'img', 'aria-label': desc },
     s('defs', {},
       s('linearGradient', { id: `${id}-stroke`, gradientUnits: 'userSpaceOnUse', x1: P.l, y1: 0, x2: W - P.r, y2: 0 }, s('stop', { offset: 0, class: 'stop-a' }), s('stop', { offset: 1, class: 'stop-b' })),
       s('linearGradient', { id: `${id}-fill`, x1: 0, y1: 0, x2: 0, y2: 1 }, s('stop', { offset: 0, class: 'fill-a' }), s('stop', { offset: 1, class: 'fill-b' }))),
@@ -82,7 +103,8 @@ export function economyChart(series, unit) {
     series.map((p, i) => s('circle', { id: `${id}-p${i}`, class: 'dot', cx: X(xs[i]), cy: Y(ys[i]), r: 4 })),
     // Invisible hit targets, larger than the points.
     series.map((p, i) => s('circle', { class: 'hit', cx: X(xs[i]), cy: Y(ys[i]), r: 14, 'data-tip': date(p.at), 'data-tip-value': `${values[i]} ${UNIT[unit]}`, 'data-mark': `${id}-p${i}`, 'data-x': X(xs[i]).toFixed(1) })));
-  return frame(svg, dataTable(`Economy per interval (${UNIT[unit]}), oldest first.`, ['Interval ending', `Economy (${UNIT[unit]})`], series.map((p) => [date(p.at), p.economy])));
+  };
+  return frame(build, dataTable(`Economy per interval (${UNIT[unit]}), oldest first.`, ['Interval ending', `Economy (${UNIT[unit]})`], series.map((p) => [date(p.at), p.economy])));
 }
 
 /**
@@ -96,14 +118,14 @@ export function barChart({ items, label, unitLabel, tick = tickText, empty = 'No
   const ticks = niceTicks(0, Math.max(...items.map((it) => it.value)), 3);
   const top = ticks.at(-1);
   const Y = (y) => H - P.b - (y / top) * (H - P.t - P.b);
-  const W = WB;
+  const build = (W) => {
   const slot = (W - P.l - P.r) / items.length;
-  const bw = Math.max(4, Math.min(36, slot - 6));
+  const bw = Math.max(4, Math.min(44, slot * 0.62));
   const bar = (x, y, w, hgt) => {
     const r = Math.min(4, w / 2, hgt);
     return `M${x},${y + hgt} V${y + r} Q${x},${y} ${x + r},${y} H${x + w - r} Q${x + w},${y} ${x + w},${y + r} V${y + hgt} Z`;
   };
-  const svg = s('svg', { class: 'chart bars', viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `Bar chart of ${label} for ${items.length} periods from ${items[0].long} to ${items.at(-1).long}.` },
+  return s('svg', { class: 'chart bars', viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: 'img', 'aria-label': `Bar chart of ${label} for ${items.length} periods from ${items[0].long} to ${items.at(-1).long}.` },
     ticks.map((t) => [s('line', { class: t === 0 ? 'axis base' : 'axis', x1: P.l, x2: W - P.r, y1: Y(t), y2: Y(t) }), s('text', { x: P.l - 8, y: Y(t) + 4, 'text-anchor': 'end' }, tick(t))]),
     items.map((it, i) => {
       const cx = P.l + slot * i + slot / 2;
@@ -111,9 +133,10 @@ export function barChart({ items, label, unitLabel, tick = tickText, empty = 'No
       return [
         hgt > 0 ? s('path', { id: `${id}-b${i}`, class: `bar-mark${i === items.length - 1 ? ' latest' : ''}`, d: bar(cx - bw / 2, Y(it.value), bw, hgt) }) : null,
         // Label every other bucket when space is tight.
-        items.length <= 8 || i % 2 === (items.length - 1) % 2 ? s('text', { x: cx, y: H - 8, 'text-anchor': 'middle' }, it.label) : null,
+        slot >= 44 || i % 2 === (items.length - 1) % 2 ? s('text', { x: cx, y: H - 8, 'text-anchor': 'middle' }, it.label) : null,
         s('rect', { class: 'hit', x: cx - slot / 2, y: P.t, width: slot, height: H - P.t - P.b, 'data-tip': it.long, 'data-tip-value': it.text, 'data-mark': hgt > 0 ? `${id}-b${i}` : undefined }),
       ];
     }));
-  return frame(svg, dataTable(`${label}.`, ['Period', unitLabel], items.map((it) => [it.long, it.text])));
+  };
+  return frame(build, dataTable(`${label}.`, ['Period', unitLabel], items.map((it) => [it.long, it.text])));
 }

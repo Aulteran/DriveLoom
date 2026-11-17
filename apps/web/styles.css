@@ -108,7 +108,7 @@ p { margin: 0 0 .75em; }
 .icon { width: 1.15em; height: 1.15em; flex: none; }
 
 /* ---------- layout ---------- */
-main { width: 100%; max-width: 1280px; margin: 0 auto; padding: 32px 32px 72px; min-width: 0; }
+main { width: 100%; max-width: 1640px; margin: 0 auto; padding: 32px 32px 72px; min-width: 0; }
 main:focus { outline: none; box-shadow: none; }
 main > * { animation: rise .45s var(--ease) both; }
 @keyframes rise { from { transform: translateY(10px); } }
@@ -377,7 +377,10 @@ button.icon-only .icon { width: 22px; height: 22px; }
 .kpi-v { font-size: 1.55rem; font-weight: 650; letter-spacing: -.02em; font-variant-numeric: tabular-nums; line-height: 1.25; }
 .kpi-note { color: var(--muted); font-size: .78rem; }
 .kpi.hero .kpi-v { color: var(--accent-ink); }
-@media (min-width: 1500px) { .kpis { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
+@media (min-width: 1700px) {
+  .kpis { grid-template-columns: minmax(0, 1.5fr) repeat(5, minmax(0, 1fr)); }
+  .kpi.hero .kpi-v { white-space: nowrap; }
+}
 .delta { font-weight: 600; }
 .dash-grid { display: grid; gap: 20px; grid-template-columns: repeat(12, minmax(0, 1fr)); margin-bottom: 16px; }
 .dash-grid > .panel { margin: 0; grid-column: span 6; min-width: 0; }
@@ -470,9 +473,6 @@ button.icon-only .icon { width: 22px; height: 22px; }
   .kpi:last-child { grid-column: span 2; }
   .kpi.hero .kpi-v { font-size: 1.6rem; }
   .page-head { align-items: flex-start; }
-  /* Charts scale down with their viewBox; keep labels legible. */
-  .chart text { font-size: 18px; }
-  .chart.bars text { font-size: 15px; }
   .sidebar-inner { position: static; height: 100%; }
   .public-theme { margin-bottom: 0; }
 }
