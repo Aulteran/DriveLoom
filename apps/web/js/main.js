@@ -61,11 +61,7 @@ function switcher(current) {
     id: 'vehicle-switch', name: 'vehicle',
     onchange: (e) => { rememberVehicle(e.target.value); go(`#/vehicles/${e.target.value}`); },
   }, list.map((v) => h('option', { value: v.id, selected: v.id === current?.id }, v.archived ? `${vehicleLabel(v)} (archived)` : vehicleLabel(v))));
-  return h('div', { class: 'switcher' },
-    h('label', { for: 'vehicle-switch' }, 'Vehicle'),
-    h('div', { class: 'switcher-box' }, current?.imageVersion
-      ? h('img', { src: `/v1/vehicles/${current.id}/image?v=${current.imageVersion}`, alt: '' })
-      : h('span', { class: 'switcher-icon' }, icon('car')), sel));
+  return h('div', { class: 'switcher' }, h('label', { for: 'vehicle-switch' }, 'Vehicle'), sel);
 }
 
 function buildSidebar(route) {

@@ -318,13 +318,15 @@ body.signed-in .app { display: grid; grid-template-columns: 272px minmax(0, 1fr)
 button.icon-only { padding: 0; width: 44px; justify-content: center; }
 button.icon-only .icon { width: 22px; height: 22px; }
 
-.switcher { padding: 10px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--line); box-shadow: var(--highlight); }
-.switcher label { font-size: .75rem; font-weight: 600; color: var(--muted); margin-bottom: 6px; }
-.switcher-box { display: flex; align-items: center; gap: 10px; }
-.switcher-box img, .switcher-icon { width: 40px; height: 40px; flex: none; border-radius: 10px; object-fit: cover; }
-.switcher-icon { display: grid; place-items: center; color: var(--accent-ink); background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); }
-.switcher-icon .icon { width: 24px; height: 24px; }
-.switcher select { font-weight: 600; background-color: var(--field); }
+/* A compact labelled select, no card: the label matches the nav section labels. */
+.switcher { display: flex; flex-direction: column; gap: 4px; }
+.switcher label { font-size: .75rem; font-weight: 600; color: var(--muted); margin: 0; padding: 0 10px; }
+.switcher select {
+  min-height: 36px; padding: 6px 32px 6px 10px; font-size: .92rem; font-weight: 600; text-overflow: ellipsis;
+  background-color: var(--surface-2); border-color: var(--line); background-position: right 8px center; background-size: 16px;
+}
+.switcher select:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--line-strong)); }
+.switcher select:focus-visible { border-color: var(--accent); }
 
 .side-nav { display: flex; flex-direction: column; gap: 2px; }
 .side-label { font-size: .75rem; font-weight: 600; color: var(--muted); padding: 0 10px 4px; }

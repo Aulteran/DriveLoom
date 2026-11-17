@@ -127,7 +127,7 @@ test('web client journeys', { skip, timeout: 180_000 }, async (t: TestContext) =
       await page.getByLabel('Nickname (optional)').fill('Clio');
       await page.locator('form').getByRole('button', { name: 'Add vehicle' }).click();
       await page.getByRole('heading', { name: 'Clio', level: 1 }).waitFor();
-      await page.getByRole('combobox', { name: 'Vehicle' }).selectOption({ label: 'Golf' });
+      await page.getByRole('combobox', { name: 'Vehicle' }).selectOption({ label: 'Golf · VW' });
       await page.getByRole('heading', { name: 'Golf', level: 1 }).waitFor();
       // The root opens the vehicle last looked at.
       await page.goto(`${base}/#/`);
