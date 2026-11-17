@@ -56,6 +56,5 @@ From `apps/api` with `DATABASE_URL` set, `npm run test:browser` exercises every 
 
 ## Follow-ups
 
-- The marketing site in `apps/marketing` was restyled on 2026-11-12 with the previous tokens (cyan/violet, glows) and fonts; its interactive tour reuses the panel, tab, statistics, table and chart components.
+- The marketing site in `apps/marketing` uses the same tokens, frosted glass and fonts. Its hero is a miniature dashboard, and its interactive tour mirrors the app shell: sidebar with the vehicle switcher, dashboard, fuel log, members, import and export, garage and friends.
 - The theme choice is per device. Syncing it across devices would need a server preference.
-- The marketing site's interactive tour (`apps/marketing`) still shows the previous top-bar layout and cyan/violet glow styling; it should be brought in line.

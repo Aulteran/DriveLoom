@@ -70,11 +70,16 @@ test('robots.txt is served and agrees with the robots meta tag', async () => {
   assert.equal(sm.status, cfg.indexable ? 200 : 404);
 });
 
-for (const scheme of ['dark', 'light']) {
-  test(`${scheme} theme: no WCAG AA contrast violations, including button states`, async () => {
+for (const [scheme, forced] of [['dark', null], ['light', null], ['light', 'Dark'], ['dark', 'Light']]) {
+  test(`${forced ? `forced ${forced.toLowerCase()} on a ${scheme} system` : `${scheme} theme`}: no WCAG AA contrast violations, including button states`, async () => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: scheme });
     const page = await context.newPage();
     await page.goto(`${origin}${prefix}`);
+    if (forced) {
+      await page.getByRole('group', { name: 'Colour theme' }).getByRole('button', { name: `${forced} theme` }).click();
+      assert.equal(await page.evaluate(() => document.documentElement.dataset.theme), forced.toLowerCase());
+      assert.equal(await page.getByRole('button', { name: `${forced} theme` }).getAttribute('aria-pressed'), 'true');
+    }
     await page.locator('details').first().evaluate((d) => { d.open = true; });
     const axe = await new AxeBuilder({ page }).withRules(['color-contrast']).analyze();
     assert.deepEqual(axe.violations.map((v) => v.nodes.map((n) => n.html.slice(0, 80))), []);
@@ -110,22 +115,24 @@ test('keyboard: skip link first, every control reachable with a visible focus ri
   await context.close();
 });
 
-const TABS = ['garage', 'log', 'stats', 'members', 'friends', 'data'];
+const TABS = ['dashboard', 'log', 'members', 'data', 'garage', 'friends'];
 
 test('demo tabs: arrow keys move between screens', async () => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   const page = await context.newPage();
   await page.goto(`${origin}${prefix}`);
-  await page.locator('#tab-stats').focus();
-  await page.keyboard.press('ArrowRight');
+  await page.locator('#tab-log').focus();
+  await page.keyboard.press('ArrowDown');
   assert.equal(await page.evaluate(() => document.activeElement.id), 'tab-members');
   assert.equal(await page.locator('#tab-members').getAttribute('aria-selected'), 'true');
   assert.ok(await page.locator('#panel-members').isVisible());
-  assert.ok(await page.locator('#panel-stats').isHidden());
+  assert.ok(await page.locator('#panel-log').isHidden());
+  await page.keyboard.press('ArrowRight');
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'tab-data', 'left and right arrows work too, for the phone layout');
   await page.keyboard.press('Home');
-  assert.equal(await page.evaluate(() => document.activeElement.id), 'tab-garage');
-  await page.keyboard.press('ArrowLeft');
-  assert.equal(await page.evaluate(() => document.activeElement.id), 'tab-data', 'wraps around');
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'tab-dashboard');
+  await page.keyboard.press('ArrowUp');
+  assert.equal(await page.evaluate(() => document.activeElement.id), 'tab-friends', 'wraps around');
   await context.close();
 });
 
@@ -154,15 +161,21 @@ test('demo behaviour: units, fill-up validation, sharing, friends, offline', asy
   page.on('request', (r) => requests.push({ type: r.resourceType(), method: r.method(), url: r.url() }));
 
   // Display units convert every figure.
-  const headline = () => page.locator('#panel-stats .stat').first().locator('.v').textContent();
+  const headline = () => page.locator('#panel-dashboard .kpi').first().locator('.kpi-v').textContent();
   assert.match(await headline(), /L\/100 km$/);
   await page.focus('#pref-econ');
   await page.selectOption('#pref-econ', 'mpg_us');
   assert.match(await headline(), /mpg \(US\)$/);
   assert.equal(await page.evaluate(() => document.activeElement.id), 'pref-econ', 'focus stays on the control after re-render');
   await page.selectOption('#pref-dist', 'mi');
-  assert.match(await page.locator('#panel-stats .stat').nth(1).locator('.v').textContent(), /mi$/);
-  assert.equal(await page.locator('#panel-stats svg.chart').count(), 1, 'chart renders');
+  assert.match(await page.locator('#panel-dashboard .kpi').nth(2).locator('.kpi-v').textContent(), /mi$/);
+  assert.equal(await page.locator('#panel-dashboard svg.chart').count(), 2, 'economy and monthly spending charts render');
+  for (const name of ['At a glance', 'Recent fill-ups']) assert.ok(await page.locator('#panel-dashboard h4', { hasText: name }).isVisible(), `${name} shows`);
+
+  // The dashboard's Add fill-up opens the form on the fuel log.
+  await page.click('[data-key=dash-add]');
+  assert.ok(await page.locator('#panel-log form').isVisible(), 'the fill-up form is open');
+  await page.click('#panel-log form button.secondary');
 
   // Adding a fill-up checks the odometer, then updates the log.
   await page.click('#tab-log');
