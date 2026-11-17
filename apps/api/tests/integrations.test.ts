@@ -43,7 +43,7 @@ test('SMTP settings apply live, keep the password write-only and can be tested a
 
   const saved = await admin('PUT', '/v1/admin/settings/smtp', SMTP);
   assert.equal(saved.status, 200, JSON.stringify(saved.json));
-  assert.deepEqual(saved.json, { source: 'database', configured: true, host: SMTP.host, port: 587, security: 'starttls', username: 'mailer', from: SMTP.from, hasPassword: true, secretUnreadable: false });
+  assert.deepEqual(saved.json, { source: 'database', enabled: true, configured: true, host: SMTP.host, port: 587, security: 'starttls', username: 'mailer', from: SMTP.from, hasPassword: true, secretUnreadable: false });
   assert.ok(!JSON.stringify(saved.json).includes(SMTP.password));
   assert.equal((await anon('GET', '/v1/auth/instance')).json.email_recovery, true, 'recovery turns on without a restart');
   const row = (await h.ctx.db.query('SELECT config, secret_enc FROM integration_settings WHERE kind = $1', ['smtp'])).rows[0]!;
@@ -93,7 +93,7 @@ test('SMTP guards: email features that need it block removal', { skip }, () => w
 
 test('OIDC settings apply live, hide the secret and can be tested', { skip }, () => world({}, async ({ h, admin, anon }) => {
   const empty = (await admin('GET', '/v1/admin/settings/oidc')).json;
-  assert.deepEqual(empty, { source: 'none', configured: false, issuer: '', clientId: '', hasClientSecret: false, secretUnreadable: false, redirectUri: `${ORIGIN}/v1/auth/oidc/callback` });
+  assert.deepEqual(empty, { source: 'none', enabled: true, configured: false, issuer: '', clientId: '', hasClientSecret: false, secretUnreadable: false, redirectUri: `${ORIGIN}/v1/auth/oidc/callback` });
   assert.equal((await anon('GET', '/v1/auth/instance')).json.oidc, false);
   const body = { issuer: 'https://idp.test', clientId: 'driveloom', clientSecret: 'oidc-client-secret-value' };
   assert.equal((await admin('PUT', '/v1/admin/settings/oidc', { ...body, clientSecret: undefined })).status, 422, 'a first save needs the secret');
@@ -147,6 +147,56 @@ test('a saved secret that this instance key cannot open is reported, not fatal',
   assert.equal(other.smtpView().secretUnreadable, true); assert.equal(other.oidcView().secretUnreadable, true);
   assert.equal(other.smtpView().host, SMTP.host, 'non-secret fields survive');
   // Re-entering the secret repairs it.
-  await other.saveOidc({ settings: { issuer: 'https://idp.test', clientId: 'c' }, clientSecret: 'fresh' });
+  await other.saveOidc({ settings: { issuer: 'https://idp.test', clientId: 'c' }, clientSecret: 'fresh', enabled: undefined });
   assert.ok(other.oidc && !other.oidcView().secretUnreadable);
+}));
+
+test('the enable switch keeps saved fields while the feature is off', { skip }, () => world({}, async ({ h, admin, anon }) => {
+  // Save SMTP switched off on the first save: stored, but not in use.
+  const off = await admin('PUT', '/v1/admin/settings/smtp', { ...SMTP, enabled: false });
+  assert.equal(off.status, 200, JSON.stringify(off.json));
+  assert.equal(off.json.enabled, false); assert.equal(off.json.configured, false); assert.equal(off.json.hasPassword, true); assert.equal(off.json.host, SMTP.host);
+  assert.equal(h.ctx.mailer, null);
+  assert.equal((await anon('GET', '/v1/auth/instance')).json.email_recovery, false);
+  assert.equal((await admin('POST', '/v1/admin/settings/smtp/test')).json.code, 'smtp_not_configured');
+  // Turning it on needs no re-entry; the saved password is kept.
+  const on = await admin('PUT', '/v1/admin/settings/smtp', { host: SMTP.host, port: 587, security: 'starttls', username: 'mailer', from: SMTP.from, enabled: true });
+  assert.equal(on.json.enabled, true); assert.equal(on.json.configured, true); assert.equal(on.json.hasPassword, true);
+  assert.ok(h.ctx.mailer);
+  // Omitting `enabled` keeps the state.
+  await admin('PUT', '/v1/admin/settings/smtp', { ...SMTP, enabled: false });
+  assert.equal((await admin('PUT', '/v1/admin/settings/smtp', { host: 'other.example.test', port: 25, security: 'none', from: SMTP.from })).json.enabled, false);
+  assert.equal((await admin('PUT', '/v1/admin/settings/smtp', { ...SMTP, enabled: 'yes' })).status, 422);
+  // The state survives a restart.
+  const again = new Integrations(h.ctx.db, h.ctx.config.secretKey, ORIGIN, { smtp: null, oidc: null }, { mailer: () => h.mailer, oidc: () => h.oidc });
+  await again.load();
+  assert.equal(again.mailer, null); assert.equal(again.smtpView().enabled, false);
+
+  // OIDC the same way.
+  const body = { issuer: 'https://idp.test', clientId: 'driveloom', clientSecret: 'secret' };
+  const o = await admin('PUT', '/v1/admin/settings/oidc', { ...body, enabled: false });
+  assert.equal(o.json.enabled, false); assert.equal(o.json.configured, false); assert.equal(o.json.hasClientSecret, true);
+  assert.equal(h.ctx.oidc, null);
+  assert.equal((await anon('GET', '/v1/auth/instance')).json.oidc, false);
+  assert.equal((await admin('PUT', '/v1/admin/settings/oidc', { issuer: body.issuer, clientId: body.clientId, enabled: true })).json.configured, true);
+  assert.ok(h.ctx.oidc);
+}));
+
+test('turning a feature off is refused under the same guards as removing it', { skip }, () => world({}, async ({ h, admin }) => {
+  await admin('PUT', '/v1/admin/settings/smtp', SMTP);
+  (h.ctx.config as { emailSignInCodes: boolean }).emailSignInCodes = true;
+  assert.equal((await admin('PUT', '/v1/admin/settings/smtp', { ...SMTP, enabled: false })).json.code, 'email_features_enabled');
+  assert.ok(h.ctx.mailer);
+  (h.ctx.config as { emailSignInCodes: boolean }).emailSignInCodes = false;
+
+  const body = { issuer: 'https://idp.test', clientId: 'driveloom', clientSecret: 'secret' };
+  await admin('PUT', '/v1/admin/settings/oidc', body);
+  const uid = (await h.ctx.db.query<{ id: string }>("SELECT id FROM users WHERE email = 'user@example.test'")).rows[0]!.id;
+  await h.ctx.db.query('DELETE FROM password_credentials WHERE user_id = $1', [uid]);
+  await h.ctx.db.query('INSERT INTO oidc_identities (id, user_id, issuer, subject) VALUES ($1,$2,$3,$4)', [uuidv7(), uid, 'https://idp.test', 'sub']);
+  assert.equal((await admin('PUT', '/v1/admin/settings/oidc', { ...body, enabled: false })).json.code, 'oidc_identities_in_use');
+  assert.ok(h.ctx.oidc);
+  (h.ctx.config as { passwordEnabled: boolean }).passwordEnabled = false;
+  await h.ctx.db.query('DELETE FROM oidc_identities'); // no stranded accounts, but password sign-in is off
+  assert.equal((await admin('PUT', '/v1/admin/settings/oidc', { ...body, enabled: false })).json.code, 'password_login_disabled');
 }));

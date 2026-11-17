@@ -218,6 +218,15 @@ test('web client journeys', { skip, timeout: 180_000 }, async (t: TestContext) =
       assert.equal(await page.getByLabel('Password', { exact: true }).getAttribute('placeholder'), 'Saved. Leave blank to keep it.');
       assert.equal((await page.content()).includes('smtp-secret-value'), false);
       assert.deepEqual(await axe('admin email'), []);
+      // Switching it off keeps the fields saved.
+      await page.getByLabel('Turn on email').uncheck();
+      await page.getByRole('button', { name: 'Save email settings' }).click();
+      await page.getByText('Email is turned off (settings saved)').waitFor();
+      assert.equal(await page.getByLabel('Server').inputValue(), 'smtp.example.test');
+      assert.equal(await page.getByLabel('Turn on email').isChecked(), false);
+      await page.getByLabel('Turn on email').check();
+      await page.getByRole('button', { name: 'Save email settings' }).click();
+      await page.getByText('Email is on').waitFor();
 
       await page.goto(`${base}/#/admin/signin`);
       await page.getByRole('heading', { name: 'Single sign-on (OIDC)' }).waitFor();
