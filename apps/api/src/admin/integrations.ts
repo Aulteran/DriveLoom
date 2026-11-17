@@ -16,12 +16,12 @@ export type Source = 'env' | 'database' | 'none';
 export interface Factories { mailer(o: SmtpOptions): Mailer; oidc(c: OidcConfig): OidcProvider }
 export const defaultFactories: Factories = { mailer: createSmtpMailerFromOptions, oidc: createOidcProvider };
 
-interface SmtpRow { host: string; port: number; security: SmtpSecurity; username: string | null; from: string }
-interface OidcRow { issuer: string; clientId: string }
+interface SmtpRow { enabled?: boolean; host: string; port: number; security: SmtpSecurity; username: string | null; from: string }
+interface OidcRow { enabled?: boolean; issuer: string; clientId: string }
 type Stored<T> = { config: T; secret: string | null; unreadable: boolean };
 
-export interface SmtpView { source: Source; configured: boolean; host: string; port: number; security: SmtpSecurity; username: string; from: string; hasPassword: boolean; secretUnreadable: boolean }
-export interface OidcView { source: Source; configured: boolean; issuer: string; clientId: string; hasClientSecret: boolean; secretUnreadable: boolean; redirectUri: string }
+export interface SmtpView { source: Source; enabled: boolean; configured: boolean; host: string; port: number; security: SmtpSecurity; username: string; from: string; hasPassword: boolean; secretUnreadable: boolean }
+export interface OidcView { source: Source; enabled: boolean; configured: boolean; issuer: string; clientId: string; hasClientSecret: boolean; secretUnreadable: boolean; redirectUri: string }
 
 const SECURITY: readonly string[] = ['tls', 'starttls', 'none'];
 const clean = (v: unknown, what: string, max: number, required: boolean): string => {
@@ -30,8 +30,15 @@ const clean = (v: unknown, what: string, max: number, required: boolean): string
   return v.trim();
 };
 
-export function parseSmtp(body: unknown): { settings: SmtpRow; password: string | null | undefined } {
-  const b = obj(body, ['host', 'port', 'security', 'username', 'password', 'from']);
+/** Omitted keeps the current state (on for a first save); the saved settings are kept either way. */
+function parseEnabled(v: unknown): boolean | undefined {
+  if (v === undefined) return undefined;
+  if (typeof v !== 'boolean') throw invalid('enabled must be true or false.');
+  return v;
+}
+
+export function parseSmtp(body: unknown): { settings: SmtpRow; enabled: boolean | undefined; password: string | null | undefined } {
+  const b = obj(body, ['enabled', 'host', 'port', 'security', 'username', 'password', 'from']);
   const host = clean(b['host'], 'host', 253, true);
   if (!/^[A-Za-z0-9._-]+$|^\[[0-9A-Fa-f:.]+\]$/.test(host)) throw invalid('host must be a host name or IP address.');
   const port = b['port'];
@@ -46,18 +53,18 @@ export function parseSmtp(body: unknown): { settings: SmtpRow; password: string 
   if (b['password'] === undefined) password = undefined;
   else if (b['password'] === null || b['password'] === '') password = null;
   else password = clean(b['password'], 'password', 512, true);
-  return { settings: { host, port, security: security as SmtpSecurity, username: username || null, from }, password };
+  return { settings: { host, port, security: security as SmtpSecurity, username: username || null, from }, enabled: parseEnabled(b['enabled']), password };
 }
 
-export function parseOidc(body: unknown): { settings: OidcRow; clientSecret: string | undefined } {
-  const b = obj(body, ['issuer', 'clientId', 'clientSecret']);
+export function parseOidc(body: unknown): { settings: OidcRow; enabled: boolean | undefined; clientSecret: string | undefined } {
+  const b = obj(body, ['enabled', 'issuer', 'clientId', 'clientSecret']);
   const issuer = clean(b['issuer'], 'issuer', 512, true);
   let u: URL;
   try { u = new URL(issuer); } catch { throw invalid('issuer must be a URL.'); }
   if (u.protocol !== 'https:' || u.search || u.hash || u.username) throw invalid('issuer must be an https URL with no query, fragment or credentials.');
   const clientId = clean(b['clientId'], 'clientId', 255, true);
   const clientSecret = b['clientSecret'] === undefined || b['clientSecret'] === '' ? undefined : clean(b['clientSecret'], 'clientSecret', 1024, true);
-  return { settings: { issuer, clientId }, clientSecret };
+  return { settings: { issuer, clientId }, enabled: parseEnabled(b['enabled']), clientSecret };
 }
 
 /** Issuers compare without a trailing slash, as providers differ on it. */
@@ -106,24 +113,24 @@ export class Integrations {
 
   private rebuild(): void {
     if (this.env.smtp) this.mailer = createSmtpMailer(this.env.smtp.url, this.env.smtp.from);
-    else if (this.smtp && !this.smtp.unreadable) this.mailer = this.f.mailer(this.smtpOptions(this.smtp));
+    else if (this.smtp && this.smtp.config.enabled !== false && !this.smtp.unreadable) this.mailer = this.f.mailer(this.smtpOptions(this.smtp));
     else this.mailer = null;
     if (this.env.oidc) this.oidc = this.f.oidc(this.env.oidc);
-    else if (this.oidcStored && !this.oidcStored.unreadable && this.oidcStored.secret) this.oidc = this.f.oidc({ ...this.oidcStored.config, clientSecret: this.oidcStored.secret, redirectUri: this.redirectUri });
+    else if (this.oidcStored && this.oidcStored.config.enabled !== false && !this.oidcStored.unreadable && this.oidcStored.secret) this.oidc = this.f.oidc({ ...this.oidcStored.config, clientSecret: this.oidcStored.secret, redirectUri: this.redirectUri });
     else this.oidc = null;
   }
   private smtpOptions(s: Stored<SmtpRow>): SmtpOptions { return { ...s.config, password: s.secret }; }
 
   smtpView(): SmtpView {
-    if (this.env.smtp) return { source: 'env', configured: true, host: '', port: 0, security: 'starttls', username: '', from: this.env.smtp.from, hasPassword: false, secretUnreadable: false };
+    if (this.env.smtp) return { source: 'env', enabled: true, configured: true, host: '', port: 0, security: 'starttls', username: '', from: this.env.smtp.from, hasPassword: false, secretUnreadable: false };
     const s = this.smtp;
-    return { source: this.smtpSource, configured: !!this.mailer, host: s?.config.host ?? '', port: s?.config.port ?? 587, security: s?.config.security ?? 'starttls', username: s?.config.username ?? '', from: s?.config.from ?? '', hasPassword: !!s?.secret, secretUnreadable: !!s?.unreadable };
+    return { source: this.smtpSource, enabled: s ? s.config.enabled !== false : true, configured: !!this.mailer, host: s?.config.host ?? '', port: s?.config.port ?? 587, security: s?.config.security ?? 'starttls', username: s?.config.username ?? '', from: s?.config.from ?? '', hasPassword: !!s?.secret, secretUnreadable: !!s?.unreadable };
   }
   oidcView(): OidcView {
     const base = { redirectUri: this.redirectUri };
-    if (this.env.oidc) return { ...base, source: 'env', configured: true, issuer: this.env.oidc.issuer, clientId: this.env.oidc.clientId, hasClientSecret: true, secretUnreadable: false };
+    if (this.env.oidc) return { ...base, source: 'env', enabled: true, configured: true, issuer: this.env.oidc.issuer, clientId: this.env.oidc.clientId, hasClientSecret: true, secretUnreadable: false };
     const s = this.oidcStored;
-    return { ...base, source: this.oidcSource, configured: !!this.oidc, issuer: s?.config.issuer ?? '', clientId: s?.config.clientId ?? '', hasClientSecret: !!s?.secret, secretUnreadable: !!s?.unreadable };
+    return { ...base, source: this.oidcSource, enabled: s ? s.config.enabled !== false : true, configured: !!this.oidc, issuer: s?.config.issuer ?? '', clientId: s?.config.clientId ?? '', hasClientSecret: !!s?.secret, secretUnreadable: !!s?.unreadable };
   }
 
   static managed(): HttpProblem { return new HttpProblem(409, 'managed_by_environment', 'Conflict', 'This setting is configured by environment variables on the server; change it there.'); }
@@ -133,7 +140,7 @@ export class Integrations {
     const prev = this.smtp && !this.smtp.unreadable ? this.smtp.secret : null;
     let secret = input.password === undefined ? prev : input.password;
     if (!input.settings.username) secret = null; // a password without a username is never used
-    await this.write('smtp', input.settings, secret);
+    await this.write('smtp', { ...input.settings, enabled: input.enabled ?? this.smtp?.config.enabled ?? true }, secret);
     await this.load();
   }
   async clearSmtp(): Promise<void> {
@@ -146,7 +153,7 @@ export class Integrations {
     const prev = this.oidcStored && !this.oidcStored.unreadable ? this.oidcStored.secret : null;
     const secret = input.clientSecret ?? prev;
     if (!secret) throw invalid('clientSecret is required.');
-    await this.write('oidc', input.settings, secret);
+    await this.write('oidc', { ...input.settings, enabled: input.enabled ?? this.oidcStored?.config.enabled ?? true }, secret);
     await this.load();
   }
   async clearOidc(): Promise<void> {

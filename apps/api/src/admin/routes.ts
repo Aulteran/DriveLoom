@@ -51,6 +51,16 @@ export function adminRoutes(ctx: AuthContext): Route[] {
     return rows.filter((x) => keep === null || !sameIssuer(x.issuer, keep)).length;
   }
   const strandedProblem = (n: number) => new HttpProblem(409, 'oidc_identities_in_use', 'Conflict', `${n} account${n === 1 ? '' : 's'} can sign in only through the current identity provider. Give them a password or passkey first.`);
+  /** What must hold before email goes away (removed or turned off). */
+  const guardSmtpOff = () => {
+    if (ctx.config.requireEmailVerification || ctx.config.emailSignInCodes) throw new HttpProblem(409, 'email_features_enabled', 'Conflict', 'Email verification or email sign-in codes are enabled by the server environment and need SMTP. Disable them there first.');
+  };
+  /** What must hold before single sign-on goes away (removed or turned off). */
+  const guardOidcOff = async () => {
+    if (!ctx.config.passwordEnabled) throw new HttpProblem(409, 'password_login_disabled', 'Conflict', 'Password sign-in is disabled, so OIDC is the only way in. Enable password sign-in first.');
+    const n = await stranded(null);
+    if (n) throw strandedProblem(n);
+  };
   const failure = (code: string, title: string, e: unknown) => new HttpProblem(502, code, title, (e instanceof Error ? e.message : String(e)).slice(0, 300));
 
   return [
@@ -124,15 +134,18 @@ export function adminRoutes(ctx: AuthContext): Route[] {
     { method: 'PUT', path: '/v1/admin/settings/smtp', async handler(r) {
       const p = sensitive(r);
       const input = parseSmtp(r.body);
-      await integ().saveSmtp(input);
-      await audit(ctx.db, p.userId, 'admin.smtp_changed', null, { host: input.settings.host, port: input.settings.port, security: input.settings.security, from: input.settings.from, username: !!input.settings.username, passwordChanged: input.password !== undefined }, ctx.now());
+      const i = integ();
+      if (i.smtpSource === 'env') throw Integrations.managed();
+      if (input.enabled === false && i.smtpView().enabled) guardSmtpOff(); // turning it off, not editing a disabled one
+      await i.saveSmtp(input);
+      await audit(ctx.db, p.userId, 'admin.smtp_changed', null, { enabled: i.smtpView().enabled, host: input.settings.host, port: input.settings.port, security: input.settings.security, from: input.settings.from, username: !!input.settings.username, passwordChanged: input.password !== undefined }, ctx.now());
       return { status: 200, body: integ().smtpView() };
     } },
     { method: 'DELETE', path: '/v1/admin/settings/smtp', async handler(r) {
       const p = sensitive(r);
       const i = integ();
       if (i.smtpSource === 'env') await i.clearSmtp(); // refuses with managed_by_environment
-      if (ctx.config.requireEmailVerification || ctx.config.emailSignInCodes) throw new HttpProblem(409, 'email_features_enabled', 'Conflict', 'Email verification or email sign-in codes are enabled by the server environment and need SMTP. Disable them there first.');
+      guardSmtpOff();
       await i.clearSmtp();
       await audit(ctx.db, p.userId, 'admin.smtp_removed', null, {}, ctx.now());
       return { status: 204 };
@@ -141,7 +154,7 @@ export function adminRoutes(ctx: AuthContext): Route[] {
       const p = sensitive(r);
       await rateLimit(ctx, `smtp-test:${p.userId}`, 10, 10 * 60_000);
       const mailer = integ().mailer;
-      if (!mailer) throw new HttpProblem(409, 'smtp_not_configured', 'Conflict', 'Save SMTP settings first.');
+      if (!mailer) throw new HttpProblem(409, 'smtp_not_configured', 'Conflict', 'Email is not turned on. Save the settings with email enabled first.');
       const to = (await ctx.db.query<{ email: string }>('SELECT email FROM users WHERE id = $1', [p.userId])).rows[0]!.email;
       try { await mailer.send(to, 'DriveLoom test message', 'This is a test message from your DriveLoom instance. Email delivery works.'); }
       catch (e) { throw failure('smtp_test_failed', 'The test message could not be sent', e); }
@@ -152,20 +165,19 @@ export function adminRoutes(ctx: AuthContext): Route[] {
     { method: 'PUT', path: '/v1/admin/settings/oidc', async handler(r) {
       const p = sensitive(r);
       const input = parseOidc(r.body);
-      if (integ().oidcSource === 'env') throw Integrations.managed();
-      const n = await stranded(input.settings.issuer);
-      if (n) throw strandedProblem(n);
-      await integ().saveOidc(input);
-      await audit(ctx.db, p.userId, 'admin.oidc_changed', null, { issuer: input.settings.issuer, clientId: input.settings.clientId, secretChanged: input.clientSecret !== undefined }, ctx.now());
+      const i = integ();
+      if (i.oidcSource === 'env') throw Integrations.managed();
+      if (input.enabled === false) { if (i.oidcView().enabled) await guardOidcOff(); }
+      else { const n = await stranded(input.settings.issuer); if (n) throw strandedProblem(n); }
+      await i.saveOidc(input);
+      await audit(ctx.db, p.userId, 'admin.oidc_changed', null, { enabled: i.oidcView().enabled, issuer: input.settings.issuer, clientId: input.settings.clientId, secretChanged: input.clientSecret !== undefined }, ctx.now());
       return { status: 200, body: integ().oidcView() };
     } },
     { method: 'DELETE', path: '/v1/admin/settings/oidc', async handler(r) {
       const p = sensitive(r);
       const i = integ();
       if (i.oidcSource === 'env') await i.clearOidc(); // refuses with managed_by_environment
-      if (!ctx.config.passwordEnabled) throw new HttpProblem(409, 'password_login_disabled', 'Conflict', 'Password sign-in is disabled, so OIDC is the only way in. Enable password sign-in first.');
-      const n = await stranded(null);
-      if (n) throw strandedProblem(n);
+      await guardOidcOff();
       await i.clearOidc();
       await audit(ctx.db, p.userId, 'admin.oidc_removed', null, {}, ctx.now());
       return { status: 204 };
@@ -174,7 +186,7 @@ export function adminRoutes(ctx: AuthContext): Route[] {
       const p = sensitive(r);
       await rateLimit(ctx, `oidc-test:${p.userId}`, 10, 10 * 60_000);
       const provider = integ().oidc;
-      if (!provider?.discover) throw new HttpProblem(409, 'oidc_not_configured', 'Conflict', 'Save OIDC settings first.');
+      if (!provider?.discover) throw new HttpProblem(409, 'oidc_not_configured', 'Conflict', 'Single sign-on is not turned on. Save the settings with it enabled first.');
       try { return { status: 200, body: await provider.discover() }; }
       catch (e) { throw failure('oidc_test_failed', 'The identity provider could not be reached', e); }
     } },

@@ -147,12 +147,17 @@ const removeButton = (label, path, confirm, done) => h('button', { type: 'button
   try { await withFreshSignIn(() => del(path)); await refreshInstance(); render(); toast(done); } catch (err) { toast(err.message); btn.disabled = false; }
 } }, label);
 
+/** The switch at the top of an integration page. Off keeps the fields saved but the feature unused. */
+const enableToggle = (c, label, hint) => h('div', { class: 'field' },
+  h('label', { class: 'row' }, h('input', { type: 'checkbox', name: 'enabled', checked: c.enabled }), h('strong', {}, label)),
+  h('div', { class: 'hint' }, hint));
+
 async function email() {
   const c = await get('/v1/admin/settings/smtp');
   const head = [
     h('h2', {}, 'Email (SMTP)'),
     h('p', { class: 'muted' }, 'Lets DriveLoom send account recovery, email verification and sign-in codes. Without it, those features are off and an operator resets passwords from the command line.'),
-    h('p', {}, h('span', { class: `badge ${c.configured ? 'accent' : 'warn'}` }, c.configured ? 'Email is on' : c.secretUnreadable ? 'Password needs re-entering' : 'Email is off')),
+    h('p', {}, h('span', { class: `badge ${c.configured ? 'accent' : 'warn'}` }, c.configured ? 'Email is on' : c.source === 'database' && !c.enabled ? 'Email is turned off (settings saved)' : c.secretUnreadable ? 'Password needs re-entering' : 'Email is off')),
   ];
   if (c.source === 'env') {
     return h('section', { class: 'panel' }, ...head, envNotice('Email', 'DRIVELOOM_SMTP_URL and DRIVELOOM_SMTP_FROM'),
@@ -160,6 +165,7 @@ async function email() {
   }
   return form({ class: 'panel' }, [
     ...head,
+    enableToggle(c, 'Turn on email', 'Off keeps everything below saved but sends no email, so recovery, verification and sign-in codes stay unavailable.'),
     c.secretUnreadable ? h('div', { class: 'error' }, 'The saved password cannot be read with this server\'s secret key (for example after a restore onto a different key). Enter it again and save.') : null,
     h('div', { class: 'grid' },
       field('Server', h('input', { name: 'host', value: c.host, required: true, maxlength: 253, autocomplete: 'off', placeholder: 'smtp.example.com' })),
@@ -172,11 +178,11 @@ async function email() {
     field('From address', h('input', { name: 'from', value: c.from, required: true, maxlength: 254, placeholder: 'DriveLoom <noreply@example.com>' })),
     h('div', { class: 'row' },
       h('button', { type: 'submit' }, 'Save email settings'),
-      c.configured ? probe('Send a test message to me', '/v1/admin/settings/smtp/test', (r) => `Test message sent to ${r.sentTo}.`) : null,
+      c.configured && c.enabled ? probe('Send a test message to me', '/v1/admin/settings/smtp/test', (r) => `Test message sent to ${r.sentTo}.`) : null,
       c.source === 'database' ? removeButton('Remove email settings', '/v1/admin/settings/smtp', 'Remove the saved email settings? Email recovery, verification and sign-in codes stop working.', 'Email settings removed.') : null),
     h('p', { class: 'small muted' }, 'The password is stored encrypted and is never shown again. A test message goes to your own address using the saved settings.'),
   ], async (v) => {
-    const body = { host: v.host.trim(), port: Number(v.port), security: v.security, username: v.username.trim(), from: v.from.trim() };
+    const body = { enabled: !!v.enabled, host: v.host.trim(), port: Number(v.port), security: v.security, username: v.username.trim(), from: v.from.trim() };
     if (v.clearPassword) body.password = null; else if (v.password) body.password = v.password;
     await withFreshSignIn(() => put('/v1/admin/settings/smtp', body));
     await refreshInstance();
@@ -196,7 +202,7 @@ async function signin() {
   const head = [
     h('h2', {}, 'Single sign-on (OIDC)'),
     h('p', { class: 'muted' }, 'Lets people sign in with an OpenID Connect provider such as Authentik, Keycloak or Google. Accounts are linked by the provider\'s identity, never by email alone.'),
-    h('p', {}, h('span', { class: `badge ${c.configured ? 'accent' : 'warn'}` }, c.configured ? 'Single sign-on is on' : c.secretUnreadable ? 'Client secret needs re-entering' : 'Single sign-on is off')),
+    h('p', {}, h('span', { class: `badge ${c.configured ? 'accent' : 'warn'}` }, c.configured ? 'Single sign-on is on' : c.source === 'database' && !c.enabled ? 'Single sign-on is turned off (settings saved)' : c.secretUnreadable ? 'Client secret needs re-entering' : 'Single sign-on is off')),
   ];
   if (c.source === 'env') {
     return h('section', { class: 'panel' }, ...head, envNotice('Single sign-on', 'DRIVELOOM_OIDC_ISSUER, DRIVELOOM_OIDC_CLIENT_ID and DRIVELOOM_OIDC_CLIENT_SECRET'),
@@ -205,6 +211,7 @@ async function signin() {
   }
   return form({ class: 'panel' }, [
     ...head,
+    enableToggle(c, 'Turn on single sign-on', 'Off keeps everything below saved but hides the sign-in button and refuses provider sign-ins.'),
     c.secretUnreadable ? h('div', { class: 'error' }, 'The saved client secret cannot be read with this server\'s secret key (for example after a restore onto a different key). Enter it again and save.') : null,
     redirect,
     field('Issuer URL', h('input', { name: 'issuer', type: 'url', value: c.issuer, required: true, maxlength: 512, autocomplete: 'off', placeholder: 'https://auth.example.com/application/o/driveloom/' }), 'An https address. DriveLoom reads the provider\'s discovery document from it.'),
@@ -213,11 +220,11 @@ async function signin() {
       field('Client secret', h('input', { name: 'clientSecret', type: 'password', autocomplete: 'new-password', maxlength: 1024, required: !c.hasClientSecret, placeholder: c.hasClientSecret ? 'Saved. Leave blank to keep it.' : '' }))),
     h('div', { class: 'row' },
       h('button', { type: 'submit' }, 'Save sign-on settings'),
-      c.configured ? probe('Check the provider', '/v1/admin/settings/oidc/test', (r) => `Provider reachable: ${r.issuer}`) : null,
+      c.configured && c.enabled ? probe('Check the provider', '/v1/admin/settings/oidc/test', (r) => `Provider reachable: ${r.issuer}`) : null,
       c.source === 'database' ? removeButton('Remove sign-on', '/v1/admin/settings/oidc', 'Remove single sign-on? People who sign in only through the provider lose access until they have a password or passkey.', 'Single sign-on removed.') : null),
     h('p', { class: 'small muted' }, 'Changing the issuer is refused while any account depends on the current provider and has no password or passkey. The client secret is stored encrypted and never shown again.'),
   ], async (v) => {
-    const body = { issuer: v.issuer.trim(), clientId: v.clientId.trim() };
+    const body = { enabled: !!v.enabled, issuer: v.issuer.trim(), clientId: v.clientId.trim() };
     if (v.clientSecret) body.clientSecret = v.clientSecret;
     await withFreshSignIn(() => put('/v1/admin/settings/oidc', body));
     await refreshInstance();

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: DriveLoom API
-  version: 0.8.0
+  version: 0.9.0
   summary: Versioned contract for the self-hosted DriveLoom API.
   description: >
     Contract for the self-hosted DriveLoom API under the compatibility policy
@@ -1760,10 +1760,11 @@ components:
       description: '`mpg_us` uses the US gallon, `mpg_imp` the imperial gallon.'
     SmtpSettings:
       type: object
-      required: [source, configured, host, port, security, username, from, hasPassword, secretUnreadable]
+      required: [source, enabled, configured, host, port, security, username, from, hasPassword, secretUnreadable]
       properties:
         source: { type: string, enum: [env, database, none] }
-        configured: { type: boolean }
+        enabled: { type: boolean, description: 'The administrator switch. Off keeps the saved fields but the feature is not in use. Always true for `env`.' }
+        configured: { type: boolean, description: 'The feature is actually in use: enabled, complete and readable.' }
         host: { type: string }
         port: { type: integer }
         security: { type: string, enum: [tls, starttls, none] }
@@ -1776,6 +1777,7 @@ components:
       additionalProperties: false
       required: [host, port, security, from]
       properties:
+        enabled: { type: boolean, description: 'Omit to keep the current state (on for a first save). Turning off is refused under the same guards as removal.' }
         host: { type: string, maxLength: 253 }
         port: { type: integer, minimum: 1, maximum: 65535 }
         security: { type: string, enum: [tls, starttls, none] }
@@ -1788,10 +1790,11 @@ components:
       properties: { sentTo: { type: string } }
     OidcSettings:
       type: object
-      required: [source, configured, issuer, clientId, hasClientSecret, secretUnreadable, redirectUri]
+      required: [source, enabled, configured, issuer, clientId, hasClientSecret, secretUnreadable, redirectUri]
       properties:
         source: { type: string, enum: [env, database, none] }
-        configured: { type: boolean }
+        enabled: { type: boolean, description: 'The administrator switch. Off keeps the saved fields but the feature is not in use. Always true for `env`.' }
+        configured: { type: boolean, description: 'The feature is actually in use: enabled, complete and readable.' }
         issuer: { type: string }
         clientId: { type: string }
         hasClientSecret: { type: boolean }
@@ -1802,6 +1805,7 @@ components:
       additionalProperties: false
       required: [issuer, clientId]
       properties:
+        enabled: { type: boolean, description: 'Omit to keep the current state (on for a first save). Turning off is refused under the same guards as removal.' }
         issuer: { type: string, maxLength: 512, description: 'An https URL.' }
         clientId: { type: string, maxLength: 255 }
         clientSecret: { type: string, maxLength: 1024, description: 'Required the first time; omit to keep the stored secret.' }
