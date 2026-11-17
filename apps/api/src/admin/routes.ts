@@ -1,4 +1,4 @@
-// Instance administration: users, invitations, default units and the audit log. Admins manage
+// Instance administration: users, invitations, default units, SMTP and OIDC settings and the audit log. Admins manage
 // accounts, never vehicle data; nothing here reads a vehicle or a fuel record.
 import type { HttpRequest, Route } from '../http/app.ts';
 import { HttpProblem } from '../http/problem.ts';
@@ -7,7 +7,8 @@ import { requireInstanceAdmin } from '../identity.ts';
 import { isUuid, uuidv7 } from '../ids.ts';
 import type { Id } from '../types.ts';
 import { withTx } from '../db.ts';
-import { audit, normaliseEmail, type AuthContext } from '../auth/context.ts';
+import { audit, normaliseEmail, rateLimit, type AuthContext } from '../auth/context.ts';
+import { Integrations, parseOidc, parseSmtp, sameIssuer } from './integrations.ts';
 import { randomToken, sha256Hex } from '../auth/crypto.ts';
 import { requireFresh, revokeAll } from '../auth/sessions.ts';
 import { getInstanceDefaults, parseUnits, setInstanceDefaults } from '../preferences.ts';
@@ -34,6 +35,23 @@ export function adminRoutes(ctx: AuthContext): Route[] {
       if (!left.rowCount) throw new HttpProblem(409, 'last_admin', 'Conflict', 'The instance must keep an active administrator.');
     });
   }
+
+  const integ = (): Integrations => {
+    if (!ctx.integrations) throw new HttpProblem(501, 'settings_unavailable', 'Not implemented', 'This server does not manage SMTP or OIDC settings.');
+    return ctx.integrations;
+  };
+  /** Sensitive changes need a recent sign-in, like invitations do. */
+  const sensitive = (r: HttpRequest) => { const p = admin(r); requireFresh(ctx, p); return p; };
+  /** Accounts whose only primary sign-in method is an OIDC identity from an issuer other than `keep`. */
+  async function stranded(keep: string | null): Promise<number> {
+    const { rows } = await ctx.db.query<{ issuer: string }>(
+      `SELECT o.issuer FROM oidc_identities o JOIN users u ON u.id = o.user_id
+        WHERE u.status <> 'deleted' AND NOT EXISTS (SELECT 1 FROM password_credentials p WHERE p.user_id = o.user_id)
+          AND NOT EXISTS (SELECT 1 FROM passkeys k WHERE k.user_id = o.user_id)`);
+    return rows.filter((x) => keep === null || !sameIssuer(x.issuer, keep)).length;
+  }
+  const strandedProblem = (n: number) => new HttpProblem(409, 'oidc_identities_in_use', 'Conflict', `${n} account${n === 1 ? '' : 's'} can sign in only through the current identity provider. Give them a password or passkey first.`);
+  const failure = (code: string, title: string, e: unknown) => new HttpProblem(502, code, title, (e instanceof Error ? e.message : String(e)).slice(0, 300));
 
   return [
     { method: 'GET', path: '/v1/admin/users', async handler(r) {
@@ -100,6 +118,65 @@ export function adminRoutes(ctx: AuthContext): Route[] {
       const next = await setInstanceDefaults(ctx.db, patch);
       await audit(ctx.db, p.userId, 'admin.unit_defaults_changed', null, { ...patch }, ctx.now());
       return { status: 200, body: next };
+    } },
+    // SMTP and OIDC. Secrets are write-only: the views say only whether one is stored.
+    { method: 'GET', path: '/v1/admin/settings/smtp', async handler(r) { admin(r); return { status: 200, body: integ().smtpView() }; } },
+    { method: 'PUT', path: '/v1/admin/settings/smtp', async handler(r) {
+      const p = sensitive(r);
+      const input = parseSmtp(r.body);
+      await integ().saveSmtp(input);
+      await audit(ctx.db, p.userId, 'admin.smtp_changed', null, { host: input.settings.host, port: input.settings.port, security: input.settings.security, from: input.settings.from, username: !!input.settings.username, passwordChanged: input.password !== undefined }, ctx.now());
+      return { status: 200, body: integ().smtpView() };
+    } },
+    { method: 'DELETE', path: '/v1/admin/settings/smtp', async handler(r) {
+      const p = sensitive(r);
+      const i = integ();
+      if (i.smtpSource === 'env') await i.clearSmtp(); // refuses with managed_by_environment
+      if (ctx.config.requireEmailVerification || ctx.config.emailSignInCodes) throw new HttpProblem(409, 'email_features_enabled', 'Conflict', 'Email verification or email sign-in codes are enabled by the server environment and need SMTP. Disable them there first.');
+      await i.clearSmtp();
+      await audit(ctx.db, p.userId, 'admin.smtp_removed', null, {}, ctx.now());
+      return { status: 204 };
+    } },
+    { method: 'POST', path: '/v1/admin/settings/smtp/test', async handler(r) {
+      const p = sensitive(r);
+      await rateLimit(ctx, `smtp-test:${p.userId}`, 10, 10 * 60_000);
+      const mailer = integ().mailer;
+      if (!mailer) throw new HttpProblem(409, 'smtp_not_configured', 'Conflict', 'Save SMTP settings first.');
+      const to = (await ctx.db.query<{ email: string }>('SELECT email FROM users WHERE id = $1', [p.userId])).rows[0]!.email;
+      try { await mailer.send(to, 'DriveLoom test message', 'This is a test message from your DriveLoom instance. Email delivery works.'); }
+      catch (e) { throw failure('smtp_test_failed', 'The test message could not be sent', e); }
+      await audit(ctx.db, p.userId, 'admin.smtp_tested', null, {}, ctx.now());
+      return { status: 200, body: { sentTo: to } };
+    } },
+    { method: 'GET', path: '/v1/admin/settings/oidc', async handler(r) { admin(r); return { status: 200, body: integ().oidcView() }; } },
+    { method: 'PUT', path: '/v1/admin/settings/oidc', async handler(r) {
+      const p = sensitive(r);
+      const input = parseOidc(r.body);
+      if (integ().oidcSource === 'env') throw Integrations.managed();
+      const n = await stranded(input.settings.issuer);
+      if (n) throw strandedProblem(n);
+      await integ().saveOidc(input);
+      await audit(ctx.db, p.userId, 'admin.oidc_changed', null, { issuer: input.settings.issuer, clientId: input.settings.clientId, secretChanged: input.clientSecret !== undefined }, ctx.now());
+      return { status: 200, body: integ().oidcView() };
+    } },
+    { method: 'DELETE', path: '/v1/admin/settings/oidc', async handler(r) {
+      const p = sensitive(r);
+      const i = integ();
+      if (i.oidcSource === 'env') await i.clearOidc(); // refuses with managed_by_environment
+      if (!ctx.config.passwordEnabled) throw new HttpProblem(409, 'password_login_disabled', 'Conflict', 'Password sign-in is disabled, so OIDC is the only way in. Enable password sign-in first.');
+      const n = await stranded(null);
+      if (n) throw strandedProblem(n);
+      await i.clearOidc();
+      await audit(ctx.db, p.userId, 'admin.oidc_removed', null, {}, ctx.now());
+      return { status: 204 };
+    } },
+    { method: 'POST', path: '/v1/admin/settings/oidc/test', async handler(r) {
+      const p = sensitive(r);
+      await rateLimit(ctx, `oidc-test:${p.userId}`, 10, 10 * 60_000);
+      const provider = integ().oidc;
+      if (!provider?.discover) throw new HttpProblem(409, 'oidc_not_configured', 'Conflict', 'Save OIDC settings first.');
+      try { return { status: 200, body: await provider.discover() }; }
+      catch (e) { throw failure('oidc_test_failed', 'The identity provider could not be reached', e); }
     } },
     { method: 'GET', path: '/v1/admin/audit', async handler(r) {
       admin(r);

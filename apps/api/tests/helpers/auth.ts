@@ -6,6 +6,7 @@ import { totpCode, totpStep } from '../../src/auth/crypto.ts';
 import * as acct from '../../src/auth/accounts.ts';
 import type { AuthContext, OidcClaims, OidcProvider } from '../../src/auth/context.ts';
 import type { Principal } from '../../src/identity.ts';
+import { Integrations, type IntegrationEnv } from '../../src/admin/integrations.ts';
 
 export const PW = 'correct horse battery staple';
 export const meta = { ip: '198.51.100.1', userAgent: 'test' };
@@ -15,6 +16,7 @@ export class FakeOidc implements OidcProvider {
   last: { state: string; nonce: string; codeVerifier: string } | null = null;
   /** Set to make the provider reject the exchange (bad signature, wrong nonce, ...). */
   reject = false;
+  async discover() { return { issuer: 'https://idp.test', authorizationEndpoint: 'https://idp.test/auth' }; }
   async authorizationUrl(a: { state: string; nonce: string; codeVerifier: string }) { this.last = a; return `https://idp.test/auth?state=${a.state}`; }
   async exchange(a: { state: string; nonce: string; codeVerifier: string }) {
     if (this.reject || !this.last || a.nonce !== this.last.nonce || a.codeVerifier !== this.last.codeVerifier) throw new Error('bad id token');
@@ -25,14 +27,19 @@ export class FakeOidc implements OidcProvider {
 export interface Harness { ctx: AuthContext; mailer: MemoryMailer; oidc: FakeOidc; clock: { t: number }; auth: ReturnType<typeof authenticator>; drop(): Promise<void>; skip: false }
 
 /** Returns null when no database is configured so tests can skip. */
-export async function harness(over: Partial<AuthConfig> = {}, opts: { mail?: boolean } = {}): Promise<Harness | null> {
+export async function harness(over: Partial<AuthConfig> = {}, opts: { mail?: boolean; integrations?: boolean; integrationEnv?: IntegrationEnv } = {}): Promise<Harness | null> {
   const t = await createTestDb();
   if (!t) return null;
   const clock = { t: Date.parse('2026-11-12T10:00:00Z') };
   const mailer = new MemoryMailer();
   const oidc = new FakeOidc();
   const config = defaultConfig({ publicOrigin: ORIGIN, secretKey: Buffer.alloc(32, 7), registration: 'open', secureCookies: true, ...over });
-  const ctx: AuthContext = { db: t.pool, config, mailer: opts.mail === false ? null : mailer, oidc, now: () => new Date(clock.t) };
+  // With `integrations`, SMTP and OIDC start unconfigured and follow the administrator's saved settings, as in server.ts.
+  const integrations = opts.integrations ? new Integrations(t.pool, config.secretKey, ORIGIN, opts.integrationEnv ?? { smtp: null, oidc: null }, { mailer: () => mailer, oidc: () => oidc }) : undefined;
+  await integrations?.load();
+  const ctx: AuthContext = integrations
+    ? { db: t.pool, config, integrations, get mailer() { return integrations.mailer; }, get oidc() { return integrations.oidc; }, now: () => new Date(clock.t) }
+    : { db: t.pool, config, mailer: opts.mail === false ? null : mailer, oidc, now: () => new Date(clock.t) };
   return { ctx, mailer, oidc, clock, auth: authenticator(ctx), drop: () => t.drop(), skip: false };
 }
 
