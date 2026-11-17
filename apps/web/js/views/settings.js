@@ -1,10 +1,10 @@
 // Settings: display preferences, profile, and security (password, second
 // factor, passkeys, identity providers, sessions, account deletion).
 import { get, post, put, patch, del, setCsrf, passkeysSupported, createPasskey } from '../api.js';
-import { h, form, field, select, confirmDialog, toast, errorBox, showError } from '../ui.js';
+import { h, form, field, confirmDialog, toast, errorBox, showError } from '../ui.js';
 import { go, render, refreshSession, state } from '../main.js';
 import { dateTime } from '../format.js';
-import { currencyOptions } from './vehicles.js';
+import { unitFields, UNIT_KEYS } from '../units.js';
 import { icon } from '../icons.js';
 
 const SECTIONS = [['preferences', 'Preferences', 'sliders'], ['profile', 'Profile', 'user'], ['security', 'Security', 'key']];
@@ -58,15 +58,13 @@ function preferences() {
   const p = state.prefs;
   return form({ class: 'panel' }, [
     h('h2', {}, 'Display preferences'),
-    h('p', { class: 'muted' }, 'These change how values are shown and compared. Nothing you have recorded is changed.'),
-    h('div', { class: 'grid' },
-      field('Distance', select('distanceUnit', [['km', 'Kilometres'], ['mi', 'Miles']], p.distanceUnit)),
-      field('Fuel volume', select('volumeUnit', [['l', 'Litres'], ['gal_us', 'US gallons'], ['gal_imp', 'Imperial gallons']], p.volumeUnit)),
-      field('Fuel economy', select('economyUnit', [['l_per_100km', 'L/100 km'], ['km_per_l', 'km/L'], ['mpg_us', 'mpg (US)'], ['mpg_imp', 'mpg (imperial)']], p.economyUnit)),
-      field('Currency', select('currency', currencyOptions(p.currency), p.currency), 'Default for new vehicles, and the currency friend costs are compared in.')),
+    h('p', { class: 'muted' }, 'These change how values are shown and compared. Nothing you have recorded is changed. "Instance default" follows the units your administrator chose, including later changes.'),
+    unitFields(p, { defaults: p.instanceDefaults, inherited: p.inherited, hints: { currency: 'Default for new vehicles, and the currency friend costs are compared in.' } }),
     h('button', { type: 'submit' }, 'Save preferences'),
   ], async (v) => {
-    state.prefs = await put('/v1/preferences', v);
+    // An empty value goes back to following the instance default.
+    state.prefs = await put('/v1/preferences', Object.fromEntries(UNIT_KEYS.map((k) => [k, v[k] || null])));
+    render();
     return 'Preferences saved.';
   });
 }

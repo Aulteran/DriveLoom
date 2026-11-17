@@ -151,7 +151,8 @@ test('units: explicit at entry, originals kept, display follows the viewer', { s
   assert.equal(mine.interval.economy.unit, 'l_per_100km', "another member's preference is unaffected");
   assert.equal((await app.call(viewer, 'PUT', '/v1/preferences', { economyUnit: 'furlongs' })).status, 422);
   assert.equal((await app.call(viewer, 'PUT', '/v1/preferences', { currency: 'ZZZ' })).status, 422);
-  assert.deepEqual((await app.call(stranger, 'GET', '/v1/preferences')).json, { distanceUnit: 'km', volumeUnit: 'l', economyUnit: 'l_per_100km', currency: 'USD' });
+  const builtIn = { distanceUnit: 'km', volumeUnit: 'l', economyUnit: 'l_per_100km', currency: 'USD' };
+  assert.deepEqual((await app.call(stranger, 'GET', '/v1/preferences')).json, { ...builtIn, instanceDefaults: builtIn, inherited: ['distanceUnit', 'volumeUnit', 'economyUnit', 'currency'] });
 });
 
 test('costs: reporting currency, explicit rate for foreign purchases, spend and cost per distance', { skip }, async () => {
