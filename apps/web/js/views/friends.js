@@ -3,7 +3,7 @@
 import { get, post, put, del } from '../api.js';
 import { h, form, field, select, confirmDialog, toast } from '../ui.js';
 import { render } from '../main.js';
-import { UNIT, money, date } from '../format.js';
+import { UNIT, money, date, vehicleLabel } from '../format.js';
 
 const WINDOWS = [['30d', 'Last 30 days'], ['90d', 'Last 90 days'], ['365d', 'Last 12 months'], ['all', 'All time']];
 const COST_REASON = { currency_mismatch: 'different currency', no_cost_data: 'no cost data' };
@@ -19,8 +19,6 @@ function people(title, rows, actions, empty) {
       ? h('ul', { class: 'list' }, rows.map((r) => h('li', { class: 'row spread' }, person(r), h('div', { class: 'row' }, actions(r)))))
       : h('p', { class: 'muted' }, empty));
 }
-
-const vehicleLabel = (v) => [v.name, [v.year, v.make, v.model].filter(Boolean).join(' ')].filter(Boolean).join(' · ');
 
 function comparisonTable(data) {
   const rows = [

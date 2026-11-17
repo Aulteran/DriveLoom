@@ -15,7 +15,7 @@
 | Area | Requirements and intended behavior |
 | --- | --- |
 | Accounts | Password login. Instance-admin-configurable email codes after password login when SMTP is configured. Authenticator-app TOTP, passkeys and optional OIDC. Users can enroll multiple methods and choose an eligible sign-in path. Password verification factors and primary sign-in paths have distinct roles. |
-| Vehicles | Multi-user shared vehicles with permissioned access, fuel and odometer history, vehicle images and analytics. Vehicle membership and friend comparison access are separate. |
+| Vehicles | Multi-user shared vehicles with permissioned access, fuel and odometer history, vehicle images and analytics. The nickname is optional; a licence plate (state or province and number) and VIN may be added, identify an unnamed vehicle in the UI, and are visible only to the vehicle's members, never to friends. Vehicle membership and friend comparison access are separate. |
 | Measurement | Miles and kilometers, liters and gallons, explicit unit selection at entry and account-wide display preferences for viewing and comparing. Keep the physical odometer unit separate. Handle rounding, backdated records, invalid odometer readings and partial-fill boundaries. |
 | Comparisons | Users on the same instance can compare their vehicles’ efficiency in the viewer’s chosen units. Recommended behavior is mutual friendship and explicit opt-in per vehicle, aggregate-only exposure and visible time window. |
 | Portability | Vehicle-level export and import across instances, including CSV. JSON is a candidate companion format. Instance administrators can back up and restore the complete instance, including stored images and data. Built-in backup encryption is deferred. |

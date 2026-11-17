@@ -127,7 +127,7 @@ Decisions are in [ADR 0004](adr/0004-friends-comparison.md). Code is in `apps/ap
 - **Friendship** is mutual and separate from vehicle membership. `POST /v1/friends {email}` creates a pending request; the addressee accepts with `PUT /v1/friends/{id}`, and asking back also accepts. Either side removes it with `DELETE`. A friendship grants no access to any vehicle route.
 - **Opt-in** is per vehicle, owner-only and off by default: `PUT /v1/vehicles/{id}/comparison {enabled}`.
 - **The grant** is accepted friendship, plus the friend owns the vehicle, plus opt-in, plus both accounts active and the vehicle not archived. It is evaluated in the query behind every response; nothing is cached, so opting out or unfriending takes effect on the next request.
-- **What crosses.** The friend's display name, the vehicle's name, make, model and year, and one economy figure for the window, rounded to one decimal, in the viewer's units. No ids, records, dates, distances, volumes or counts.
+- **What crosses.** The friend's display name, the vehicle's optional nickname, make, model and year, and one economy figure for the window, rounded to one decimal, in the viewer's units. No ids, records, dates, distances, volumes or counts. Licence plate, state or province and VIN never cross: they are private to the vehicle's members, so a friend's unnamed vehicle is labelled by year, make and model only.
 - **Windows** are fixed (`30d`, `90d`, `365d`, `all`) and identical for every vehicle in a response. The response states the window.
 - **Costs** compare only when the vehicle's reporting currency equals the viewer's currency preference; otherwise `costPerDistance` is null with `costUnavailableReason: currency_mismatch`. No conversion is attempted.
 
