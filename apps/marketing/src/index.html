@@ -21,8 +21,8 @@
   <meta name="twitter:image" content="{{siteUrl}}og-image.png">
   <meta name="twitter:image:alt" content="{{name}}: a self-hosted fuel tracker. A dark dashboard shows an economy readout and a trend line.">
   <meta name="color-scheme" content="light dark">
-  <meta name="theme-color" content="#edf1f8" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#05070e" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#eef0f6" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#08090f" media="(prefers-color-scheme: dark)">
   <meta name="referrer" content="no-referrer">
   <link rel="icon" href="{{basePath}}icon.svg" type="image/svg+xml">
   <link rel="preload" href="{{basePath}}fonts/space-grotesk-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
@@ -46,6 +46,11 @@
     <symbol id="i-server" viewBox="0 0 24 24"><path d="M4 5h16v6H4ZM4 13h16v6H4ZM7.5 8h.01M7.5 16h.01M11 8h5M11 16h5"/></symbol>
     <symbol id="i-code" viewBox="0 0 24 24"><path d="m8 7-5 5 5 5M16 7l5 5-5 5M13.5 4l-3 16"/></symbol>
     <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></symbol>
+    <symbol id="i-gauge" viewBox="0 0 24 24"><path d="M4.5 18a9 9 0 1 1 15 0M12 14l4-5M12 14h.01"/></symbol>
+    <symbol id="i-garage" viewBox="0 0 24 24"><path d="M3 20V9l9-5 9 5v11M7 20v-7h10v7M7 16h10"/></symbol>
+    <symbol id="i-monitor" viewBox="0 0 24 24"><path d="M4 5h16v11H4ZM9 20h6M12 16v4"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><path d="M12 16a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z"/></symbol>
   </svg>
 
   <a class="skip" href="#main">Skip to content</a>
@@ -57,7 +62,12 @@
       <a href="#self-host">Self-host</a>
       <a href="#faq">FAQ</a>
     </nav>
-    <a class="button secondary gh" href="{{followUrl}}"><svg class="icon" aria-hidden="true"><use href="#i-code"/></svg><span>GitHub</span></a>
+    <div class="theme-toggle" role="group" aria-label="Colour theme" data-theme-toggle hidden>
+      <button type="button" data-mode="system" aria-label="System theme" title="System theme"><svg class="icon" aria-hidden="true"><use href="#i-monitor"/></svg></button>
+      <button type="button" data-mode="light" aria-label="Light theme" title="Light theme"><svg class="icon" aria-hidden="true"><use href="#i-sun"/></svg></button>
+      <button type="button" data-mode="dark" aria-label="Dark theme" title="Dark theme"><svg class="icon" aria-hidden="true"><use href="#i-moon"/></svg></button>
+    </div>
+    <a class="button secondary gh" href="{{followUrl}}" aria-label="GitHub"><svg class="icon" aria-hidden="true"><use href="#i-code"/></svg><span>GitHub</span></a>
   </header>
 
   <main id="main">
@@ -78,33 +88,51 @@
       </div>
 
       <figure class="hud" aria-labelledby="hud-caption">
-        <div class="hud-panel">
+        <div class="hud-panel glass">
           <div class="hud-head">
-            <span class="hud-title"><svg class="icon" aria-hidden="true"><use href="#i-pulse"/></svg>Blue Hatch</span>
-            <span class="badge accent">Last year</span>
+            <span class="hud-title"><svg class="icon" aria-hidden="true"><use href="#i-gauge"/></svg>Blue Hatch</span>
+            <span class="badge accent">Last 12 months</span>
           </div>
-          <div class="hud-readout">
-            <span class="k">Average economy</span>
-            <span class="v">6.56<small>L/100 km</small></span>
-            <span class="small muted">over 13 full-to-full intervals</span>
-          </div>
-          <svg class="chart hud-chart" viewBox="0 0 400 120" role="img" aria-label="Sample economy trend over a year, between 6.2 and 7.0 litres per 100 kilometres.">
-            <defs>
-              <linearGradient id="hud-stroke" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="400" y2="0"><stop offset="0" class="stop-a"/><stop offset="1" class="stop-b"/></linearGradient>
-              <linearGradient id="hud-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" class="fill-a"/><stop offset="1" class="fill-b"/></linearGradient>
-            </defs>
-            <line class="axis" x1="0" x2="400" y1="30" y2="30"/><line class="axis" x1="0" x2="400" y1="70" y2="70"/><line class="axis" x1="0" x2="400" y1="110" y2="110"/>
-            <path class="area" fill="url(#hud-fill)" d="M8,52 L40,62 L72,66 L104,28 L136,88 L168,70 L200,63 L232,85 L264,84 L296,70 L328,58 L360,50 L392,46 L392,110 L8,110 Z"/>
-            <path class="line" stroke="url(#hud-stroke)" pathLength="1" d="M8,52 L40,62 L72,66 L104,28 L136,88 L168,70 L200,63 L232,85 L264,84 L296,70 L328,58 L360,50 L392,46"/>
-            <circle class="dot" cx="392" cy="46" r="4"/>
-          </svg>
-          <div class="hud-tiles">
-            <div><span class="k">Distance</span><span class="v">8,810 km</span></div>
+          <div class="hud-kpis">
+            <div><span class="k">Average economy</span><span class="v hero-v">6.56<small>L/100 km</small></span></div>
             <div><span class="k">Spent</span><span class="v">€965</span></div>
-            <div><span class="k">Per km</span><span class="v">€0.110</span></div>
+            <div><span class="k">Distance</span><span class="v">8,810 km</span></div>
+          </div>
+          <div class="hud-charts">
+            <div>
+              <span class="k">Economy trend</span>
+              <svg class="chart hud-chart" viewBox="0 0 400 120" role="img" aria-label="Sample economy trend over a year, between 6.2 and 7.0 litres per 100 kilometres.">
+                <defs>
+                  <linearGradient id="hud-stroke" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="400" y2="0"><stop offset="0" class="stop-a"/><stop offset="1" class="stop-b"/></linearGradient>
+                  <linearGradient id="hud-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" class="fill-a"/><stop offset="1" class="fill-b"/></linearGradient>
+                </defs>
+                <line class="axis" x1="0" x2="400" y1="30" y2="30"/><line class="axis" x1="0" x2="400" y1="70" y2="70"/><line class="axis base" x1="0" x2="400" y1="110" y2="110"/>
+                <path class="area" fill="url(#hud-fill)" d="M8,52 L40,62 L72,66 L104,28 L136,88 L168,70 L200,63 L232,85 L264,84 L296,70 L328,58 L360,50 L392,46 L392,110 L8,110 Z"/>
+                <path class="line" stroke="url(#hud-stroke)" pathLength="1" d="M8,52 L40,62 L72,66 L104,28 L136,88 L168,70 L200,63 L232,85 L264,84 L296,70 L328,58 L360,50 L392,46"/>
+                <circle class="dot" cx="392" cy="46" r="4"/>
+              </svg>
+            </div>
+            <div>
+              <span class="k">Spent per month</span>
+              <svg class="chart" viewBox="0 0 240 120" role="img" aria-label="Sample monthly spending for the last 12 months, between 40 and 120 euros.">
+                <line class="axis" x1="0" x2="240" y1="30" y2="30"/><line class="axis" x1="0" x2="240" y1="70" y2="70"/><line class="axis base" x1="0" x2="240" y1="110" y2="110"/>
+                <path class="bar-mark" d="M6,110 V62 Q6,58 10,58 H18 Q22,58 22,62 V110 Z"/>
+                <path class="bar-mark" d="M26,110 V44 Q26,40 30,40 H38 Q42,40 42,44 V110 Z"/>
+                <path class="bar-mark" d="M46,110 V70 Q46,66 50,66 H58 Q62,66 62,70 V110 Z"/>
+                <path class="bar-mark" d="M66,110 V30 Q66,26 70,26 H78 Q82,26 82,30 V110 Z"/>
+                <path class="bar-mark" d="M86,110 V52 Q86,48 90,48 H98 Q102,48 102,52 V110 Z"/>
+                <path class="bar-mark" d="M106,110 V56 Q106,52 110,52 H118 Q122,52 122,56 V110 Z"/>
+                <path class="bar-mark" d="M126,110 V48 Q126,44 130,44 H138 Q142,44 142,48 V110 Z"/>
+                <path class="bar-mark" d="M146,110 V64 Q146,60 150,60 H158 Q162,60 162,64 V110 Z"/>
+                <path class="bar-mark" d="M166,110 V40 Q166,36 170,36 H178 Q182,36 182,40 V110 Z"/>
+                <path class="bar-mark" d="M186,110 V58 Q186,54 190,54 H198 Q202,54 202,58 V110 Z"/>
+                <path class="bar-mark" d="M206,110 V50 Q206,46 210,46 H218 Q222,46 222,50 V110 Z"/>
+                <path class="bar-mark latest" d="M226,110 V76 Q226,72 230,72 H234 Q238,72 238,76 V110 Z"/>
+              </svg>
+            </div>
           </div>
         </div>
-        <figcaption id="hud-caption" class="small muted">Illustrative: the statistics view with sample data.</figcaption>
+        <figcaption id="hud-caption" class="small muted">Illustrative: the dashboard with sample data.</figcaption>
       </figure>
     </section>
 
@@ -112,7 +140,7 @@
       <div class="section-head">
         <p class="eyebrow">Interactive demo</p>
         <h2 id="tour-title">Try it right here</h2>
-        <p class="section-lead">A working mock-up of the real web app, built with its own styles and running on sample data in your browser. Switch units, add a fill-up, share a vehicle. Nothing is saved or sent anywhere.</p>
+        <p class="section-lead">A working mock-up of the real web app, built with its own styles and running on sample data in your browser. Switch vehicles from the sidebar, change units, add a fill-up, share a vehicle. Nothing is saved or sent anywhere.</p>
       </div>
       <div class="tour" data-tour>
         <noscript><p class="notice">The interactive tour needs JavaScript. Everything else on this page works without it.</p></noscript>
@@ -126,14 +154,14 @@
         <p class="section-lead">People forget receipts, top up halfway and buy fuel abroad. {{name}} handles all of that without guessing.</p>
       </div>
       <div class="features">
-        <article class="feature"><svg class="icon" aria-hidden="true"><use href="#i-chart"/></svg><h3>Economy you can trust</h3><p>Full-to-full intervals, with partial top-ups folded into the next full tank. A missed purchase leaves that interval out instead of skewing your average.</p></article>
-        <article class="feature"><svg class="icon" aria-hidden="true"><use href="#i-sliders"/></svg><h3>Any units in, your units out</h3><p>Enter kilometres or miles, litres, US or imperial gallons. View everything in L/100&nbsp;km, km/L or either mpg. What you typed is kept exactly.</p></article>
-        <article class="feature"><svg class="icon" aria-hidden="true"><use href="#i-users"/></svg><h3>Shared vehicles</h3><p>One owner, plus editors who log and correct fill-ups and viewers who only read. Hand a car over by transferring ownership.</p></article>
-        <article class="feature"><svg class="icon" aria-hidden="true"><use href="#i-pulse"/></svg><h3>Compare with friends</h3><p>Friends on your instance see only the averages of vehicles you opt in, never fill-ups, dates or notes. Turning sharing off takes effect at once.</p></article>
-        <article class="feature"><svg class="icon" aria-hidden="true"><use href="#i-fuel"/></svg><h3>Costs without guesswork</h3><p>Each vehicle totals in one currency. A purchase in another currency needs your rate or the amount you were charged. No rate is ever assumed.</p></article>
-        <article class="feature"><svg class="icon" aria-hidden="true"><use href="#i-swap"/></svg><h3>Portable data</h3><p>Export a vehicle as CSV or JSON and import it on any instance. Imports preview first, skip duplicates and are all-or-nothing.</p></article>
-        <article class="feature"><svg class="icon" aria-hidden="true"><use href="#i-server"/></svg><h3>Backups that restore</h3><p>Administrators take a full backup, photos included, in one checksummed file, and can restore it into a fresh instance.</p></article>
-        <article class="feature"><svg class="icon" aria-hidden="true"><use href="#i-key"/></svg><h3>Sign-in your way</h3><p>Passwords, authenticator apps and passkeys. Registration is invite-only by default, and the first account needs a setup token.</p></article>
+        <article class="feature glass"><svg class="icon" aria-hidden="true"><use href="#i-chart"/></svg><h3>Economy you can trust</h3><p>Full-to-full intervals, with partial top-ups folded into the next full tank. A missed purchase leaves that interval out instead of skewing your average.</p></article>
+        <article class="feature glass"><svg class="icon" aria-hidden="true"><use href="#i-sliders"/></svg><h3>Any units in, your units out</h3><p>Enter kilometres or miles, litres, US or imperial gallons. View everything in L/100&nbsp;km, km/L or either mpg. What you typed is kept exactly.</p></article>
+        <article class="feature glass"><svg class="icon" aria-hidden="true"><use href="#i-users"/></svg><h3>Shared vehicles</h3><p>One owner, plus editors who log and correct fill-ups and viewers who only read. Hand a car over by transferring ownership.</p></article>
+        <article class="feature glass"><svg class="icon" aria-hidden="true"><use href="#i-pulse"/></svg><h3>Compare with friends</h3><p>Friends on your instance see only the averages of vehicles you opt in, never fill-ups, dates or notes. Turning sharing off takes effect at once.</p></article>
+        <article class="feature glass"><svg class="icon" aria-hidden="true"><use href="#i-fuel"/></svg><h3>Costs without guesswork</h3><p>Each vehicle totals in one currency. A purchase in another currency needs your rate or the amount you were charged. No rate is ever assumed.</p></article>
+        <article class="feature glass"><svg class="icon" aria-hidden="true"><use href="#i-swap"/></svg><h3>Portable data</h3><p>Export a vehicle as CSV or JSON and import it on any instance. Imports preview first, skip duplicates and are all-or-nothing.</p></article>
+        <article class="feature glass"><svg class="icon" aria-hidden="true"><use href="#i-server"/></svg><h3>Backups that restore</h3><p>Administrators take a full backup, photos included, in one checksummed file, and can restore it into a fresh instance.</p></article>
+        <article class="feature glass"><svg class="icon" aria-hidden="true"><use href="#i-key"/></svg><h3>Sign-in your way</h3><p>Passwords, authenticator apps and passkeys. Registration is invite-only by default, and the first account needs a setup token.</p></article>
       </div>
     </section>
 
@@ -169,9 +197,9 @@ docker compose -f deploy/compose.yml \
         <h2 id="status-title">Honest status</h2>
       </div>
       <ol class="timeline">
-        <li class="done"><span class="badge good">Built</span><h3>The web app</h3><p>Vehicles, fuel log, statistics, sharing, friends, import and export, administration and backups. Tested in CI against a real PostgreSQL database, including accessibility checks in light and dark themes.</p></li>
-        <li class="now"><span class="badge accent">In review</span><h3>First release</h3><p>A security review and owner sign-off come before a tagged release. Until then, treat it as a preview.</p></li>
-        <li><span class="badge">Later</span><h3>Phone apps</h3><p>Native Android and iPhone apps that connect to your own server are planned but not started. The web app needs a connection and does not work offline.</p></li>
+        <li class="done glass"><span class="badge good">Built</span><h3>The web app</h3><p>A dashboard of charts and reports, vehicles, fuel log, sharing, friends, import and export, administration and backups. Tested in CI against a real PostgreSQL database, including accessibility checks in light and dark themes.</p></li>
+        <li class="now glass"><span class="badge accent">In review</span><h3>First release</h3><p>A security review and owner sign-off come before a tagged release. Until then, treat it as a preview.</p></li>
+        <li class="glass"><span class="badge">Later</span><h3>Phone apps</h3><p>Native Android and iPhone apps that connect to your own server are planned but not started. The web app needs a connection and does not work offline.</p></li>
       </ol>
     </section>
 
@@ -181,12 +209,12 @@ docker compose -f deploy/compose.yml \
         <h2 id="faq-title">FAQ</h2>
       </div>
       <div class="faq">
-        <details><summary>Can I use it today?</summary><p>The code is on GitHub and runs from source with Docker Compose. There is no tagged release yet and the security review is still to come, so treat it as a preview rather than something to trust with years of records.</p></details>
-        <details><summary>Is the demo the real app?</summary><p>It is a mock-up built with the app's own styles and running on sample data in your browser. The screens and rules match the app, but nothing talks to a server.</p></details>
-        <details><summary>Does this site track me?</summary><p>No. There are no analytics, no cookies, no third-party requests and no sign-up forms. The demo keeps everything in memory and forgets it when you leave.</p></details>
-        <details><summary>Where does my data live?</summary><p>On your own server. {{name}} is self-hosted, so there is no central service holding your vehicle history, and it never phones home.</p></details>
-        <details><summary>Is it free?</summary><p>It is open source under AGPL-3.0, so you can run it yourself at no cost beyond your own hosting.</p></details>
-        <details><summary>Will there be phone apps?</summary><p>Native Android and iPhone apps are planned for later, after the first release. They have not been started.</p></details>
+        <details class="glass"><summary>Can I use it today?</summary><p>The code is on GitHub and runs from source with Docker Compose. There is no tagged release yet and the security review is still to come, so treat it as a preview rather than something to trust with years of records.</p></details>
+        <details class="glass"><summary>Is the demo the real app?</summary><p>It is a mock-up built with the app's own styles and running on sample data in your browser. The screens and rules match the app, but nothing talks to a server.</p></details>
+        <details class="glass"><summary>Does this site track me?</summary><p>No. There are no analytics, no cookies, no third-party requests and no sign-up forms. The demo keeps everything in memory and forgets it when you leave.</p></details>
+        <details class="glass"><summary>Where does my data live?</summary><p>On your own server. {{name}} is self-hosted, so there is no central service holding your vehicle history, and it never phones home.</p></details>
+        <details class="glass"><summary>Is it free?</summary><p>It is open source under AGPL-3.0, so you can run it yourself at no cost beyond your own hosting.</p></details>
+        <details class="glass"><summary>Will there be phone apps?</summary><p>Native Android and iPhone apps are planned for later, after the first release. They have not been started.</p></details>
       </div>
     </section>
 

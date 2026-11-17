@@ -1,9 +1,27 @@
 // Interactive tour of the DriveLoom web client, on sample data. Everything
 // stays in memory: no storage, no cookies, no network requests. The screens
-// and rules mirror apps/web (fuel log, statistics, members, friends, import
-// and export) and the economy maths follows the platform's full-to-full method.
+// and rules mirror apps/web (sidebar with a vehicle switcher, dashboard, fuel
+// log, members, import and export, garage, friends) and the economy maths
+// follows the platform's full-to-full method.
 (() => {
   'use strict';
+
+  // ---------- page theme: System / Light / Dark, for this visit only ----------
+  // Not remembered: this site keeps nothing in storage.
+  const toggle = document.querySelector('[data-theme-toggle]');
+  if (toggle) {
+    const META = { light: '#eef0f6', dark: '#08090f' };
+    const apply = (mode) => {
+      if (mode === 'system') document.documentElement.removeAttribute('data-theme');
+      else document.documentElement.setAttribute('data-theme', mode);
+      for (const b of toggle.querySelectorAll('button')) b.setAttribute('aria-pressed', String(b.dataset.mode === mode));
+      for (const m of document.querySelectorAll('meta[name="theme-color"]')) m.content = META[mode === 'system' ? (/dark/.test(m.media) ? 'dark' : 'light') : mode];
+    };
+    toggle.addEventListener('click', (e) => { const b = e.target.closest('button[data-mode]'); if (b) apply(b.dataset.mode); });
+    toggle.hidden = false;
+    apply('system');
+  }
+
   const root = document.querySelector('[data-tour]');
   if (!root) return;
 
@@ -84,7 +102,7 @@
     };
   }
   const fresh = () => ({
-    tab: 'stats', vehicle: 'hatch', logAll: false, win: '365', friendsWin: '90', added: null,
+    tab: 'dashboard', vehicle: 'hatch', logAll: false, openForm: false, win: '365', friendsWin: '90', added: null,
     prefs: { dist: 'km', vol: 'l', econ: 'l_per_100km' },
     vehicles: { hatch: load('hatch'), van: load('van') },
     friends: FRIENDS.map((f) => ({ ...f })), incoming: [{ ...LEE, name: 'Lee Park', email: 'lee@example.com' }],
@@ -151,7 +169,7 @@
   };
 
   // ---------- chrome ----------
-  const TABS = [['garage', 'Vehicles', 'car'], ['log', 'Fuel log', 'fuel'], ['stats', 'Statistics', 'chart'], ['members', 'Members', 'users'], ['friends', 'Friends', 'pulse'], ['data', 'Import & export', 'swap']];
+  const TABS = [['dashboard', 'Dashboard', 'gauge'], ['log', 'Fuel log', 'fuel'], ['members', 'Members', 'users'], ['data', 'Import & export', 'swap'], ['garage', 'Garage', 'garage'], ['friends', 'Friends', 'pulse']];
   const PREFS = {
     dist: [['km', 'Kilometres'], ['mi', 'Miles']],
     vol: [['l', 'Litres'], ['gal_us', 'US gallons'], ['gal_imp', 'Imperial gallons']],
@@ -165,18 +183,21 @@
     toastEl.textContent = msg; toastEl.classList.add('show');
     clearTimeout(toastTimer); toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2800);
   };
-  const tablist = h('div', { class: 'tabs', role: 'tablist', 'aria-label': 'Demo screens' });
+  // The sidebar's screens are one tab list: a single Tab stop, arrow keys move between them.
+  const tablist = h('div', { class: 'tabs', role: 'tablist', 'aria-label': 'Demo screens', 'aria-orientation': 'vertical' });
   const panels = {};
   const tabs = {};
   for (const [key, label, ic] of TABS) {
-    tabs[key] = h('button', { type: 'button', role: 'tab', id: `tab-${key}`, 'aria-controls': `panel-${key}`, onclick: () => activate(key) }, icon(ic), label);
+    tabs[key] = h('button', { type: 'button', role: 'tab', id: `tab-${key}`, class: key === 'garage' ? 'group-start' : null, 'aria-controls': `panel-${key}`, onclick: () => activate(key) }, icon(ic), label);
     panels[key] = h('div', { role: 'tabpanel', id: `panel-${key}`, 'aria-labelledby': `tab-${key}`, tabindex: '0' });
     tablist.append(tabs[key]);
   }
   tablist.addEventListener('keydown', (e) => {
     const keys = TABS.map(([k]) => k);
-    const i = keys.indexOf(state.tab);
-    const next = { ArrowRight: i + 1, ArrowLeft: i - 1, Home: 0, End: keys.length - 1 }[e.key];
+    // Move from the tab that has focus (normally the selected one).
+    const focused = keys.indexOf(document.activeElement?.id?.replace(/^tab-/, ''));
+    const i = focused >= 0 ? focused : keys.indexOf(state.tab);
+    const next = { ArrowDown: i + 1, ArrowRight: i + 1, ArrowUp: i - 1, ArrowLeft: i - 1, Home: 0, End: keys.length - 1 }[e.key];
     if (next === undefined) return;
     e.preventDefault();
     activate(keys[(next + keys.length) % keys.length]);
@@ -184,11 +205,15 @@
   });
 
   const brand = document.querySelector('.brand img')?.getAttribute('src');
+  const switcher = h('div', { class: 'switcher' });
   const app = h('div', { class: 'app' },
-    h('div', { class: 'app-top', 'aria-hidden': 'true' },
-      h('span', { class: 'brand' }, brand ? h('img', { src: brand, alt: '', width: 28, height: 28 }) : null, h('span', {}, 'DriveLoom')),
-      h('span', { class: 'fake-nav' }, h('span', { class: 'on' }, icon('car'), 'Vehicles'), h('span', {}, icon('users'), 'Friends'), h('span', {}, icon('sliders'), 'Settings'))),
-    h('div', { class: 'app-body' }, tablist, Object.values(panels)),
+    h('div', { class: 'app-side' },
+      h('span', { class: 'brand', 'aria-hidden': 'true' }, brand ? h('img', { src: brand, alt: '', width: 26, height: 26 }) : null, h('span', {}, 'DriveLoom')),
+      switcher,
+      h('div', { class: 'side-label', 'aria-hidden': 'true' }, 'This vehicle'),
+      tablist,
+      h('div', { class: 'side-foot', 'aria-hidden': 'true' }, h('span', { class: 'avatar' }, 'R'), h('span', {}, 'Robin Ash'))),
+    h('div', { class: 'app-body' }, Object.values(panels)),
     toastEl);
   root.append(
     prefs,
@@ -207,11 +232,12 @@
   function renderPrefs() {
     const set = (k) => (e) => { state.prefs[k] = e.target.value; render(); };
     prefs.replaceChildren(
-      pref('vehicle', 'Vehicle', Object.values(state.vehicles).map((v) => [v.key, v.name]), state.vehicle, (e) => { state.vehicle = e.target.value; state.added = null; render(); }),
       pref('dist', 'Distance', PREFS.dist, state.prefs.dist, set('dist')),
       pref('vol', 'Fuel', PREFS.vol, state.prefs.vol, set('vol')),
       pref('econ', 'Economy', PREFS.econ, state.prefs.econ, set('econ')),
       h('p', { class: 'prefs-note small muted' }, icon('sliders'), 'In the app these are your display preferences under Settings.'));
+    switcher.replaceChildren(h('label', { for: 'pref-vehicle' }, 'Vehicle'),
+      select('pref-vehicle', Object.values(state.vehicles).map((v) => [v.key, v.name]), state.vehicle, { id: 'pref-vehicle', onchange: (e) => { state.vehicle = e.target.value; state.added = null; render(); } }));
   }
 
   function render() {
@@ -228,9 +254,10 @@
   }
 
   const vehicle = () => state.vehicles[state.vehicle];
-  function vehicleHead(v) {
+  function vehicleHead(v, section, actions) {
     return h('div', { class: 'app-head' },
-      h('div', {}, h('h3', {}, v.name), h('p', { class: 'sub' }, v.desc, ' ', h('span', { class: `badge ${v.role === 'owner' ? 'accent' : ''}` }, ROLE[v.role]))));
+      h('div', {}, h('div', { class: 'eyebrow-sm' }, section), h('h3', {}, v.name), h('p', { class: 'sub' }, v.desc, ' ', h('span', { class: `badge ${v.role === 'owner' ? 'accent' : ''}` }, ROLE[v.role]))),
+      actions ? h('div', { class: 'row' }, actions) : null);
   }
   const tableWrap = (label, table) => h('div', { class: 'table-wrap', role: 'region', 'aria-label': label, tabindex: '0' }, table);
 
@@ -239,7 +266,7 @@
     garage() {
       const card = (v) => {
         const st = stats(v, 'all');
-        return h('button', { type: 'button', class: 'card', 'data-key': `card-${v.key}`, onclick: () => { state.vehicle = v.key; state.added = null; activate('log'); } },
+        return h('button', { type: 'button', class: 'card', 'data-key': `card-${v.key}`, onclick: () => { state.vehicle = v.key; state.added = null; activate('dashboard'); } },
           h('span', { class: 'photo' }, icon('car')),
           h('span', { class: 'body' },
             h('span', { class: 'row spread' }, h('strong', {}, v.name), h('span', { class: `badge ${v.role === 'owner' ? 'accent' : ''}` }, ROLE[v.role])),
@@ -249,7 +276,7 @@
               h('span', {}, `${v.fills.length} fill-ups`))));
       };
       return h('div', {},
-        h('div', { class: 'app-head' }, h('div', {}, h('h3', {}, 'Your vehicles'), h('p', { class: 'sub' }, 'Vehicles you own and vehicles shared with you. Open one to see its log.'))),
+        h('div', { class: 'app-head' }, h('div', {}, h('div', { class: 'eyebrow-sm' }, 'Account'), h('h3', {}, 'Garage'), h('p', { class: 'sub' }, 'Vehicles you own and vehicles shared with you. Open one to see its dashboard.'))),
         h('div', { class: 'grid' }, Object.values(state.vehicles).map(card)));
     },
 
@@ -268,8 +295,10 @@
         h('td', { class: 'num' }, f.interval.available ? h('strong', {}, qty(toEcon(f.interval.lp100, econ), econ, 2)) : h('span', { class: 'small muted' }, REASONS[f.interval.reason])));
       const slot = h('div');
       const openForm = () => { slot.replaceChildren(fillForm(v, () => slot.replaceChildren())); slot.querySelector('input')?.focus(); };
+      // The dashboard's "Add fill-up" lands here with the form open.
+      if (state.openForm && canEdit) { state.openForm = false; slot.replaceChildren(fillForm(v, () => slot.replaceChildren())); setTimeout(() => slot.querySelector('input')?.focus(), 0); }
       return h('div', {},
-        vehicleHead(v),
+        vehicleHead(v, 'Fuel log'),
         canEdit ? h('div', { class: 'row', style: null }, h('button', { type: 'button', 'data-key': 'add-fill', onclick: openForm }, icon('plus'), 'Add fill-up')) : null,
         h('div', { class: 'spacer' }),
         slot,
@@ -280,25 +309,53 @@
           fills.length > 8 ? h('div', { class: 'row', style: null }, h('button', { type: 'button', class: 'ghost', 'data-key': 'log-all', 'aria-expanded': String(state.logAll), onclick: () => { state.logAll = !state.logAll; render(); } }, state.logAll ? 'Show fewer' : `Show all ${fills.length} fill-ups`)) : null));
     },
 
-    stats() {
+    dashboard() {
       const v = vehicle();
       const { dist, vol, econ } = state.prefs;
       const st = stats(v, state.win);
-      const stat = (k, val, note) => h('div', { class: 'stat' }, h('div', { class: 'v' }, val), h('div', { class: 'k' }, k), note ? h('div', { class: 'small muted' }, note) : null);
+      const canEdit = v.role !== 'viewer';
       const perDist = st.distance ? st.spent / toDist(st.distance, dist) : null;
+      const kpi = (k, val, note, hero) => h('div', { class: `kpi${hero ? ' kpi-hero' : ''}` }, h('div', { class: 'kpi-k' }, k), h('div', { class: 'kpi-v' }, val), note ? h('div', { class: 'kpi-note' }, note) : null);
+      const fills = analyse(v);
+      const last = fills.at(-1);
+      // Best and worst interval in the period; consumption is better when lower.
+      const better = (a, b) => (econ === 'l_per_100km' ? a < b : a > b);
+      const vals = st.series.map((p) => ({ at: p.at, e: toEcon(p.lp100, econ) }));
+      const best = vals.reduce((m, p) => (!m || better(p.e, m.e) ? p : m), null);
+      const worst = vals.reduce((m, p) => (!m || better(m.e, p.e) ? p : m), null);
+      const ago = Math.round((today - last.at) / DAY);
+      const glance = (k, val, sub) => h('li', {}, h('span', { class: 'muted' }, k), h('b', {}, val, sub ? h('span', { class: 'small' }, sub) : null));
+      // Spending per calendar month, last 12 months.
+      const months = Array.from({ length: 12 }, (_, i) => {
+        const from = new Date(today.getFullYear(), today.getMonth() - 11 + i, 1);
+        const to = new Date(from.getFullYear(), from.getMonth() + 1, 1);
+        const total = fills.filter((f) => f.at >= from && f.at < to).reduce((a, f) => a + (f.cost.reporting ?? 0), 0);
+        return { label: from.toLocaleDateString('en', { month: 'short' }), long: from.toLocaleDateString('en', { month: 'long', year: 'numeric' }), value: total, text: money(total, v.currency) };
+      });
+      const addFill = canEdit ? h('button', { type: 'button', 'data-key': 'dash-add', onclick: () => { state.openForm = true; activate('log'); } }, icon('plus'), 'Add fill-up') : null;
       return h('div', {},
-        vehicleHead(v),
-        h('div', { class: 'row', style: null }, h('label', { for: 'f-win' }, 'Period'), select('win', WINDOWS, state.win, { id: 'f-win', onchange: (e) => { state.win = e.target.value; render(); } })),
-        h('div', { class: 'spacer' }),
-        h('div', { class: 'panel' },
-          h('div', { class: 'stats' },
-            stat('Average economy', st.lp100 ? qty(toEcon(st.lp100, econ), econ, 2) : '—', st.lp100 ? `over ${st.intervals} full-to-full intervals` : 'needs two full fills in the period'),
-            stat('Distance', qty(toDist(st.distance, dist), dist, 0)),
-            stat('Fuel', qty(toVol(st.fuel, vol), vol, 1)),
-            stat('Spent', money(st.spent, v.currency), `${st.fillCount} fill-ups`),
-            stat('Cost per distance', perDist ? `${money(perDist, v.currency, 3)} / ${UNIT[dist]}` : '—')),
-          st.skipped ? h('p', { class: 'small muted', style: null }, `${st.skipped} interval in this period is left out because a purchase was missed.`) : null),
-        h('div', { class: 'panel' }, h('h4', {}, `Economy (${UNIT[econ]})`), chart(st.series, econ)),
+        vehicleHead(v, 'Dashboard', [h('label', { for: 'f-win', class: 'muted' }, 'Period'), select('win', WINDOWS, state.win, { id: 'f-win', onchange: (e) => { state.win = e.target.value; render(); } }), addFill]),
+        h('div', { class: 'kpis' },
+          kpi('Average economy', st.lp100 ? qty(toEcon(st.lp100, econ), econ, 2) : '—', st.lp100 ? `Over ${st.intervals} full-to-full intervals` : 'Needs two full fills in the period', true),
+          kpi('Spent', money(st.spent, v.currency), `${st.fillCount} fill-ups`),
+          kpi('Distance', qty(toDist(st.distance, dist), dist, 0)),
+          kpi('Fuel', qty(toVol(st.fuel, vol), vol, 1)),
+          kpi('Cost per distance', perDist ? `${money(perDist, v.currency, 3)} / ${UNIT[dist]}` : '—'),
+          kpi('Missed purchases', String(st.skipped), st.skipped ? 'Left out, not guessed' : 'None in this period')),
+        h('div', { class: 'dash' },
+          h('div', { class: 'panel wide' }, h('div', { class: 'panel-head' }, h('h4', {}, `Economy (${UNIT[econ]})`), h('span', { class: 'small muted' }, WINDOWS.find(([k]) => k === state.win)[1].toLowerCase())), chart(st.series, econ)),
+          h('div', { class: 'panel narrow' }, h('h4', {}, 'At a glance'), h('ul', { class: 'glance' },
+            glance('Last fill-up', date(last.at), ago <= 0 ? 'today' : ago === 1 ? 'yesterday' : `${ago} days ago`),
+            glance('Odometer', qty(toDist(last.km, dist), dist, 0)),
+            glance('Fill-ups recorded', String(fills.length)),
+            glance('Best interval', best ? qty(best.e, econ, 2) : '—', best ? date(best.at) : null),
+            glance('Worst interval', worst ? qty(worst.e, econ, 2) : '—', worst ? date(worst.at) : null))),
+          h('div', { class: 'panel' }, h('div', { class: 'panel-head' }, h('h4', {}, `Monthly spending (${v.currency})`), h('span', { class: 'small muted' }, 'last 12 months')), barChart(months, `spending per month in ${v.currency}`, (n) => money(n, v.currency, 0))),
+          h('div', { class: 'panel' }, h('div', { class: 'panel-head' }, h('h4', {}, 'Recent fill-ups'), h('button', { type: 'button', class: 'ghost', 'data-key': 'dash-log', onclick: () => activate('log') }, 'Full log')),
+            h('ul', { class: 'list recent' }, fills.slice(-4).reverse().map((f) => h('li', {},
+              h('span', { class: 'ic', 'aria-hidden': 'true' }, icon('fuel')),
+              h('div', { class: 'grow' }, h('strong', {}, date(f.at)), h('div', { class: 'small muted' }, `${qty(toVol(f.litres, vol), vol, 2)}${f.full ? '' : ' · partial'}`)),
+              h('div', { class: 'side' }, money(f.cost.reporting ?? f.cost.amount, v.currency), h('div', { class: 'small muted' }, f.interval.available ? qty(toEcon(f.interval.lp100, econ), econ, 2) : REASONS[f.interval.reason]))))))),
         h('p', { class: 'small muted' }, 'Averages add up distance and fuel first, then divide, so a short interval cannot swing the result.'));
     },
 
@@ -338,7 +395,7 @@
           ? h('label', { class: 'check' }, h('input', { type: 'checkbox', 'data-key': 'opt-in', checked: v.shared, onchange: (e) => { v.shared = e.target.checked; toast(v.shared ? 'Shared with friends.' : 'No longer shared.'); } }), 'Share this vehicle\'s economy with my friends')
           : h('p', { class: 'small' }, v.shared ? 'The owner shares this vehicle with their friends.' : 'Not shared. Only the owner can change this.'));
       return h('div', {},
-        vehicleHead(v),
+        vehicleHead(v, 'Members'),
         h('div', { class: 'panel' }, tableWrap('Members', h('table', {},
           h('thead', {}, h('tr', {}, h('th', { scope: 'col' }, 'Member'), h('th', { scope: 'col' }, 'Role'), h('th', { scope: 'col', class: 'num' }, h('span', { class: 'hide-sm' }, 'Actions')))),
           h('tbody', {}, rows)))),
@@ -362,7 +419,7 @@
       };
       const person = (name, email, extra) => h('li', { class: 'row spread' }, h('div', {}, h('strong', {}, name), h('div', { class: 'small muted' }, email)), h('div', { class: 'row' }, extra));
       return h('div', {},
-        h('div', { class: 'app-head' }, h('div', {}, h('h3', {}, 'Friends'), h('p', { class: 'sub' }, 'Averages only, for vehicles their owners chose to share.'))),
+        h('div', { class: 'app-head' }, h('div', {}, h('div', { class: 'eyebrow-sm' }, 'Account'), h('h3', {}, 'Friends'), h('p', { class: 'sub' }, 'Averages only, for vehicles their owners chose to share.'))),
         h('div', { class: 'panel' },
           h('div', { class: 'row spread' }, h('h4', {}, 'Comparison'), select('friends-win', [['90', 'Last 90 days'], ['365', 'Last 12 months'], ['all', 'All time']], w, { 'aria-label': 'Comparison period', onchange: (e) => { state.friendsWin = e.target.value; render(); } })),
           tableWrap('Comparison', h('table', {},
@@ -374,7 +431,7 @@
                 : h('span', { class: 'small muted' }, 'not enough full fills')),
               h('td', { class: 'num hide-sm' }, costCell(r))))),
             h('caption', { class: 'small muted' }, econ === 'l_per_100km' ? 'Lower consumption is better.' : 'Higher economy is better.', ' Costs are compared only in your preferred currency, never converted.'))),
-          mine.length ? null : h('p', { class: 'small muted' }, 'Your Blue Hatch is hidden because you turned sharing off on its Members tab.')),
+          mine.length ? null : h('p', { class: 'small muted' }, 'Your Blue Hatch is hidden because you turned sharing off on its Members screen.')),
         state.incoming.length ? h('div', { class: 'panel' }, h('h4', {}, 'Requests for you'), h('ul', { class: 'list' }, state.incoming.map((r) => person(r.name, r.email, [
           h('button', { type: 'button', 'data-key': 'accept', onclick: () => { state.incoming = []; state.friends.push(LEE); render(); toast('You are now friends with Lee.'); } }, 'Accept'),
           h('button', { type: 'button', class: 'secondary', onclick: () => { state.incoming = []; render(); toast('Request declined.'); } }, 'Decline')])))) : null,
@@ -397,7 +454,7 @@
       const slug = v.name.toLowerCase().replace(/\s+/g, '-');
       const sampleCsv = `occurred_at,odometer,odometer_unit,volume,volume_unit,full\n2026-03-02T08:10:00Z,${v.odoUnit === 'km' ? 30110 : 18710},${v.odoUnit},41.2,l,true\n2026-03-19T17:45:00Z,${v.odoUnit === 'km' ? 30690 : 19070},${v.odoUnit},39.8,l,true\n2026-04-04T12:05:00Z,${v.odoUnit === 'km' ? 30590 : 19010},${v.odoUnit},40.1,l,true\n2026-04-21T09:30:00Z,${v.odoUnit === 'km' ? 31260 : 19420},${v.odoUnit},42.0,l,true`;
       return h('div', {},
-        vehicleHead(v),
+        vehicleHead(v, 'Import & export'),
         h('div', { class: 'panel' }, h('h4', {}, 'Export'),
           h('p', { class: 'muted small' }, 'CSV opens in any spreadsheet. JSON includes the vehicle details and can create a new vehicle on another DriveLoom instance. Neither contains member names or emails.'),
           h('div', { class: 'row' },
@@ -475,6 +532,26 @@
       s('path', { class: 'area', d: area, fill: 'url(#demo-fill)' }),
       s('path', { class: 'line', d: path, pathLength: 1, stroke: 'url(#demo-stroke)' }),
       series.map((p, i) => s('circle', { class: `dot${i === series.length - 1 ? ' last' : ''}`, cx: X(xs[i]), cy: Y(ys[i]), r: 3.5 }, s('title', {}, `${date(p.at)}: ${num(ys[i], 2)} ${UNIT[unit]}`))));
+  }
+
+  function barChart(items, label, tick) {
+    if (!items.some((it) => it.value > 0)) return h('p', { class: 'muted' }, 'No costs recorded in the last 12 months.');
+    const W = 480, H = 200, P = { l: 48, r: 6, t: 10, b: 26 };
+    const max = Math.max(...items.map((it) => it.value));
+    const step = [10, 20, 25, 50, 100, 200, 250, 500, 1000].find((st) => st * 3 >= max) ?? Math.ceil(max / 3);
+    const top = step * 3;
+    const Y = (y) => H - P.b - (y / top) * (H - P.t - P.b);
+    const slot = (W - P.l - P.r) / items.length, bw = Math.min(26, slot * 0.62);
+    const bar = (x, y, w, hh) => { const r = Math.min(4, w / 2, hh); return `M${x},${y + hh} V${y + r} Q${x},${y} ${x + r},${y} H${x + w - r} Q${x + w},${y} ${x + w},${y + r} V${y + hh} Z`; };
+    return s('svg', { class: 'chart bars', viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `Bar chart of ${label}, ${items[0].long} to ${items.at(-1).long}: ${items.map((it) => `${it.label} ${it.text}`).join(', ')}.` },
+      [0, 1, 2, 3].map((i) => [s('line', { class: i ? 'axis' : 'axis base', x1: P.l, x2: W - P.r, y1: Y(i * step), y2: Y(i * step) }), s('text', { x: P.l - 6, y: Y(i * step) + 4, 'text-anchor': 'end' }, tick(i * step))]),
+      items.map((it, i) => {
+        const cx = P.l + slot * i + slot / 2, hh = H - P.b - Y(it.value);
+        return [
+          hh > 0 ? s('path', { class: `bar-mark${i === items.length - 1 ? ' latest' : ''}`, d: bar(cx - bw / 2, Y(it.value), bw, hh) }, s('title', {}, `${it.long}: ${it.text}`)) : null,
+          i % 2 === 1 ? s('text', { x: cx, y: H - 8, 'text-anchor': 'middle' }, it.label) : null,
+        ];
+      }));
   }
 
   render();
