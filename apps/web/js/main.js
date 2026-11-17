@@ -4,6 +4,7 @@
 import { get, post, setCsrf, whenSignedOut } from './api.js';
 import { mount, h, toast } from './ui.js';
 import { icon } from './icons.js';
+import { vehicleLabel, vehicleTitle } from './format.js';
 import { themeControl } from './theme.js';
 import { authView } from './views/auth.js';
 import { garageView, welcomeView } from './views/vehicles.js';
@@ -59,12 +60,8 @@ function switcher(current) {
   const sel = h('select', {
     id: 'vehicle-switch', name: 'vehicle',
     onchange: (e) => { rememberVehicle(e.target.value); go(`#/vehicles/${e.target.value}`); },
-  }, list.map((v) => h('option', { value: v.id, selected: v.id === current?.id }, v.archived ? `${v.name} (archived)` : v.name)));
-  return h('div', { class: 'switcher' },
-    h('label', { for: 'vehicle-switch' }, 'Vehicle'),
-    h('div', { class: 'switcher-box' }, current?.imageVersion
-      ? h('img', { src: `/v1/vehicles/${current.id}/image?v=${current.imageVersion}`, alt: '' })
-      : h('span', { class: 'switcher-icon' }, icon('car')), sel));
+  }, list.map((v) => h('option', { value: v.id, selected: v.id === current?.id }, v.archived ? `${vehicleLabel(v)} (archived)` : vehicleLabel(v))));
+  return h('div', { class: 'switcher' }, h('label', { for: 'vehicle-switch' }, 'Vehicle'), sel);
 }
 
 function buildSidebar(route) {
@@ -165,7 +162,7 @@ export async function render() {
         rememberVehicle(r.vehicle.id);
         // An archived vehicle opened from the garage is not in the default list but must show as selected.
         const listed = state.vehicles.find((x) => x.id === r.vehicle.id);
-        [view, title, route] = [r.view, `${r.title} · ${r.vehicle.name}`, { section: 'vehicle', tab, vehicle: listed ?? r.vehicle }];
+        [view, title, route] = [r.view, `${r.title} · ${vehicleTitle(r.vehicle)}`, { section: 'vehicle', tab, vehicle: listed ?? r.vehicle }];
         break;
       }
       case 'garage': [view, title, route] = [await garageView(query), 'Garage', { section: 'garage' }]; break;

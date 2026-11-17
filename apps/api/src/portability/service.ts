@@ -83,7 +83,7 @@ function jsonDocument(data: unknown): { vehicle: Record<string, unknown>; candid
   const d = data as Record<string, unknown>;
   if (d['format'] !== EXPORT_FORMAT) throw new HttpProblem(422, 'import_malformed', 'Validation failed', `This is not a ${EXPORT_FORMAT} export.`);
   if (d['version'] !== EXPORT_VERSION) throw new HttpProblem(422, 'unsupported_version', 'Validation failed', `Export version ${String(d['version'])} is not supported by this server (supported: ${EXPORT_VERSION}).`);
-  const vehicle = obj(d['vehicle'], ['name', 'make', 'model', 'year', 'odometerUnit', 'currency'], 'vehicle');
+  const vehicle = obj(d['vehicle'], ['name', 'make', 'model', 'year', 'plateRegion', 'plateNumber', 'vin', 'odometerUnit', 'currency'], 'vehicle');
   if (!Array.isArray(d['fillUps'])) throw new HttpProblem(422, 'import_malformed', 'Validation failed', 'fillUps must be a list.');
   if (d['fillUps'].length > MAX_IMPORT_ROWS) throw new HttpProblem(422, 'import_malformed', 'Validation failed', `too many rows (limit ${MAX_IMPORT_ROWS}).`);
   const currency = typeof vehicle['currency'] === 'string' ? vehicle['currency'] : null;
@@ -106,11 +106,16 @@ export class PortabilityService {
     const rows = await this.#fuel.exportRows(this.#pool, v.id);
     await this.#pool.query("INSERT INTO audit_events (id, actor_id, action, subject_type, subject_id, details) VALUES ($1,$2,'vehicle.export','vehicle',$3,$4)",
       [uuidv7(), p.userId, v.id, JSON.stringify({ format, rows: rows.length })]);
-    const stem = `driveloom-${v.name.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'vehicle'}-${this.#now().toISOString().slice(0, 10)}`;
+    // Never derive the filename from plate or VIN.
+    const label = v.name ?? [v.year, v.make, v.model].filter(Boolean).join(' ');
+    const stem = `driveloom-${label.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'vehicle'}-${this.#now().toISOString().slice(0, 10)}`;
     if (format === 'csv') return { filename: `${stem}.csv`, contentType: 'text/csv; charset=utf-8', data: toCsv(CSV_COLUMNS, rows.map((r) => csvRow(r, v.currency))) };
     const doc = {
       format: EXPORT_FORMAT, version: EXPORT_VERSION, exportedAt: this.#now().toISOString(),
-      vehicle: { name: v.name, make: v.make, model: v.model, year: v.year, odometerUnit: v.odometerUnit, currency: v.currency },
+      vehicle: {
+        name: v.name, make: v.make, model: v.model, year: v.year,
+        ...(v.plateRegion ? { plateRegion: v.plateRegion } : {}), ...(v.plateNumber ? { plateNumber: v.plateNumber } : {}), ...(v.vin ? { vin: v.vin } : {}),
+        odometerUnit: v.odometerUnit, currency: v.currency },
       fillUps: rows.map(rowToBody),
     };
     return { filename: `${stem}.json`, contentType: 'application/json', data: JSON.stringify(doc, null, 2) };

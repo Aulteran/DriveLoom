@@ -1385,10 +1385,12 @@ components:
       enum: [editor, viewer]
     VehicleInput:
       type: object
-      required: [name]
       additionalProperties: false
       properties:
-        name: { type: string, minLength: 1, maxLength: 80 }
+        name: { type: [string, 'null'], minLength: 1, maxLength: 80, description: Optional nickname. When absent, clients identify the vehicle by plate, year and model. }
+        plateRegion: { type: [string, 'null'], maxLength: 10, description: "State or province code such as ON or FL. Private to the vehicle's members." }
+        plateNumber: { type: [string, 'null'], maxLength: 12, description: Licence plate. Private to the vehicle's members. }
+        vin: { type: [string, 'null'], minLength: 5, maxLength: 17, description: Vehicle identification number. Private to the vehicle's members. }
         make: { type: [string, 'null'], minLength: 1, maxLength: 80 }
         model: { type: [string, 'null'], minLength: 1, maxLength: 80 }
         year: { type: [integer, 'null'], minimum: 1886 }
@@ -1399,7 +1401,10 @@ components:
       additionalProperties: false
       minProperties: 1
       properties:
-        name: { type: string, minLength: 1, maxLength: 80 }
+        name: { type: [string, 'null'], minLength: 1, maxLength: 80, description: Optional nickname; null clears it. }
+        plateRegion: { type: [string, 'null'], maxLength: 10, description: "State or province code such as ON or FL. Private to the vehicle's members." }
+        plateNumber: { type: [string, 'null'], maxLength: 12, description: Licence plate. Private to the vehicle's members. }
+        vin: { type: [string, 'null'], minLength: 5, maxLength: 17, description: Vehicle identification number. Private to the vehicle's members. }
         make: { type: [string, 'null'], minLength: 1, maxLength: 80 }
         model: { type: [string, 'null'], minLength: 1, maxLength: 80 }
         year: { type: [integer, 'null'], minimum: 1886 }
@@ -1407,13 +1412,16 @@ components:
         currency: { $ref: '#/components/schemas/CurrencyCode', description: Reporting currency. Defaults to the creator's currency preference; locked once costs are recorded. }
     Vehicle:
       type: object
-      required: [id, name, make, model, year, archived, odometerUnit, currency, role, createdAt, updatedAt]
+      required: [id, name, make, model, year, plateRegion, plateNumber, vin, archived, odometerUnit, currency, role, createdAt, updatedAt]
       properties:
+        plateRegion: { type: [string, 'null'], maxLength: 10, description: "State or province code such as ON or FL. Private to the vehicle's members." }
+        plateNumber: { type: [string, 'null'], maxLength: 12, description: Licence plate. Private to the vehicle's members. }
+        vin: { type: [string, 'null'], minLength: 5, maxLength: 17, description: Vehicle identification number. Private to the vehicle's members. }
         odometerUnit: { $ref: '#/components/schemas/DistanceUnit' }
         currency: { $ref: '#/components/schemas/CurrencyCode' }
         imageVersion: { type: [string, 'null'], description: Opaque value that changes when the image changes; null when there is none. }
         id: { $ref: '#/components/schemas/Id' }
-        name: { type: string }
+        name: { type: [string, 'null'] }
         make: { type: [string, 'null'] }
         model: { type: [string, 'null'] }
         year: { type: [integer, 'null'] }
@@ -1833,7 +1841,9 @@ components:
       required: [name, make, model, year, economy, costPerDistance, costUnavailableReason]
       properties:
         vehicleId: { $ref: '#/components/schemas/Id', description: Present only on the caller's own vehicles. }
-        name: { type: string }
+        plateRegion: { type: [string, 'null'], description: Present only on the caller's own vehicles; never sent for a friend's. }
+        plateNumber: { type: [string, 'null'], description: Present only on the caller's own vehicles; never sent for a friend's. }
+        name: { type: [string, 'null'], description: Optional nickname. }
         make: { type: [string, 'null'] }
         model: { type: [string, 'null'] }
         year: { type: [integer, 'null'] }
@@ -1885,9 +1895,11 @@ components:
         exportedAt: { $ref: '#/components/schemas/Timestamp' }
         vehicle:
           type: object
-          required: [name]
           properties:
-            name: { type: string }
+            name: { type: [string, 'null'] }
+            plateRegion: { type: string }
+            plateNumber: { type: string }
+            vin: { type: string }
             make: { type: [string, 'null'] }
             model: { type: [string, 'null'] }
             year: { type: [integer, 'null'] }
