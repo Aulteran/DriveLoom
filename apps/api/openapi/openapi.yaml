@@ -1308,6 +1308,128 @@ paths:
         '401': { $ref: '#/components/responses/Problem' }
         '403': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
+  /v1/admin/settings/smtp:
+    get:
+      operationId: adminGetSmtpSettings
+      summary: SMTP settings
+      description: 'Secrets are never returned, only whether one is stored. `source` is `env` when server environment variables configure it (read-only here), `database` when saved here, `none` otherwise.'
+      tags: [admin]
+      responses:
+        '200':
+          description: The settings in force.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SmtpSettings' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+    put:
+      operationId: adminSetSmtpSettings
+      summary: Save SMTP settings
+      description: 'Takes effect immediately, needs a recent sign-in and is audited without the secret. Omit the secret to keep the stored one. 409 `managed_by_environment` when environment variables configure it.'
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SmtpSettingsInput' }
+      responses:
+        '200':
+          description: The saved settings.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SmtpSettings' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+    delete:
+      operationId: adminRemoveSmtpSettings
+      summary: Remove saved SMTP settings
+      description: 'Needs a recent sign-in. 409 `email_features_enabled` while the server environment requires email verification or sign-in codes.'
+      tags: [admin]
+      responses:
+        '204': { description: Removed. }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+  /v1/admin/settings/smtp/test:
+    post:
+      operationId: adminTestSmtp
+      summary: Send a test message
+      description: 'Sends to the address of the calling administrator using the settings in force. 502 `smtp_test_failed` carries the transport error.'
+      tags: [admin]
+      responses:
+        '200':
+          description: Sent.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SmtpTestResult' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+        '502': { $ref: '#/components/responses/Problem' }
+  /v1/admin/settings/oidc:
+    get:
+      operationId: adminGetOidcSettings
+      summary: OIDC settings
+      description: 'Secrets are never returned, only whether one is stored. `source` is `env` when server environment variables configure it (read-only here), `database` when saved here, `none` otherwise.'
+      tags: [admin]
+      responses:
+        '200':
+          description: The settings in force.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OidcSettings' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+    put:
+      operationId: adminSetOidcSettings
+      summary: Save OIDC settings
+      description: 'Takes effect immediately, needs a recent sign-in and is audited without the secret. Omit the secret to keep the stored one. 409 `managed_by_environment` when environment variables configure it, 409 `oidc_identities_in_use` when it would strand accounts that sign in only through the provider.'
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OidcSettingsInput' }
+      responses:
+        '200':
+          description: The saved settings.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OidcSettings' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+    delete:
+      operationId: adminRemoveOidcSettings
+      summary: Remove saved OIDC settings
+      description: 'Needs a recent sign-in. 409 `password_login_disabled` or `oidc_identities_in_use` when removal could lock accounts out.'
+      tags: [admin]
+      responses:
+        '204': { description: Removed. }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+  /v1/admin/settings/oidc/test:
+    post:
+      operationId: adminTestOidc
+      summary: Check the identity provider
+      description: 'Fetches the discovery document of the provider with the settings in force. 502 `oidc_test_failed` carries the error.'
+      tags: [admin]
+      responses:
+        '200':
+          description: Reachable.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OidcTestResult' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+        '502': { $ref: '#/components/responses/Problem' }
   /v1/admin/audit:
     get:
       operationId: adminListAudit
@@ -1636,6 +1758,59 @@ components:
       type: string
       enum: [l_per_100km, km_per_l, mpg_us, mpg_imp]
       description: '`mpg_us` uses the US gallon, `mpg_imp` the imperial gallon.'
+    SmtpSettings:
+      type: object
+      required: [source, configured, host, port, security, username, from, hasPassword, secretUnreadable]
+      properties:
+        source: { type: string, enum: [env, database, none] }
+        configured: { type: boolean }
+        host: { type: string }
+        port: { type: integer }
+        security: { type: string, enum: [tls, starttls, none] }
+        username: { type: string }
+        from: { type: string }
+        hasPassword: { type: boolean }
+        secretUnreadable: { type: boolean, description: 'A stored secret cannot be decrypted with this instance key (for example after a restore onto another key); enter it again.' }
+    SmtpSettingsInput:
+      type: object
+      additionalProperties: false
+      required: [host, port, security, from]
+      properties:
+        host: { type: string, maxLength: 253 }
+        port: { type: integer, minimum: 1, maximum: 65535 }
+        security: { type: string, enum: [tls, starttls, none] }
+        username: { type: string, maxLength: 255 }
+        password: { type: [string, 'null'], maxLength: 512, description: 'Omit to keep the stored password; null or empty removes it.' }
+        from: { type: string, maxLength: 254 }
+    SmtpTestResult:
+      type: object
+      required: [sentTo]
+      properties: { sentTo: { type: string } }
+    OidcSettings:
+      type: object
+      required: [source, configured, issuer, clientId, hasClientSecret, secretUnreadable, redirectUri]
+      properties:
+        source: { type: string, enum: [env, database, none] }
+        configured: { type: boolean }
+        issuer: { type: string }
+        clientId: { type: string }
+        hasClientSecret: { type: boolean }
+        secretUnreadable: { type: boolean }
+        redirectUri: { type: string, description: 'Register this redirect URI with the identity provider.' }
+    OidcSettingsInput:
+      type: object
+      additionalProperties: false
+      required: [issuer, clientId]
+      properties:
+        issuer: { type: string, maxLength: 512, description: 'An https URL.' }
+        clientId: { type: string, maxLength: 255 }
+        clientSecret: { type: string, maxLength: 1024, description: 'Required the first time; omit to keep the stored secret.' }
+    OidcTestResult:
+      type: object
+      required: [issuer, authorizationEndpoint]
+      properties:
+        issuer: { type: string }
+        authorizationEndpoint: { type: [string, 'null'] }
     UnitSettings:
       type: object
       required: [distanceUnit, volumeUnit, economyUnit, currency]

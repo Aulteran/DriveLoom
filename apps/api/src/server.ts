@@ -6,9 +6,8 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { migrate } from './migrate.ts';
-import { configFromEnv } from './auth/config.ts';
-import { createSmtpMailer } from './auth/mailer.ts';
-import { createOidcProvider } from './auth/oidc.ts';
+import { configFromEnv, oidcFromEnv, secretKeyFromEnv, smtpFromEnv } from './auth/config.ts';
+import { Integrations } from './admin/integrations.ts';
 import type { AuthContext } from './auth/context.ts';
 import { createApplication, SERVER_VERSION } from './application.ts';
 
@@ -16,9 +15,12 @@ const env = process.env;
 if (!env['DATABASE_URL']) { console.error('DATABASE_URL is required'); process.exit(2); }
 const pool = new pg.Pool({ connectionString: env['DATABASE_URL'], max: Number(env['DATABASE_POOL_SIZE'] ?? 10) });
 pool.on('error', (e) => console.error('idle database client error', e.message));
-const smtp = env['DRIVELOOM_SMTP_URL'] && env['DRIVELOOM_SMTP_FROM'] ? createSmtpMailer(env['DRIVELOOM_SMTP_URL'], env['DRIVELOOM_SMTP_FROM']) : null;
-const config = configFromEnv(env, !!smtp);
+const origin = env['DRIVELOOM_PUBLIC_ORIGIN'];
+if (!origin) throw new Error('DRIVELOOM_PUBLIC_ORIGIN is required');
+// SMTP and OIDC come from the environment when set, otherwise from the administrator's saved settings.
+const integrations = new Integrations(pool, secretKeyFromEnv(env), origin, { smtp: smtpFromEnv(env), oidc: oidcFromEnv(env, origin) });
 
+let config!: ReturnType<typeof configFromEnv>;
 // The database may still be starting (compose): retry the first connection for a while.
 let c: pg.PoolClient | undefined;
 for (let attempt = 1; !c; attempt++) {
@@ -32,11 +34,13 @@ try {
   const applied = await migrate(c);
   if (applied.length) console.log(`applied migrations: ${applied.join(', ')}`);
   await c.query('INSERT INTO instance_meta (instance_id) SELECT gen_random_uuid() WHERE NOT EXISTS (SELECT 1 FROM instance_meta)');
+  await integrations.load();
+  config = configFromEnv(env, !!integrations.mailer, !!integrations.oidc);
   const users = (await c.query('SELECT 1 FROM users LIMIT 1')).rowCount;
   if (!users && !config.setupToken) console.warn('WARNING: no account exists yet. The first registration becomes the administrator. Register now, or set DRIVELOOM_SETUP_TOKEN if this instance is reachable by others.');
 } finally { c.release(); }
 
-const ctx: AuthContext = { db: pool, config, mailer: smtp, oidc: config.oidc ? createOidcProvider(config.oidc) : null, now: () => new Date() };
+const ctx: AuthContext = { db: pool, config, integrations, get mailer() { return integrations.mailer; }, get oidc() { return integrations.oidc; }, now: () => new Date() };
 const defaultWeb = fileURLToPath(new URL('../../web/', import.meta.url));
 const webDir = env['DRIVELOOM_WEB_DIR'] ?? (existsSync(defaultWeb) ? defaultWeb : null);
 const app = createApplication(ctx, { webDir });

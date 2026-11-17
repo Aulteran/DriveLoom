@@ -55,14 +55,16 @@ If the pull is refused as unauthorized, the package is still private: the owner 
 | `DRIVELOOM_REGISTRATION` | no | `closed` (default; invitation only) or `open`. |
 | `DRIVELOOM_TRUSTED_PROXIES` | behind a proxy | Comma-separated IPs or CIDRs whose `X-Forwarded-For` is believed. Rate limits and audit use the resulting client address. Leave empty when nothing sits in front. |
 | `DRIVELOOM_RP_ID` | no | WebAuthn relying-party id; defaults to the origin's host name. Changing it invalidates existing passkeys. |
-| `DRIVELOOM_SMTP_URL`, `DRIVELOOM_SMTP_FROM` | no | Email for verification and password recovery, e.g. `smtps://user:pass@smtp.example.com`. Without them, recovery is by an administrator (below). |
+| `DRIVELOOM_SMTP_URL`, `DRIVELOOM_SMTP_FROM` | no | Email for verification and password recovery, e.g. `smtps://user:pass@smtp.example.com`. Without them, recovery is by an administrator (below). Optional: an administrator can instead set SMTP in the web client under Administration, Email; the variables win when both exist. |
 | `DRIVELOOM_REQUIRE_EMAIL_VERIFICATION` | no | `1` requires a verified email before sign-in. Needs SMTP. |
 | `DRIVELOOM_EMAIL_SIGN_IN_CODES` | no | `1` emails a one-time code after a correct password, as a second step for accounts without an authenticator app. Needs SMTP. |
-| `DRIVELOOM_OIDC_ISSUER`, `_CLIENT_ID`, `_CLIENT_SECRET` | no | OpenID Connect sign-in. Register `<origin>/v1/auth/oidc/callback` as the redirect URI. |
+| `DRIVELOOM_OIDC_ISSUER`, `_CLIENT_ID`, `_CLIENT_SECRET` | no | OpenID Connect sign-in. Register `<origin>/v1/auth/oidc/callback` as the redirect URI. Optional: an administrator can instead set it under Administration, Single sign-on; the variables win when both exist. |
 | `DRIVELOOM_PASSWORD_LOGIN` | no | `0` disables passwords; only allowed with OIDC configured. |
 | `HOST`, `PORT` | no | Listen address; the image uses `0.0.0.0:8080`. Without Docker the default is `127.0.0.1:8080`. |
 | `DATABASE_POOL_SIZE` | no | Default 10. |
 | `DRIVELOOM_WEB_DIR` | no | Serve the web client from another directory. |
+
+**Settings saved in the web client.** Administration has Email (SMTP) and Single sign-on (OIDC) pages. They take effect at once, with no restart, unless the environment variables above are set, in which case the page is read-only. The SMTP password and OIDC client secret are stored encrypted with `DRIVELOOM_SECRET_KEY` and are never shown again. A backup carries them as ciphertext, so a restore onto an instance with a different `DRIVELOOM_SECRET_KEY` starts with the feature off and asks an administrator to enter the secret again. The server connects to the host an administrator enters, so only administrators can change these pages (each change needs a recent sign-in and is audited).
 
 The server refuses to start on inconsistent settings (for example email verification without SMTP), so mistakes show up in the logs at once.
 

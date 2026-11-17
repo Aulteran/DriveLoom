@@ -12,6 +12,7 @@ import { AxeBuilder } from '@axe-core/playwright';
 import { createApplication } from '../../src/application.ts';
 import { defaultConfig } from '../../src/auth/config.ts';
 import { trustFromList } from '../../src/http/ip.ts';
+import { Integrations } from '../../src/admin/integrations.ts';
 import { createTestDb } from '../helpers/index.ts';
 
 const skip = process.env['DATABASE_URL'] ? false : 'DATABASE_URL not set';
@@ -25,7 +26,9 @@ test('web client journeys', { skip, timeout: 180_000 }, async (t: TestContext) =
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const config = defaultConfig({ publicOrigin: base, secretKey: Buffer.alloc(32, 9), registration: 'closed', secureCookies: false, ipTrust: trustFromList([]) });
-  const handler = createApplication({ db: db.pool, config, mailer: null, oidc: null, now: () => new Date() }, { webDir: WEB });
+  const integrations = new Integrations(db.pool, config.secretKey, base, { smtp: null, oidc: null });
+  await integrations.load();
+  const handler = createApplication({ db: db.pool, config, integrations, get mailer() { return integrations.mailer; }, get oidc() { return integrations.oidc; }, now: () => new Date() }, { webDir: WEB });
   server.on('request', (q, s) => void handler(q, s));
 
   const browser = await chromium.launch();
@@ -161,7 +164,7 @@ test('web client journeys', { skip, timeout: 180_000 }, async (t: TestContext) =
     });
 
     await t.test('settings and administration render', async () => {
-      for (const hash of ['garage', 'settings/preferences', 'settings/profile', 'settings/security', 'admin/users', 'admin/invites', 'admin/units', 'admin/audit', 'friends']) {
+      for (const hash of ['garage', 'settings/preferences', 'settings/profile', 'settings/security', 'admin/users', 'admin/invites', 'admin/units', 'admin/email', 'admin/signin', 'admin/audit', 'friends']) {
         await page.goto(`${base}/#/${hash}`);
         await page.waitForLoadState('networkidle');
         await page.locator('main h1').first().waitFor();
@@ -173,7 +176,7 @@ test('web client journeys', { skip, timeout: 180_000 }, async (t: TestContext) =
       const findings: string[] = [];
       for (const colorScheme of ['light', 'dark'] as const) {
         await page.emulateMedia({ colorScheme });
-        for (const hash of [vehicle, `${vehicle}?window=all`, `${vehicle}/log`, `${vehicle}/members`, `${vehicle}/data`, `${vehicle}/settings`, 'garage', 'friends', 'settings/preferences', 'settings/security', 'admin/users', 'admin/invites', 'admin/units', 'admin/audit']) {
+        for (const hash of [vehicle, `${vehicle}?window=all`, `${vehicle}/log`, `${vehicle}/members`, `${vehicle}/data`, `${vehicle}/settings`, 'garage', 'friends', 'settings/preferences', 'settings/security', 'admin/users', 'admin/invites', 'admin/units', 'admin/email', 'admin/signin', 'admin/audit']) {
           await page.goto(`${base}/#/${hash}`);
           await page.waitForLoadState('networkidle');
           await page.locator('main h1').first().waitFor();
@@ -200,6 +203,37 @@ test('web client journeys', { skip, timeout: 180_000 }, async (t: TestContext) =
       await page.getByRole('button', { name: 'Create invitation' }).click();
       link = (await page.locator('.notice code.secret').textContent()) ?? '';
       assert.match(link, /#\/register\?invite=/);
+    });
+
+    await t.test('an administrator saves email and sign-on settings, and the secrets stay hidden', async () => {
+      await page.goto(`${base}/#/admin/email`);
+      await page.getByRole('heading', { name: 'Email (SMTP)' }).waitFor();
+      await page.getByLabel('Server').fill('smtp.example.test');
+      await page.getByLabel('Username').fill('mailer');
+      await page.getByLabel('Password', { exact: true }).fill('smtp-secret-value');
+      await page.getByLabel('From address').fill('DriveLoom <noreply@example.test>');
+      await page.getByRole('button', { name: 'Save email settings' }).click();
+      await page.getByText('Email is on').waitFor();
+      assert.equal(await page.getByLabel('Password', { exact: true }).inputValue(), '');
+      assert.equal(await page.getByLabel('Password', { exact: true }).getAttribute('placeholder'), 'Saved. Leave blank to keep it.');
+      assert.equal((await page.content()).includes('smtp-secret-value'), false);
+      assert.deepEqual(await axe('admin email'), []);
+
+      await page.goto(`${base}/#/admin/signin`);
+      await page.getByRole('heading', { name: 'Single sign-on (OIDC)' }).waitFor();
+      assert.equal(await page.locator('code.secret').textContent(), `${base}/v1/auth/oidc/callback`);
+      await page.getByLabel('Issuer URL').fill('https://idp.example.test/');
+      await page.getByLabel('Client ID').fill('driveloom');
+      await page.getByLabel('Client secret').fill('client-secret-value');
+      await page.getByRole('button', { name: 'Save sign-on settings' }).click();
+      await page.getByText('Single sign-on is on').waitFor();
+      assert.equal((await page.content()).includes('client-secret-value'), false);
+      assert.deepEqual(await axe('admin sign-on'), []);
+
+      await page.getByRole('button', { name: 'Remove sign-on' }).click();
+      await page.locator('dialog').getByRole('button', { name: 'Remove sign-on' }).click();
+      await page.getByText('Single sign-on is off').waitFor();
+      await noErrorPage();
     });
 
     await t.test('the phone layout uses a drawer and has no horizontal scroll', async () => {
