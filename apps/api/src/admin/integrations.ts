@@ -126,7 +126,7 @@ export class Integrations {
     return { ...base, source: this.oidcSource, configured: !!this.oidc, issuer: s?.config.issuer ?? '', clientId: s?.config.clientId ?? '', hasClientSecret: !!s?.secret, secretUnreadable: !!s?.unreadable };
   }
 
-  private static managed(): HttpProblem { return new HttpProblem(409, 'managed_by_environment', 'Conflict', 'This setting is configured by environment variables on the server; change it there.'); }
+  static managed(): HttpProblem { return new HttpProblem(409, 'managed_by_environment', 'Conflict', 'This setting is configured by environment variables on the server; change it there.'); }
 
   async saveSmtp(input: ReturnType<typeof parseSmtp>): Promise<void> {
     if (this.env.smtp) throw Integrations.managed();

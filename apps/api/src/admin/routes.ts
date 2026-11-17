@@ -8,7 +8,7 @@ import { isUuid, uuidv7 } from '../ids.ts';
 import type { Id } from '../types.ts';
 import { withTx } from '../db.ts';
 import { audit, normaliseEmail, rateLimit, type AuthContext } from '../auth/context.ts';
-import { parseOidc, parseSmtp, sameIssuer, type Integrations } from './integrations.ts';
+import { Integrations, parseOidc, parseSmtp, sameIssuer } from './integrations.ts';
 import { randomToken, sha256Hex } from '../auth/crypto.ts';
 import { requireFresh, revokeAll } from '../auth/sessions.ts';
 import { getInstanceDefaults, parseUnits, setInstanceDefaults } from '../preferences.ts';
@@ -152,6 +152,7 @@ export function adminRoutes(ctx: AuthContext): Route[] {
     { method: 'PUT', path: '/v1/admin/settings/oidc', async handler(r) {
       const p = sensitive(r);
       const input = parseOidc(r.body);
+      if (integ().oidcSource === 'env') throw Integrations.managed();
       const n = await stranded(input.settings.issuer);
       if (n) throw strandedProblem(n);
       await integ().saveOidc(input);

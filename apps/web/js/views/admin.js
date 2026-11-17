@@ -125,6 +125,9 @@ async function units() {
   });
 }
 
+// The sign-in screen and Security page read these public facts once; refresh them after a change here.
+const refreshInstance = async () => { state.instance = await get('/v1/auth/instance').catch(() => state.instance); };
+
 // Settings that server environment variables manage are shown read-only.
 const envNotice = (what, vars) => h('div', { class: 'notice' },
   h('p', {}, h('strong', {}, `${what} is configured by the server environment.`)),
@@ -141,7 +144,7 @@ const removeButton = (label, path, confirm, done) => h('button', { type: 'button
   const btn = e.currentTarget;
   if (!(await confirmDialog(confirm, label))) return;
   btn.disabled = true;
-  try { await withFreshSignIn(() => del(path)); render(); toast(done); } catch (err) { toast(err.message); btn.disabled = false; }
+  try { await withFreshSignIn(() => del(path)); await refreshInstance(); render(); toast(done); } catch (err) { toast(err.message); btn.disabled = false; }
 } }, label);
 
 async function email() {
@@ -176,6 +179,7 @@ async function email() {
     const body = { host: v.host.trim(), port: Number(v.port), security: v.security, username: v.username.trim(), from: v.from.trim() };
     if (v.clearPassword) body.password = null; else if (v.password) body.password = v.password;
     await withFreshSignIn(() => put('/v1/admin/settings/smtp', body));
+    await refreshInstance();
     render();
     return 'Email settings saved.';
   });
@@ -216,6 +220,7 @@ async function signin() {
     const body = { issuer: v.issuer.trim(), clientId: v.clientId.trim() };
     if (v.clientSecret) body.clientSecret = v.clientSecret;
     await withFreshSignIn(() => put('/v1/admin/settings/oidc', body));
+    await refreshInstance();
     render();
     return 'Sign-on settings saved.';
   });
