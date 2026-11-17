@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: DriveLoom API
-  version: 0.6.0
+  version: 0.7.0
   summary: Versioned contract for the self-hosted DriveLoom API.
   description: >
     Contract for the self-hosted DriveLoom API under the compatibility policy
@@ -195,7 +195,7 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [registration, password_login, oidc, email_recovery, needs_setup, setup_token_required]
+                required: [registration, password_login, oidc, email_recovery, needs_setup, setup_token_required, default_units]
                 properties:
                   registration: { type: string, enum: [open, closed] }
                   password_login: { type: boolean }
@@ -203,6 +203,7 @@ paths:
                   email_recovery: { type: boolean }
                   needs_setup: { type: boolean, description: 'No account exists yet; the first registration becomes the administrator.' }
                   setup_token_required: { type: boolean }
+                  default_units: { $ref: '#/components/schemas/UnitSettings' }
         default:
           $ref: '#/components/responses/Problem'
   /v1/auth/account:
@@ -777,7 +778,7 @@ paths:
       tags: [preferences]
       responses:
         '200':
-          description: Preferences (defaults when never set).
+          description: Preferences (instance defaults for fields never set).
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Preferences' }
@@ -1274,6 +1275,39 @@ paths:
         '401': { $ref: '#/components/responses/Problem' }
         '403': { $ref: '#/components/responses/Problem' }
         '404': { $ref: '#/components/responses/Problem' }
+  /v1/admin/settings/units:
+    get:
+      operationId: adminGetUnitDefaults
+      summary: Instance default units and currency
+      description: 'Set by the first administrator at setup (`units` on registration) and shown to every user who has not chosen their own.'
+      tags: [admin]
+      responses:
+        '200':
+          description: The instance defaults (built-in defaults until set).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UnitSettings' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+    put:
+      operationId: adminSetUnitDefaults
+      summary: Change the instance default units and currency
+      description: 'Users who have not chosen a value for a field follow the new default; their own choices are kept. Audited as `admin.unit_defaults_changed`.'
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UnitChoice' }
+      responses:
+        '200':
+          description: The updated instance defaults.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UnitSettings' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
   /v1/admin/audit:
     get:
       operationId: adminListAudit
@@ -1407,6 +1441,9 @@ components:
         display_name: { type: string, maxLength: 80 }
         setup_token: { type: string, maxLength: 256, description: 'Required for the first account when the operator set DRIVELOOM_SETUP_TOKEN.' }
         invite_token: { type: string, maxLength: 256, description: 'Admits one registration while registration is closed.' }
+        units:
+          $ref: '#/components/schemas/UnitChoice'
+          description: 'For the first account, the instance default units; for anyone else, their own display preferences (omitted fields follow the instance defaults).'
     RegisterResult:
       type: object
       required: [status]
@@ -1550,6 +1587,9 @@ components:
       properties:
         mode: { type: string, enum: [login, link], default: login }
         setup_token: { type: string, maxLength: 256, description: 'Required when the first account is created through the identity provider and the operator set DRIVELOOM_SETUP_TOKEN.' }
+        units:
+          $ref: '#/components/schemas/UnitChoice'
+          description: 'Applied as in registration, only if this sign-in creates an account.'
     OidcStartResult:
       type: object
       required: [authorization_url]
@@ -1588,7 +1628,7 @@ components:
       type: string
       enum: [l_per_100km, km_per_l, mpg_us, mpg_imp]
       description: '`mpg_us` uses the US gallon, `mpg_imp` the imperial gallon.'
-    Preferences:
+    UnitSettings:
       type: object
       required: [distanceUnit, volumeUnit, economyUnit, currency]
       properties:
@@ -1596,7 +1636,7 @@ components:
         volumeUnit: { $ref: '#/components/schemas/VolumeUnit' }
         economyUnit: { $ref: '#/components/schemas/EconomyUnit' }
         currency: { $ref: '#/components/schemas/CurrencyCode' }
-    PreferencesPatch:
+    UnitChoice:
       type: object
       additionalProperties: false
       properties:
@@ -1604,6 +1644,27 @@ components:
         volumeUnit: { $ref: '#/components/schemas/VolumeUnit' }
         economyUnit: { $ref: '#/components/schemas/EconomyUnit' }
         currency: { $ref: '#/components/schemas/CurrencyCode' }
+    Preferences:
+      description: 'Effective preferences: the caller''s own choices over the instance defaults.'
+      allOf:
+        - { $ref: '#/components/schemas/UnitSettings' }
+        - type: object
+          required: [instanceDefaults, inherited]
+          properties:
+            instanceDefaults: { $ref: '#/components/schemas/UnitSettings' }
+            inherited:
+              type: array
+              description: Fields the caller has not chosen, which follow the instance defaults.
+              items: { type: string, enum: [distanceUnit, volumeUnit, economyUnit, currency] }
+    PreferencesPatch:
+      type: object
+      additionalProperties: false
+      description: 'Only the listed fields change. null makes a field follow the instance default again.'
+      properties:
+        distanceUnit: { oneOf: [{ $ref: '#/components/schemas/DistanceUnit' }, { type: 'null' }] }
+        volumeUnit: { oneOf: [{ $ref: '#/components/schemas/VolumeUnit' }, { type: 'null' }] }
+        economyUnit: { oneOf: [{ $ref: '#/components/schemas/EconomyUnit' }, { type: 'null' }] }
+        currency: { oneOf: [{ $ref: '#/components/schemas/CurrencyCode' }, { type: 'null' }] }
     Distance:
       type: object
       required: [value, unit]

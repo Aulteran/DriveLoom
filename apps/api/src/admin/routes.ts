@@ -1,4 +1,4 @@
-// Instance administration: users, invitations and the audit log. Admins manage
+// Instance administration: users, invitations, default units and the audit log. Admins manage
 // accounts, never vehicle data; nothing here reads a vehicle or a fuel record.
 import type { HttpRequest, Route } from '../http/app.ts';
 import { HttpProblem } from '../http/problem.ts';
@@ -10,6 +10,7 @@ import { withTx } from '../db.ts';
 import { audit, normaliseEmail, type AuthContext } from '../auth/context.ts';
 import { randomToken, sha256Hex } from '../auth/crypto.ts';
 import { requireFresh, revokeAll } from '../auth/sessions.ts';
+import { getInstanceDefaults, parseUnits, setInstanceDefaults } from '../preferences.ts';
 
 const ADMIN_LOCK = 7_165_202; // same key as the bootstrap lock: serialises every change to the set of admins
 const notFound = () => new HttpProblem(404, 'user_not_found', 'User not found');
@@ -87,6 +88,18 @@ export function adminRoutes(ctx: AuthContext): Route[] {
       if (!del.rowCount) throw new HttpProblem(404, 'invite_not_found', 'Invitation not found or already used');
       await audit(ctx.db, p.userId, 'admin.invite_revoked', null, { invite: id }, ctx.now());
       return { status: 204 };
+    } },
+    // Instance default units: what every user sees until they choose their own.
+    { method: 'GET', path: '/v1/admin/settings/units', async handler(r) {
+      admin(r);
+      return { status: 200, body: await getInstanceDefaults(ctx.db) };
+    } },
+    { method: 'PUT', path: '/v1/admin/settings/units', async handler(r) {
+      const p = admin(r);
+      const patch = parseUnits(r.body, 'Request body', false);
+      const next = await setInstanceDefaults(ctx.db, patch);
+      await audit(ctx.db, p.userId, 'admin.unit_defaults_changed', null, { ...patch }, ctx.now());
+      return { status: 200, body: next };
     } },
     { method: 'GET', path: '/v1/admin/audit', async handler(r) {
       admin(r);

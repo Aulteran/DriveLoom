@@ -52,6 +52,9 @@ test('web client journeys', { skip, timeout: 180_000 }, async (t: TestContext) =
       await page.goto(`${base}/`);
       await page.getByLabel('Email').waitFor();
       assert.deepEqual(await axe('register'), []);
+      // The administrator picks the instance default units at setup.
+      await page.getByText('Default units for this instance').waitFor();
+      assert.equal(await page.getByLabel('Distance').inputValue(), 'km');
       await page.getByLabel('Email').fill(ADMIN.email);
       await page.getByLabel('Password').first().fill(ADMIN.password);
       await page.getByRole('button', { name: /create|register/i }).click();
@@ -158,7 +161,7 @@ test('web client journeys', { skip, timeout: 180_000 }, async (t: TestContext) =
     });
 
     await t.test('settings and administration render', async () => {
-      for (const hash of ['garage', 'settings/preferences', 'settings/profile', 'settings/security', 'admin/users', 'admin/invites', 'admin/audit', 'friends']) {
+      for (const hash of ['garage', 'settings/preferences', 'settings/profile', 'settings/security', 'admin/users', 'admin/invites', 'admin/units', 'admin/audit', 'friends']) {
         await page.goto(`${base}/#/${hash}`);
         await page.waitForLoadState('networkidle');
         await page.locator('main h1').first().waitFor();
@@ -170,7 +173,7 @@ test('web client journeys', { skip, timeout: 180_000 }, async (t: TestContext) =
       const findings: string[] = [];
       for (const colorScheme of ['light', 'dark'] as const) {
         await page.emulateMedia({ colorScheme });
-        for (const hash of [vehicle, `${vehicle}?window=all`, `${vehicle}/log`, `${vehicle}/members`, `${vehicle}/data`, `${vehicle}/settings`, 'garage', 'friends', 'settings/preferences', 'settings/security', 'admin/users', 'admin/invites', 'admin/audit']) {
+        for (const hash of [vehicle, `${vehicle}?window=all`, `${vehicle}/log`, `${vehicle}/members`, `${vehicle}/data`, `${vehicle}/settings`, 'garage', 'friends', 'settings/preferences', 'settings/security', 'admin/users', 'admin/invites', 'admin/units', 'admin/audit']) {
           await page.goto(`${base}/#/${hash}`);
           await page.waitForLoadState('networkidle');
           await page.locator('main h1').first().waitFor();
@@ -183,6 +186,7 @@ test('web client journeys', { skip, timeout: 180_000 }, async (t: TestContext) =
 
     await t.test('preferences change the units shown', async () => {
       await page.goto(`${base}/#/settings/preferences`);
+      assert.equal(await page.getByLabel('Fuel economy').inputValue(), '', 'follows the instance default until changed');
       await page.getByLabel('Fuel economy').selectOption('mpg_us');
       await page.getByRole('button', { name: 'Save preferences' }).click();
       await page.getByText('Preferences saved.').waitFor();
