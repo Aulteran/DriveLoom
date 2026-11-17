@@ -48,23 +48,29 @@ test('web client journeys', { skip, timeout: 180_000 }, async (t: TestContext) =
     return r.violations.map((v) => `${label}: ${v.id} (${v.impact}) ${v.nodes.slice(0, 3).map((n) => n.target.join(' ')).join(' | ')}`);
   };
   try {
-    await t.test('first account registers and lands on the garage', async () => {
+    await t.test('first account registers and lands on the welcome screen', async () => {
       await page.goto(`${base}/`);
       await page.getByLabel('Email').waitFor();
       assert.deepEqual(await axe('register'), []);
       await page.getByLabel('Email').fill(ADMIN.email);
       await page.getByLabel('Password').first().fill(ADMIN.password);
       await page.getByRole('button', { name: /create|register/i }).click();
-      await page.getByRole('heading', { name: 'Your vehicles' }).waitFor();
+      await page.getByRole('heading', { name: 'Welcome to DriveLoom' }).waitFor();
+      assert.deepEqual(await axe('welcome'), []);
     });
 
     await t.test('a vehicle is added and fill-ups produce economy', async () => {
       await page.getByLabel('Name').fill('Golf');
       await page.getByLabel('Make').fill('VW');
-      await page.getByRole('button', { name: 'Add vehicle' }).last().click();
-      await page.getByRole('heading', { name: 'Golf' }).waitFor();
+      await page.getByRole('button', { name: 'Add vehicle' }).click();
+      await page.getByRole('heading', { name: 'Golf', level: 1 }).waitFor();
+      await page.getByRole('heading', { name: 'No fill-ups yet' }).waitFor();
       vehicle = new URL(page.url()).hash.replace(/^#\//, '').split('/').slice(0, 2).join('/');
       assert.match(vehicle, /^vehicles\/[0-9a-f-]{36}$/);
+      // The empty dashboard offers the first fill-up; it opens the form on the fuel log.
+      await page.getByRole('link', { name: 'Add fill-up' }).click();
+      await page.getByLabel('Odometer reading').waitFor();
+      await page.getByRole('button', { name: 'Cancel' }).click();
       // Recent dates, so the default statistics period always includes them.
       const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10) + 'T10:00';
       const fills = [[daysAgo(40), '10000', '40', '70'], [daysAgo(25), '10600', '42', '73.5'], [daysAgo(10), '11150', '38.5', '68']] as const;
@@ -83,20 +89,76 @@ test('web client journeys', { skip, timeout: 180_000 }, async (t: TestContext) =
       await page.getByText('7.00 L/100 km').first().waitFor();
     });
 
-    await t.test('every vehicle tab renders', async () => {
-      await page.getByRole('link', { name: 'Statistics' }).click();
-      await page.locator('svg.chart').waitFor();
-      for (const tab of ['Members', 'Import & export', 'Settings']) {
-        await page.getByRole('link', { name: tab, exact: true }).last().click();
-        await page.waitForLoadState('networkidle');
+    await t.test('the dashboard shows charts and reports', async () => {
+      const vehicleNav = page.getByRole('navigation', { name: 'Vehicle' });
+      await vehicleNav.getByRole('link', { name: 'Dashboard' }).click();
+      await page.getByRole('heading', { name: 'Golf', level: 1 }).waitFor();
+      await page.locator('svg.chart').first().waitFor();
+      assert.equal(await page.locator('svg.chart').count(), 4, 'economy, spending, distance and fuel charts');
+      for (const name of ['Monthly spending', 'At a glance', 'Recent fill-ups']) await page.getByRole('heading', { name }).waitFor();
+      await page.getByText('Average economy').waitFor();
+      await page.getByLabel('Period', { exact: true }).selectOption('all');
+      await page.waitForURL(/window=all/);
+      await page.locator('svg.chart').first().waitFor();
+      await noErrorPage();
+      // The old statistics URL still works and now opens the dashboard.
+      await page.goto(`${base}/#/${vehicle}/stats`);
+      await page.getByRole('heading', { name: 'At a glance' }).waitFor();
+    });
+
+    await t.test('every vehicle section renders from the sidebar', async () => {
+      const vehicleNav = page.getByRole('navigation', { name: 'Vehicle' });
+      for (const [link, heading] of [['Members', 'Members'], ['Import & export', 'Import & export'], ['Vehicle settings', 'Vehicle settings']] as const) {
+        await vehicleNav.getByRole('link', { name: link, exact: true }).click();
+        await page.getByRole('heading', { name: heading, level: 1 }).waitFor();
         await noErrorPage();
       }
-      await page.getByLabel(/compare|friends/i).first().check();
+      await page.getByLabel("Share this vehicle's economy with my friends").check();
       await page.waitForLoadState('networkidle');
     });
 
+    await t.test('the garage adds a second vehicle and the switcher changes vehicle', async () => {
+      await page.getByRole('navigation', { name: 'Account' }).getByRole('link', { name: 'Garage' }).click();
+      await page.getByRole('heading', { name: 'Garage', level: 1 }).waitFor();
+      await page.getByRole('button', { name: 'Add vehicle' }).first().click();
+      await page.getByLabel('Name').fill('Clio');
+      await page.locator('form').getByRole('button', { name: 'Add vehicle' }).click();
+      await page.getByRole('heading', { name: 'Clio', level: 1 }).waitFor();
+      await page.getByRole('combobox', { name: 'Vehicle' }).selectOption({ label: 'Golf' });
+      await page.getByRole('heading', { name: 'Golf', level: 1 }).waitFor();
+      // The root opens the vehicle last looked at.
+      await page.goto(`${base}/#/`);
+      await page.getByRole('heading', { name: 'Golf', level: 1 }).waitFor();
+      assert.equal(await page.getByRole('combobox', { name: 'Vehicle' }).inputValue(), vehicle.split('/')[1]);
+    });
+
+    await t.test('the theme toggle overrides the system and survives a reload', async () => {
+      const findings: string[] = [];
+      for (const [system, forced] of [['light', 'Dark'], ['dark', 'Light']] as const) {
+        await page.emulateMedia({ colorScheme: system });
+        await page.goto(`${base}/#/${vehicle}`);
+        await page.getByRole('heading', { name: 'At a glance' }).waitFor();
+        await page.getByRole('group', { name: 'Colour theme' }).getByRole('button', { name: forced }).click();
+        assert.equal(await page.evaluate('document.documentElement.dataset.theme'), forced.toLowerCase());
+        await page.reload();
+        await page.getByRole('heading', { name: 'At a glance' }).waitFor();
+        assert.equal(await page.evaluate('document.documentElement.dataset.theme'), forced.toLowerCase(), 'kept after reload');
+        assert.equal(await page.getByRole('button', { name: forced }).getAttribute('aria-pressed'), 'true');
+        for (const hash of [vehicle, `${vehicle}/log`, 'garage', 'friends', 'settings/security']) {
+          await page.goto(`${base}/#/${hash}`);
+          await page.waitForLoadState('networkidle');
+          await page.locator('main h1').first().waitFor();
+          findings.push(...await axe(`forced ${forced} on ${system} #/${hash}`));
+        }
+        await page.getByRole('button', { name: 'System' }).click();
+        assert.equal(await page.evaluate('document.documentElement.dataset.theme ?? null'), null);
+      }
+      await page.emulateMedia({ colorScheme: 'light' });
+      assert.deepEqual(findings, []);
+    });
+
     await t.test('settings and administration render', async () => {
-      for (const hash of ['settings/preferences', 'settings/profile', 'settings/security', 'admin/users', 'admin/invites', 'admin/audit', 'friends']) {
+      for (const hash of ['garage', 'settings/preferences', 'settings/profile', 'settings/security', 'admin/users', 'admin/invites', 'admin/audit', 'friends']) {
         await page.goto(`${base}/#/${hash}`);
         await page.waitForLoadState('networkidle');
         await page.locator('main h1').first().waitFor();
@@ -108,7 +170,7 @@ test('web client journeys', { skip, timeout: 180_000 }, async (t: TestContext) =
       const findings: string[] = [];
       for (const colorScheme of ['light', 'dark'] as const) {
         await page.emulateMedia({ colorScheme });
-        for (const hash of ['', vehicle, `${vehicle}/stats`, `${vehicle}/members`, `${vehicle}/data`, `${vehicle}/settings`, 'friends', 'settings/preferences', 'settings/security', 'admin/users', 'admin/invites', 'admin/audit']) {
+        for (const hash of [vehicle, `${vehicle}?window=all`, `${vehicle}/log`, `${vehicle}/members`, `${vehicle}/data`, `${vehicle}/settings`, 'garage', 'friends', 'settings/preferences', 'settings/security', 'admin/users', 'admin/invites', 'admin/audit']) {
           await page.goto(`${base}/#/${hash}`);
           await page.waitForLoadState('networkidle');
           await page.locator('main h1').first().waitFor();
@@ -136,13 +198,27 @@ test('web client journeys', { skip, timeout: 180_000 }, async (t: TestContext) =
       assert.match(link, /#\/register\?invite=/);
     });
 
-    await t.test('the phone layout has no horizontal scroll', async () => {
+    await t.test('the phone layout uses a drawer and has no horizontal scroll', async () => {
       await page.setViewportSize({ width: 390, height: 844 });
-      for (const hash of ['', 'friends', 'settings/security', 'admin/users']) {
+      const overflows = () => page.evaluate('document.documentElement.scrollWidth > window.innerWidth + 1');
+      for (const hash of [vehicle, `${vehicle}/log`, 'garage', 'friends', 'settings/security', 'admin/users']) {
         await page.goto(`${base}/#/${hash}`);
         await page.waitForLoadState('networkidle');
-        assert.equal(await page.evaluate('document.documentElement.scrollWidth > window.innerWidth + 1'), false, `#/${hash} overflows`);
+        await page.locator('main h1').first().waitFor();
+        assert.equal(await overflows(), false, `#/${hash} overflows`);
       }
+      const nav = page.getByRole('navigation', { name: 'Account' });
+      await nav.waitFor({ state: 'hidden' }); // the drawer starts closed
+      await page.getByRole('button', { name: 'Open menu' }).click();
+      await nav.getByRole('link', { name: 'Friends' }).waitFor();
+      assert.equal(await overflows(), false, 'the open drawer overflows');
+      assert.deepEqual(await axe('open drawer'), []);
+      await page.keyboard.press('Escape');
+      await nav.waitFor({ state: 'hidden' });
+      await page.getByRole('button', { name: 'Open menu' }).click();
+      await nav.getByRole('link', { name: 'Friends' }).click();
+      await page.getByRole('heading', { name: 'Friends', level: 1 }).waitFor();
+      await nav.waitFor({ state: 'hidden' });
       await page.setViewportSize({ width: 1100, height: 900 });
     });
 
@@ -153,7 +229,7 @@ test('web client journeys', { skip, timeout: 180_000 }, async (t: TestContext) =
       await p2.getByLabel('Email').fill(FRIEND.email);
       await p2.getByLabel('Password').first().fill(FRIEND.password);
       await p2.getByRole('button', { name: /create|register/i }).click();
-      await p2.getByRole('heading', { name: 'Your vehicles' }).waitFor();
+      await p2.getByRole('heading', { name: 'Welcome to DriveLoom' }).waitFor();
       await p2.goto(`${base}/#/friends`);
       await p2.getByLabel('Their email').fill(ADMIN.email);
       await p2.getByRole('button', { name: 'Send request' }).click();
@@ -162,10 +238,11 @@ test('web client journeys', { skip, timeout: 180_000 }, async (t: TestContext) =
 
     await t.test('signing out and back in, the request is accepted', async () => {
       await page.getByRole('button', { name: /sign out/i }).click();
-      await page.getByLabel('Email').fill(ADMIN.email);
+      await page.getByRole('heading', { name: 'Sign in' }).waitFor();
+      await page.getByLabel('Email', { exact: true }).fill(ADMIN.email);
       await page.getByLabel('Password').fill(ADMIN.password);
       await page.getByRole('button', { name: /^sign in$/i }).click();
-      await page.getByRole('heading', { name: 'Your vehicles' }).waitFor();
+      await page.getByRole('heading', { name: 'At a glance' }).waitFor();
       await page.goto(`${base}/#/friends`);
       await page.getByRole('button', { name: 'Accept' }).click();
       await page.getByText(FRIEND.email).waitFor();

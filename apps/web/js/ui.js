@@ -34,6 +34,13 @@ export function s(tag, attrs = {}, ...children) {
 export function mount(node, title) {
   const main = document.getElementById('main');
   main.replaceChildren(node);
+  // A table that scrolls sideways (phones) must be reachable by keyboard.
+  for (const w of main.querySelectorAll('.table-wrap')) {
+    if (w.scrollWidth > w.clientWidth + 1) {
+      w.tabIndex = 0; w.setAttribute('role', 'region');
+      w.setAttribute('aria-label', w.querySelector('caption')?.textContent || 'Table');
+    }
+  }
   if (title) document.title = `${title} · DriveLoom`;
   main.focus({ preventScroll: true });
   window.scrollTo(0, 0);

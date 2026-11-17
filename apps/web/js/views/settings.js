@@ -97,7 +97,7 @@ function profile() {
             state.account = null; setCsrf(null); go('#/signin');
             toast('Your account was deleted.');
           } catch (err) {
-            showError(box, err.code === 'owns_vehicles' ? new Error('You still own vehicles. Transfer ownership from each vehicle\'s Members tab, then try again.') : err);
+            showError(box, err.code === 'owns_vehicles' ? new Error('You still own vehicles. Transfer ownership from each vehicle\'s Members page, then try again.') : err);
           }
         } }, 'Delete account'));
       })()));

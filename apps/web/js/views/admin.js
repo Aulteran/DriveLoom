@@ -111,7 +111,7 @@ async function audit(query) {
 }
 
 export async function adminView(section, query) {
-  if (state.account?.instanceRole !== 'admin') return h('div', { class: 'panel empty' }, h('h1', {}, 'Administrators only'), h('p', {}, h('a', { href: '#/' }, 'Back to your vehicles')));
+  if (state.account?.instanceRole !== 'admin') return h('div', { class: 'panel empty' }, h('h1', {}, 'Administrators only'), h('p', {}, h('a', { href: '#/' }, 'Back to your dashboard')));
   if (!SECTIONS.some(([k]) => k === section)) section = 'users';
   const body = section === 'invites' ? await invites() : section === 'audit' ? await audit(query) : await users();
   return h('div', {},

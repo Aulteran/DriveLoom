@@ -4,10 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <meta name="theme-color" content="#edf1f8" media="(prefers-color-scheme: light)">
-  <meta name="theme-color" content="#05070e" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#eef0f6" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#08090f" media="(prefers-color-scheme: dark)">
   <meta name="referrer" content="no-referrer">
   <title>DriveLoom</title>
+  <script src="/js/theme-boot.js"></script>
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="preload" href="/fonts/space-grotesk-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
@@ -16,17 +17,15 @@
 </head>
 <body>
   <a class="skip" href="#main">Skip to content</a>
-  <header class="topbar" id="topbar" hidden>
-    <a class="brand" href="#/"><img src="/icon.svg" alt="" width="32" height="32"><span>DriveLoom</span></a>
-    <nav aria-label="Main">
-      <a href="#/" data-nav="vehicles">Vehicles</a>
-      <a href="#/friends" data-nav="friends">Friends</a>
-      <a href="#/settings" data-nav="settings">Settings</a>
-      <a href="#/admin" data-nav="admin" hidden id="nav-admin">Admin</a>
-    </nav>
-    <button type="button" class="secondary" id="signout">Sign out</button>
-  </header>
-  <main id="main" tabindex="-1"><p class="loading" role="status">Loading…</p></main>
+  <div class="app" id="app">
+    <header class="mobilebar" id="mobilebar" hidden>
+      <button type="button" class="ghost icon-only" id="menu-open" aria-controls="sidebar" aria-expanded="false" aria-label="Open menu"></button>
+      <a class="brand" href="#/"><img src="/icon.svg" alt="" width="28" height="28"><span>DriveLoom</span></a>
+    </header>
+    <div class="scrim" id="scrim" hidden></div>
+    <aside class="sidebar" id="sidebar" aria-label="Sidebar" hidden></aside>
+    <main id="main" tabindex="-1"><p class="loading" role="status">Loading…</p></main>
+  </div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <noscript><p class="panel">DriveLoom needs JavaScript enabled.</p></noscript>
 </body>
