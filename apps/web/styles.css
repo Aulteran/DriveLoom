@@ -1,4 +1,4 @@
-/* DriveLoom web client: the "Loom HUD" visual system. See docs/DESIGN.md.
+/* DriveLoom web client: the "Loom HUD" visual system.
    Self-hosted fonts only; no external requests. Themes follow the OS unless
    <html data-theme="light|dark"> overrides it (set by js/theme.js). */
 

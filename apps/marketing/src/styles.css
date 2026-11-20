@@ -1,4 +1,4 @@
-/* DriveLoom marketing site, in the web client's "Loom HUD" system (docs/DESIGN.md):
+/* DriveLoom marketing site, in the web client's "Loom HUD" system:
    frosted glass over soft colour fields, indigo accent, cyan for data.
    Tokens match apps/web/styles.css. Self-hosted fonts only; no external requests.
    Themes follow the OS unless <html data-theme="light|dark"> overrides it. */

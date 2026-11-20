@@ -1,5 +1,5 @@
 // Process entry point: `node src/server.ts`. Reads configuration from the
-// environment (docs/DEPLOYMENT.md), runs migrations, then serves the API under
+// environment, runs migrations, then serves the API under
 // /v1 and the web client everywhere else on one origin.
 import { createServer } from 'node:http';
 import { existsSync } from 'node:fs';

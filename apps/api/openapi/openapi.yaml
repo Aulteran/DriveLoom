@@ -4,8 +4,7 @@ info:
   version: 0.9.0
   summary: Versioned contract for the self-hosted DriveLoom API.
   description: >
-    Contract for the self-hosted DriveLoom API under the compatibility policy
-    in docs/CONTRACTS.md. Authenticated requests
+    Contract for the self-hosted DriveLoom API under a compatibility policy. Authenticated requests
     use the `dl_session` cookie; unsafe methods must also send the
     `X-CSRF-Token` returned at sign-in, and any `Origin` header must equal the
     instance public origin.
@@ -1487,7 +1486,7 @@ components:
       pattern: '^-?(0|[1-9][0-9]*)(\.[0-9]+)?$'
       description: >
         Exact decimal as a string. Never a JSON number. Scale rules per field
-        are in docs/CONTRACTS.md.
+        are given per field in this document.
       examples: ['42.375']
     CurrencyCode:
       type: string

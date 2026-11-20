@@ -1,5 +1,5 @@
-// Exact decimal arithmetic for quantities, money and economy (docs/CONTRACTS.md,
-// "Decimal rules"). Values are rationals over bigint, so conversions and
+// Exact decimal arithmetic for quantities, money and economy.
+// Values are rationals over bigint, so conversions and
 // aggregation never lose precision; rounding happens once, in toFixed, half
 // away from zero. JS numbers are never used for stored or reported values.
 import type { Decimal } from './types.ts';
