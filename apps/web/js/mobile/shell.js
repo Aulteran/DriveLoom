@@ -88,7 +88,8 @@ function switchVehicle() {
     // Home and History follow the new vehicle; a vehicle page keeps its section.
     if (parts[0] === 'vehicles' && parts[1]) go(`#/vehicles/${v.id}${parts[2] && parts[2] !== 'stats' ? `/${parts[2]}` : ''}`);
     else if (currentTab === 'home') go(`#/vehicles/${v.id}`);
-    else chrome(true, { tab: currentTab, vehicle: v });
+    // Elsewhere stay put; re-render, since a screen (the Vehicles list) may show the active vehicle.
+    else render();
   });
 }
 
