@@ -5,10 +5,15 @@ export type GrantableRole = 'editor' | 'viewer';
 
 export interface Vehicle {
   id: Id;
-  name: string;
+  /** Optional nickname. When null, clients identify the vehicle by plate, year and model. */
+  name: string | null;
   make: string | null;
   model: string | null;
   year: number | null;
+  /** Private to the vehicle's members: never sent to friends or comparisons. */
+  plateRegion: string | null;
+  plateNumber: string | null;
+  vin: string | null;
   archived: boolean;
   /** Unit of the car's physical odometer; readings are shown in it. */
   odometerUnit: DistanceUnit;
@@ -21,7 +26,7 @@ export interface Vehicle {
   /** The calling user's role on this vehicle. */
   role: Role;
 }
-export interface VehicleInput { name: string; make?: string | null; model?: string | null; year?: number | null; odometerUnit?: DistanceUnit; currency?: string }
+export interface VehicleInput { name?: string | null; plateRegion?: string | null; plateNumber?: string | null; vin?: string | null; make?: string | null; model?: string | null; year?: number | null; odometerUnit?: DistanceUnit; currency?: string }
 /** What other modules need to authorize work on a vehicle. */
 export interface VehicleAccess { id: Id; role: Role; archived: boolean; odometerUnit: DistanceUnit; currency: string }
 export type VehiclePatch = Partial<VehicleInput>;

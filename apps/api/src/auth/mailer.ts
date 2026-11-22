@@ -8,6 +8,19 @@ export function createSmtpMailer(url: string, from: string): Mailer {
   return { async send(to, subject, text) { await transport.sendMail({ from, to, subject, text }); } };
 }
 
+export type SmtpSecurity = 'tls' | 'starttls' | 'none';
+export interface SmtpOptions { host: string; port: number; security: SmtpSecurity; username: string | null; password: string | null; from: string }
+
+/** SMTP from structured settings (the admin page). Short timeouts so a wrong host fails fast. */
+export function createSmtpMailerFromOptions(o: SmtpOptions): Mailer {
+  const transport = nodemailer.createTransport({
+    host: o.host, port: o.port, secure: o.security === 'tls', requireTLS: o.security === 'starttls', ignoreTLS: o.security === 'none',
+    ...(o.username ? { auth: { user: o.username, pass: o.password ?? '' } } : {}),
+    connectionTimeout: 10_000, greetingTimeout: 10_000, socketTimeout: 20_000,
+  });
+  return { async send(to, subject, text) { await transport.sendMail({ from: o.from, to, subject, text }); } };
+}
+
 /** In-memory mailer for tests. */
 export class MemoryMailer implements Mailer {
   readonly sent: { to: string; subject: string; text: string }[] = [];

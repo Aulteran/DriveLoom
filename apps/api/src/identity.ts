@@ -1,7 +1,6 @@
 // Identity and authorization interface shared by every API milestone.
 // Owned by the auth lane (milestone 1.2); other lanes depend on this file and
-// on the `users` table only. See "Identity and authorization interface" in
-// docs/CONTRACTS.md before changing anything here (changes are a contract change).
+// on the `users` table only. Treat any change here as an API contract change.
 import type { Id } from './types.ts';
 
 /** Instance-level role. Not a vehicle role: admins get no routine vehicle access. */

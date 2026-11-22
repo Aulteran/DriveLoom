@@ -13,14 +13,14 @@ import type { GrantableRole, Member, Role, Vehicle, VehicleAccess, VehicleInput,
 
 type Q = pg.PoolClient;
 interface VehicleRow {
-  id: Id; name: string; make: string | null; model: string | null; model_year: number | null;
+  id: Id; name: string | null; make: string | null; model: string | null; model_year: number | null; plate_region: string | null; plate_number: string | null; vin: string | null;
   archived_at: Date | null; created_at: Date; updated_at: Date; role: Role; odometer_unit: DistanceUnit; currency: string; image_version: string | null;
 }
 const toVehicle = (r: VehicleRow): Vehicle => ({
-  id: r.id, name: r.name, make: r.make, model: r.model, year: r.model_year, archived: r.archived_at !== null, odometerUnit: r.odometer_unit, currency: r.currency, imageVersion: r.image_version,
+  id: r.id, name: r.name, make: r.make, model: r.model, year: r.model_year, plateRegion: r.plate_region, plateNumber: r.plate_number, vin: r.vin, archived: r.archived_at !== null, odometerUnit: r.odometer_unit, currency: r.currency, imageVersion: r.image_version,
   createdAt: r.created_at.toISOString(), updatedAt: r.updated_at.toISOString(), role: r.role,
 });
-const COLS = 'v.id, v.name, v.make, v.model, v.model_year, v.archived_at, v.created_at, v.updated_at, m.role, v.odometer_unit, v.currency, (SELECT (extract(epoch FROM i.updated_at) * 1000)::bigint::text FROM vehicle_images i WHERE i.vehicle_id = v.id) AS image_version';
+const COLS = 'v.id, v.name, v.make, v.model, v.model_year, v.plate_region, v.plate_number, v.vin, v.archived_at, v.created_at, v.updated_at, m.role, v.odometer_unit, v.currency, (SELECT (extract(epoch FROM i.updated_at) * 1000)::bigint::text FROM vehicle_images i WHERE i.vehicle_id = v.id) AS image_version';
 
 function text(v: unknown, field: string, required: boolean): string | null {
   if (v === undefined || v === null) { if (required) throw invalid(`${field} is required.`); return null; }
@@ -29,6 +29,20 @@ function text(v: unknown, field: string, required: boolean): string | null {
   if (t.length < 1 || t.length > 80) throw invalid(`${field} must be 1 to 80 characters.`);
   return t;
 }
+/** Uppercase, trimmed, optional. `pattern` runs on the normalised value; `collapse` removes the given characters first. */
+function code(v: unknown, field: string, max: number, pattern: RegExp, hint: string, strip?: RegExp, min = 1): string | null {
+  if (v === undefined || v === null) return null;
+  if (typeof v !== 'string') throw invalid(`${field} must be a string.`);
+  let t = v.trim().toUpperCase();
+  t = strip ? t.replace(strip, '') : t.replace(/\s+/g, ' ');
+  if (t === '') return null;
+  if (t.length < min || t.length > max || !pattern.test(t)) throw invalid(`${field} ${hint}`);
+  return t;
+}
+const plateRegion = (v: unknown) => code(v, 'plateRegion', 10, /^[A-Z0-9 -]+$/, 'must be a state or province code such as ON or FL.');
+const plateNumber = (v: unknown) => code(v, 'plateNumber', 12, /^[A-Z0-9][A-Z0-9 -]*$/, 'must be letters, digits, spaces or hyphens (up to 12).');
+const vin = (v: unknown) => code(v, 'vin', 17, /^[A-HJ-NPR-Z0-9]+$/, 'must be 5 to 17 letters and digits (I, O and Q are not used in VINs).', /[\s-]+/g, 5);
+
 function year(v: unknown): number | null {
   if (v === undefined || v === null) return null;
   if (typeof v !== 'number' || !Number.isInteger(v) || v < 1886 || v > new Date().getUTCFullYear() + 2) throw invalid('year is out of range.');
@@ -103,15 +117,15 @@ export class VehicleService {
   }
 
   async create(p: Principal, input: VehicleInput, within?: Q): Promise<Vehicle> {
-    const name = text(input.name, 'name', true), make = text(input.make, 'make', false), model = text(input.model, 'model', false);
-    const y = year(input.year);
+    const name = text(input.name, 'name', false), make = text(input.make, 'make', false), model = text(input.model, 'model', false);
+    const y = year(input.year), region = plateRegion(input.plateRegion), plate = plateNumber(input.plateNumber), vinValue = vin(input.vin);
     // Unit and currency default to the creator's display preferences.
     const prefs = input.odometerUnit === undefined || input.currency === undefined ? await getPreferences(this.#pool, p.userId) : null;
     const unit = input.odometerUnit === undefined ? prefs!.distanceUnit : odometerUnit(input.odometerUnit);
     const cur = input.currency === undefined ? prefs!.currency : currency(input.currency);
     const insert = async (c: Q) => {
       const vid = uuidv7();
-      await c.query('INSERT INTO vehicles (id, name, make, model, model_year, odometer_unit, currency) VALUES ($1,$2,$3,$4,$5,$6,$7)', [vid, name, make, model, y, unit, cur]);
+      await c.query('INSERT INTO vehicles (id, name, make, model, model_year, plate_region, plate_number, vin, odometer_unit, currency) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)', [vid, name, make, model, y, region, plate, vinValue, unit, cur]);
       await c.query("INSERT INTO vehicle_members (vehicle_id, user_id, role, granted_by) VALUES ($1,$2,'owner',$2)", [vid, p.userId]);
       await this.#audit(c, p.userId, 'vehicle.create', vid);
       return this.#load(c, p, vid);
@@ -138,10 +152,13 @@ export class VehicleService {
   async update(p: Principal, vehicleId: unknown, patch: VehiclePatch): Promise<Vehicle> {
     const sets: string[] = [], vals: unknown[] = [];
     const add = (col: string, v: unknown) => { vals.push(v); sets.push(`${col} = $${vals.length + 1}`); };
-    if ('name' in patch) add('name', text(patch.name, 'name', true));
+    if ('name' in patch) add('name', text(patch.name, 'name', false));
     if ('make' in patch) add('make', text(patch.make, 'make', false));
     if ('model' in patch) add('model', text(patch.model, 'model', false));
     if ('year' in patch) add('model_year', year(patch.year));
+    if ('plateRegion' in patch) add('plate_region', plateRegion(patch.plateRegion));
+    if ('plateNumber' in patch) add('plate_number', plateNumber(patch.plateNumber));
+    if ('vin' in patch) add('vin', vin(patch.vin));
     if ('odometerUnit' in patch) add('odometer_unit', odometerUnit(patch.odometerUnit));
     if ('currency' in patch) add('currency', currency(patch.currency));
     return this.#tx(async (c) => {

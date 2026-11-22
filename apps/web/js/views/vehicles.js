@@ -2,8 +2,8 @@
 // and the first-run welcome screen shown before any vehicle exists.
 import { post } from '../api.js';
 import { h, form, field, select } from '../ui.js';
-import { go, state } from '../main.js';
-import { ROLE } from '../format.js';
+import { go, state } from '../core.js';
+import { ROLE, vehicleTitle, vehicleDescription } from '../format.js';
 import { icon } from '../icons.js';
 
 export const CURRENCIES = ['USD', 'EUR', 'GBP', 'CAD', 'AUD', 'CHF', 'JPY', 'INR', 'NZD', 'SEK', 'NOK', 'DKK', 'PLN', 'CZK', 'ZAR', 'BRL', 'MXN', 'SGD', 'HKD', 'AED'];
@@ -13,8 +13,8 @@ function card(v) {
   return h('a', { class: 'card', href: `#/vehicles/${v.id}` },
     h('div', { class: 'photo' }, v.imageVersion ? h('img', { src: `/v1/vehicles/${v.id}/image?v=${v.imageVersion}`, alt: '', loading: 'lazy' }) : icon('car')),
     h('div', { class: 'body' },
-      h('div', { class: 'row spread' }, h('strong', {}, v.name), h('span', { class: `badge ${v.role === 'owner' ? 'accent' : ''}` }, ROLE[v.role])),
-      h('div', { class: 'muted small' }, [v.year, v.make, v.model].filter(Boolean).join(' ') || '—', v.archived ? ' · archived' : '')));
+      h('div', { class: 'row spread' }, h('strong', {}, vehicleTitle(v)), h('span', { class: `badge ${v.role === 'owner' ? 'accent' : ''}` }, ROLE[v.role])),
+      h('div', { class: 'muted small' }, (vehicleTitle(v) === vehicleDescription(v) ? '' : vehicleDescription(v)) || '—', v.archived ? ' · archived' : '')));
 }
 
 function createForm(hidden) {
@@ -22,15 +22,18 @@ function createForm(hidden) {
   return form({ class: 'panel', hidden }, [
     h('h2', {}, 'Add a vehicle'),
     h('div', { class: 'grid' },
-      field('Name', h('input', { name: 'name', required: true, maxlength: 80, placeholder: 'Daily driver' })),
+      field('Nickname (optional)', h('input', { name: 'name', maxlength: 80, placeholder: 'Daily driver' }), 'Without one, the plate, year and model identify the vehicle.'),
       field('Make', h('input', { name: 'make', maxlength: 80 })),
       field('Model', h('input', { name: 'model', maxlength: 80 })),
       field('Year', h('input', { name: 'year', type: 'number', min: 1886, max: new Date().getFullYear() + 2 })),
+      field('State or province (optional)', h('input', { name: 'plateRegion', maxlength: 10, placeholder: 'ON', autocomplete: 'off' })),
+      field('Licence plate (optional)', h('input', { name: 'plateNumber', maxlength: 12, placeholder: 'CXPZ101', autocomplete: 'off' })),
+      field('VIN (optional)', h('input', { name: 'vin', maxlength: 20, autocomplete: 'off' }), 'Plate and VIN are visible only to this vehicle\'s owner and drivers, never to friends.'),
       field('Odometer unit', select('odometerUnit', [['km', 'Kilometres'], ['mi', 'Miles']], prefs.distanceUnit), 'What the car\'s own odometer shows.'),
       field('Reporting currency', select('currency', currencyOptions(prefs.currency), prefs.currency), 'Costs are totalled in this currency. It is fixed once costs are recorded.')),
     h('button', { type: 'submit' }, 'Add vehicle'),
   ], async (v) => {
-    const created = await post('/v1/vehicles', { name: v.name, make: v.make || null, model: v.model || null, year: v.year ? Number(v.year) : null, odometerUnit: v.odometerUnit, currency: v.currency });
+    const created = await post('/v1/vehicles', { name: v.name || null, make: v.make || null, model: v.model || null, year: v.year ? Number(v.year) : null, plateRegion: v.plateRegion || null, plateNumber: v.plateNumber || null, vin: v.vin || null, odometerUnit: v.odometerUnit, currency: v.currency });
     go(`#/vehicles/${created.id}`);
   });
 }
@@ -73,7 +76,7 @@ export async function garageView(query) {
 
 export async function welcomeView() {
   const hasArchived = state.vehicles.length > 0;
-  const steps = [['car', 'Add your vehicle', 'Name it and pick the units its odometer shows.'], ['fuel', 'Log fill-ups', 'Odometer, fuel and cost at each stop.'], ['chart', 'Watch the trends', 'Economy, spending and distance appear on your dashboard.']];
+  const steps = [['car', 'Add your vehicle', 'Give it a nickname or a plate, and pick the units its odometer shows.'], ['fuel', 'Log fill-ups', 'Odometer, fuel and cost at each stop.'], ['chart', 'Watch the trends', 'Economy, spending and distance appear on your dashboard.']];
   const importBox = importForm(true);
   return h('div', { class: 'welcome' },
     pageHead('Get started', 'Welcome to DriveLoom', 'Your dashboard fills with charts and reports once a vehicle has a few fill-ups.'),

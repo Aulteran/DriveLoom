@@ -29,6 +29,10 @@ export function createOidcProvider(cfg: OidcConfig): OidcProvider {
         code_challenge: await client.calculatePKCECodeChallenge(codeVerifier), code_challenge_method: 'S256',
       }).href;
     },
+    async discover() {
+      const m = (await get()).serverMetadata();
+      return { issuer: m.issuer, authorizationEndpoint: m.authorization_endpoint ?? null };
+    },
     async exchange({ callbackUrl, state, nonce, codeVerifier }) {
       const c = await get();
       const tokens = await client.authorizationCodeGrant(c, new URL(callbackUrl), { pkceCodeVerifier: codeVerifier, expectedState: state, expectedNonce: nonce, idTokenExpected: true });

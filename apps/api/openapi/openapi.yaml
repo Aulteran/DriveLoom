@@ -1,11 +1,10 @@
 openapi: 3.1.0
 info:
   title: DriveLoom API
-  version: 0.7.0
+  version: 0.9.0
   summary: Versioned contract for the self-hosted DriveLoom API.
   description: >
-    Contract for the self-hosted DriveLoom API under the compatibility policy
-    in docs/CONTRACTS.md. Authenticated requests
+    Contract for the self-hosted DriveLoom API under a compatibility policy. Authenticated requests
     use the `dl_session` cookie; unsafe methods must also send the
     `X-CSRF-Token` returned at sign-in, and any `Origin` header must equal the
     instance public origin.
@@ -1308,6 +1307,128 @@ paths:
         '401': { $ref: '#/components/responses/Problem' }
         '403': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
+  /v1/admin/settings/smtp:
+    get:
+      operationId: adminGetSmtpSettings
+      summary: SMTP settings
+      description: 'Secrets are never returned, only whether one is stored. `source` is `env` when server environment variables configure it (read-only here), `database` when saved here, `none` otherwise.'
+      tags: [admin]
+      responses:
+        '200':
+          description: The settings in force.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SmtpSettings' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+    put:
+      operationId: adminSetSmtpSettings
+      summary: Save SMTP settings
+      description: 'Takes effect immediately, needs a recent sign-in and is audited without the secret. Omit the secret to keep the stored one. 409 `managed_by_environment` when environment variables configure it.'
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SmtpSettingsInput' }
+      responses:
+        '200':
+          description: The saved settings.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SmtpSettings' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+    delete:
+      operationId: adminRemoveSmtpSettings
+      summary: Remove saved SMTP settings
+      description: 'Needs a recent sign-in. 409 `email_features_enabled` while the server environment requires email verification or sign-in codes.'
+      tags: [admin]
+      responses:
+        '204': { description: Removed. }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+  /v1/admin/settings/smtp/test:
+    post:
+      operationId: adminTestSmtp
+      summary: Send a test message
+      description: 'Sends to the address of the calling administrator using the settings in force. 502 `smtp_test_failed` carries the transport error.'
+      tags: [admin]
+      responses:
+        '200':
+          description: Sent.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SmtpTestResult' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+        '502': { $ref: '#/components/responses/Problem' }
+  /v1/admin/settings/oidc:
+    get:
+      operationId: adminGetOidcSettings
+      summary: OIDC settings
+      description: 'Secrets are never returned, only whether one is stored. `source` is `env` when server environment variables configure it (read-only here), `database` when saved here, `none` otherwise.'
+      tags: [admin]
+      responses:
+        '200':
+          description: The settings in force.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OidcSettings' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+    put:
+      operationId: adminSetOidcSettings
+      summary: Save OIDC settings
+      description: 'Takes effect immediately, needs a recent sign-in and is audited without the secret. Omit the secret to keep the stored one. 409 `managed_by_environment` when environment variables configure it, 409 `oidc_identities_in_use` when it would strand accounts that sign in only through the provider.'
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OidcSettingsInput' }
+      responses:
+        '200':
+          description: The saved settings.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OidcSettings' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+    delete:
+      operationId: adminRemoveOidcSettings
+      summary: Remove saved OIDC settings
+      description: 'Needs a recent sign-in. 409 `password_login_disabled` or `oidc_identities_in_use` when removal could lock accounts out.'
+      tags: [admin]
+      responses:
+        '204': { description: Removed. }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+  /v1/admin/settings/oidc/test:
+    post:
+      operationId: adminTestOidc
+      summary: Check the identity provider
+      description: 'Fetches the discovery document of the provider with the settings in force. 502 `oidc_test_failed` carries the error.'
+      tags: [admin]
+      responses:
+        '200':
+          description: Reachable.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OidcTestResult' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/Problem' }
+        '502': { $ref: '#/components/responses/Problem' }
   /v1/admin/audit:
     get:
       operationId: adminListAudit
@@ -1365,7 +1486,7 @@ components:
       pattern: '^-?(0|[1-9][0-9]*)(\.[0-9]+)?$'
       description: >
         Exact decimal as a string. Never a JSON number. Scale rules per field
-        are in docs/CONTRACTS.md.
+        are given per field in this document.
       examples: ['42.375']
     CurrencyCode:
       type: string
@@ -1385,10 +1506,12 @@ components:
       enum: [editor, viewer]
     VehicleInput:
       type: object
-      required: [name]
       additionalProperties: false
       properties:
-        name: { type: string, minLength: 1, maxLength: 80 }
+        name: { type: [string, 'null'], minLength: 1, maxLength: 80, description: Optional nickname. When absent, clients identify the vehicle by plate, year and model. }
+        plateRegion: { type: [string, 'null'], maxLength: 10, description: "State or province code such as ON or FL. Private to the vehicle's members." }
+        plateNumber: { type: [string, 'null'], maxLength: 12, description: Licence plate. Private to the vehicle's members. }
+        vin: { type: [string, 'null'], minLength: 5, maxLength: 17, description: Vehicle identification number. Private to the vehicle's members. }
         make: { type: [string, 'null'], minLength: 1, maxLength: 80 }
         model: { type: [string, 'null'], minLength: 1, maxLength: 80 }
         year: { type: [integer, 'null'], minimum: 1886 }
@@ -1399,7 +1522,10 @@ components:
       additionalProperties: false
       minProperties: 1
       properties:
-        name: { type: string, minLength: 1, maxLength: 80 }
+        name: { type: [string, 'null'], minLength: 1, maxLength: 80, description: Optional nickname; null clears it. }
+        plateRegion: { type: [string, 'null'], maxLength: 10, description: "State or province code such as ON or FL. Private to the vehicle's members." }
+        plateNumber: { type: [string, 'null'], maxLength: 12, description: Licence plate. Private to the vehicle's members. }
+        vin: { type: [string, 'null'], minLength: 5, maxLength: 17, description: Vehicle identification number. Private to the vehicle's members. }
         make: { type: [string, 'null'], minLength: 1, maxLength: 80 }
         model: { type: [string, 'null'], minLength: 1, maxLength: 80 }
         year: { type: [integer, 'null'], minimum: 1886 }
@@ -1407,13 +1533,16 @@ components:
         currency: { $ref: '#/components/schemas/CurrencyCode', description: Reporting currency. Defaults to the creator's currency preference; locked once costs are recorded. }
     Vehicle:
       type: object
-      required: [id, name, make, model, year, archived, odometerUnit, currency, role, createdAt, updatedAt]
+      required: [id, name, make, model, year, plateRegion, plateNumber, vin, archived, odometerUnit, currency, role, createdAt, updatedAt]
       properties:
+        plateRegion: { type: [string, 'null'], maxLength: 10, description: "State or province code such as ON or FL. Private to the vehicle's members." }
+        plateNumber: { type: [string, 'null'], maxLength: 12, description: Licence plate. Private to the vehicle's members. }
+        vin: { type: [string, 'null'], minLength: 5, maxLength: 17, description: Vehicle identification number. Private to the vehicle's members. }
         odometerUnit: { $ref: '#/components/schemas/DistanceUnit' }
         currency: { $ref: '#/components/schemas/CurrencyCode' }
         imageVersion: { type: [string, 'null'], description: Opaque value that changes when the image changes; null when there is none. }
         id: { $ref: '#/components/schemas/Id' }
-        name: { type: string }
+        name: { type: [string, 'null'] }
         make: { type: [string, 'null'] }
         model: { type: [string, 'null'] }
         year: { type: [integer, 'null'] }
@@ -1628,6 +1757,63 @@ components:
       type: string
       enum: [l_per_100km, km_per_l, mpg_us, mpg_imp]
       description: '`mpg_us` uses the US gallon, `mpg_imp` the imperial gallon.'
+    SmtpSettings:
+      type: object
+      required: [source, enabled, configured, host, port, security, username, from, hasPassword, secretUnreadable]
+      properties:
+        source: { type: string, enum: [env, database, none] }
+        enabled: { type: boolean, description: 'The administrator switch. Off keeps the saved fields but the feature is not in use. Always true for `env`.' }
+        configured: { type: boolean, description: 'The feature is actually in use: enabled, complete and readable.' }
+        host: { type: string }
+        port: { type: integer }
+        security: { type: string, enum: [tls, starttls, none] }
+        username: { type: string }
+        from: { type: string }
+        hasPassword: { type: boolean }
+        secretUnreadable: { type: boolean, description: 'A stored secret cannot be decrypted with this instance key (for example after a restore onto another key); enter it again.' }
+    SmtpSettingsInput:
+      type: object
+      additionalProperties: false
+      required: [host, port, security, from]
+      properties:
+        enabled: { type: boolean, description: 'Omit to keep the current state (on for a first save). Turning off is refused under the same guards as removal.' }
+        host: { type: string, maxLength: 253 }
+        port: { type: integer, minimum: 1, maximum: 65535 }
+        security: { type: string, enum: [tls, starttls, none] }
+        username: { type: string, maxLength: 255 }
+        password: { type: [string, 'null'], maxLength: 512, description: 'Omit to keep the stored password; null or empty removes it.' }
+        from: { type: string, maxLength: 254 }
+    SmtpTestResult:
+      type: object
+      required: [sentTo]
+      properties: { sentTo: { type: string } }
+    OidcSettings:
+      type: object
+      required: [source, enabled, configured, issuer, clientId, hasClientSecret, secretUnreadable, redirectUri]
+      properties:
+        source: { type: string, enum: [env, database, none] }
+        enabled: { type: boolean, description: 'The administrator switch. Off keeps the saved fields but the feature is not in use. Always true for `env`.' }
+        configured: { type: boolean, description: 'The feature is actually in use: enabled, complete and readable.' }
+        issuer: { type: string }
+        clientId: { type: string }
+        hasClientSecret: { type: boolean }
+        secretUnreadable: { type: boolean }
+        redirectUri: { type: string, description: 'Register this redirect URI with the identity provider.' }
+    OidcSettingsInput:
+      type: object
+      additionalProperties: false
+      required: [issuer, clientId]
+      properties:
+        enabled: { type: boolean, description: 'Omit to keep the current state (on for a first save). Turning off is refused under the same guards as removal.' }
+        issuer: { type: string, maxLength: 512, description: 'An https URL.' }
+        clientId: { type: string, maxLength: 255 }
+        clientSecret: { type: string, maxLength: 1024, description: 'Required the first time; omit to keep the stored secret.' }
+    OidcTestResult:
+      type: object
+      required: [issuer, authorizationEndpoint]
+      properties:
+        issuer: { type: string }
+        authorizationEndpoint: { type: [string, 'null'] }
     UnitSettings:
       type: object
       required: [distanceUnit, volumeUnit, economyUnit, currency]
@@ -1833,7 +2019,9 @@ components:
       required: [name, make, model, year, economy, costPerDistance, costUnavailableReason]
       properties:
         vehicleId: { $ref: '#/components/schemas/Id', description: Present only on the caller's own vehicles. }
-        name: { type: string }
+        plateRegion: { type: [string, 'null'], description: Present only on the caller's own vehicles; never sent for a friend's. }
+        plateNumber: { type: [string, 'null'], description: Present only on the caller's own vehicles; never sent for a friend's. }
+        name: { type: [string, 'null'], description: Optional nickname. }
         make: { type: [string, 'null'] }
         model: { type: [string, 'null'] }
         year: { type: [integer, 'null'] }
@@ -1885,9 +2073,11 @@ components:
         exportedAt: { $ref: '#/components/schemas/Timestamp' }
         vehicle:
           type: object
-          required: [name]
           properties:
-            name: { type: string }
+            name: { type: [string, 'null'] }
+            plateRegion: { type: string }
+            plateNumber: { type: string }
+            vin: { type: string }
             make: { type: [string, 'null'] }
             model: { type: [string, 'null'] }
             year: { type: [integer, 'null'] }

@@ -2,15 +2,15 @@
 // The sidebar in main.js links the sections; each returns its own heading.
 import { api, get, post, patch, put, del } from '../api.js';
 import { h, form, field, select, toast, confirmDialog, download } from '../ui.js';
-import { go, render, state } from '../main.js';
-import { qty, date, dateTime, money, REASONS, ROLE, UNIT, localInput, toInstant } from '../format.js';
+import { go, render, state } from '../core.js';
+import { qty, date, dateTime, money, REASONS, ROLE, UNIT, localInput, toInstant, vehicleTitle, vehicleDescription, vehicleLabel } from '../format.js';
 import { economyChart, barChart } from './chart.js';
 import { currencyOptions, pageHead } from './vehicles.js';
 import { icon } from '../icons.js';
 
 const SECTIONS = { overview: 'Dashboard', log: 'Fuel log', members: 'Members', data: 'Import & export', settings: 'Vehicle settings' };
 
-const meta = (v) => [[v.year, v.make, v.model].filter(Boolean).join(' '), ' ', h('span', { class: `badge ${v.role === 'owner' ? 'accent' : ''}` }, ROLE[v.role]), v.archived ? h('span', { class: 'badge warn' }, 'Archived') : null];
+const meta = (v) => [vehicleTitle(v) === vehicleDescription(v) ? '' : vehicleDescription(v), ' ', h('span', { class: `badge ${v.role === 'owner' ? 'accent' : ''}` }, ROLE[v.role]), v.archived ? h('span', { class: 'badge warn' }, 'Archived') : null];
 
 export async function vehicleView(id, tab, query) {
   const v = await get(`/v1/vehicles/${id}`);
@@ -19,7 +19,7 @@ export async function vehicleView(id, tab, query) {
   if (tab === 'overview') return { vehicle: v, title: SECTIONS[tab], view: await overviewTab(v, canEdit, query) };
   const body = tab === 'members' ? await membersTab(v) : tab === 'data' ? dataTab(v, canEdit)
     : tab === 'settings' ? await settingsTab(v) : await logTab(v, canEdit, query);
-  return { vehicle: v, title: SECTIONS[tab], view: h('div', {}, pageHead(v.name, SECTIONS[tab], meta(v)), body) };
+  return { vehicle: v, title: SECTIONS[tab], view: h('div', {}, pageHead(vehicleTitle(v), SECTIONS[tab], meta(v)), body) };
 }
 
 // ---------- fuel log ----------
@@ -179,7 +179,7 @@ async function overviewTab(v, canEdit, query) {
   const addFill = canEdit ? h('a', { class: 'button', href: `#/vehicles/${v.id}/log?add=1` }, icon('plus'), 'Add fill-up') : null;
   const period = h('div', { class: 'period' }, h('label', { for: 'win' }, 'Period'),
     select('window', WINDOWS, win, { id: 'win', onchange: (e) => go(`#/vehicles/${v.id}?window=${e.target.value}`) }));
-  const head = pageHead('Dashboard', v.name, meta(v), [period, addFill]);
+  const head = pageHead('Dashboard', vehicleTitle(v), meta(v), [period, addFill]);
 
   if (!recent.total) {
     return h('div', {}, head,
@@ -321,18 +321,21 @@ async function settingsTab(v) {
     parts.push(form({ class: 'panel' }, [
       h('h2', {}, 'Details'),
       h('div', { class: 'grid' },
-        field('Name', h('input', { name: 'name', required: true, maxlength: 80, value: v.name })),
+        field('Nickname (optional)', h('input', { name: 'name', maxlength: 80, value: v.name ?? '' })),
         field('Make', h('input', { name: 'make', maxlength: 80, value: v.make ?? '' })),
         field('Model', h('input', { name: 'model', maxlength: 80, value: v.model ?? '' })),
         field('Year', h('input', { name: 'year', type: 'number', value: v.year ?? '' })),
+        field('State or province (optional)', h('input', { name: 'plateRegion', maxlength: 10, placeholder: 'ON', value: v.plateRegion ?? '', autocomplete: 'off' })),
+        field('Licence plate (optional)', h('input', { name: 'plateNumber', maxlength: 12, placeholder: 'CXPZ101', value: v.plateNumber ?? '', autocomplete: 'off' })),
+        field('VIN (optional)', h('input', { name: 'vin', maxlength: 20, value: v.vin ?? '', autocomplete: 'off' }), 'Plate and VIN are visible only to this vehicle\'s owner and drivers, never to friends.'),
         field('Odometer unit', select('odometerUnit', [['km', 'Kilometres'], ['mi', 'Miles']], v.odometerUnit)),
         field('Reporting currency', select('currency', currencyOptions(v.currency), v.currency), 'Cannot change once costs are recorded.')),
       h('button', { type: 'submit' }, 'Save'),
     ], async (x) => {
-      await patch(`/v1/vehicles/${v.id}`, { name: x.name, make: x.make || null, model: x.model || null, year: x.year ? Number(x.year) : null, odometerUnit: x.odometerUnit, currency: x.currency });
+      await patch(`/v1/vehicles/${v.id}`, { name: x.name || null, make: x.make || null, model: x.model || null, year: x.year ? Number(x.year) : null, plateRegion: x.plateRegion || null, plateNumber: x.plateNumber || null, vin: x.vin || null, odometerUnit: x.odometerUnit, currency: x.currency });
       render(); return 'Saved.';
     }));
-    const preview = v.imageVersion ? h('img', { src: `/v1/vehicles/${v.id}/image?v=${v.imageVersion}`, alt: `Photo of ${v.name}`, style: 'max-width:280px;border-radius:8px;display:block;margin-bottom:12px' }) : null;
+    const preview = v.imageVersion ? h('img', { src: `/v1/vehicles/${v.id}/image?v=${v.imageVersion}`, alt: `Photo of ${vehicleLabel(v)}`, style: 'max-width:280px;border-radius:8px;display:block;margin-bottom:12px' }) : null;
     parts.push(form({ class: 'panel' }, [
       h('h2', {}, 'Photo'), preview,
       field('Image', h('input', { name: 'image', type: 'file', accept: 'image/jpeg,image/png,image/webp', required: true }), 'JPEG, PNG or WebP, up to 5 MB. Only members can see it.'),
@@ -346,7 +349,7 @@ async function settingsTab(v) {
   }
   parts.push(h('div', { class: 'panel' },
     h('h2', {}, 'Compare with friends'),
-    h('p', { class: 'muted' }, 'When on, your friends see this vehicle\'s name, make, model, year and its average economy for the period they choose. They never see fill-ups, dates, distances, notes or members.'),
+    h('p', { class: 'muted' }, 'When on, your friends see this vehicle\'s nickname, make, model, year and its average economy for the period they choose. They never see its plate or VIN, fill-ups, dates, distances, notes or members.'),
     owner ? h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: optIn.enabled, onchange: async (e) => {
       try { await put(`/v1/vehicles/${v.id}/comparison`, { enabled: e.target.checked }); toast(e.target.checked ? 'Shared with friends.' : 'No longer shared.'); } catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
     } }), 'Share this vehicle\'s economy with my friends') : h('p', {}, optIn.enabled ? 'The owner shares this vehicle with their friends.' : 'Not shared. Only the owner can change this.')));

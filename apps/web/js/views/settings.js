@@ -2,7 +2,7 @@
 // factor, passkeys, identity providers, sessions, account deletion).
 import { get, post, put, patch, del, setCsrf, passkeysSupported, createPasskey } from '../api.js';
 import { h, form, field, confirmDialog, toast, errorBox, showError } from '../ui.js';
-import { go, render, refreshSession, state } from '../main.js';
+import { go, render, refreshSession, state } from '../core.js';
 import { dateTime } from '../format.js';
 import { unitFields, UNIT_KEYS } from '../units.js';
 import { icon } from '../icons.js';

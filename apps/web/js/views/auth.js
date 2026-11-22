@@ -1,7 +1,7 @@
 // Setup, sign-in (password, passkey, OIDC), second factor, registration and recovery.
 import { get, post, setCsrf, passkeysSupported, getPasskey } from '../api.js';
 import { h, form, field } from '../ui.js';
-import { go, refreshSession, state } from '../main.js';
+import { go, refreshSession, state } from '../core.js';
 import { unitFields, readUnits } from '../units.js';
 
 const ERRORS = {

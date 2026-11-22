@@ -7,7 +7,7 @@ import type { VehicleService } from './service.ts';
 
 export function vehicleRoutes(svc: VehicleService): Route[] {
   const who = (r: HttpRequest) => requirePrincipal(r.ctx);
-  const fields = ['name', 'make', 'model', 'year', 'odometerUnit', 'currency'];
+  const fields = ['name', 'make', 'model', 'year', 'plateRegion', 'plateNumber', 'vin', 'odometerUnit', 'currency'];
   return [
     { method: 'GET', path: '/v1/vehicles', async handler(r) {
       const items = await svc.list(who(r), { includeArchived: r.query.get('includeArchived') === 'true' });

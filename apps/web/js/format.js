@@ -19,3 +19,12 @@ export function localInput(d = new Date()) {
 /** datetime-local value -> RFC 3339 with the browser's offset */
 export function toInstant(local) { return new Date(local).toISOString(); }
 export const ROLE = { owner: 'Owner', editor: 'Editor', viewer: 'Viewer' };
+
+// How a vehicle is named in the UI. A nickname, when set, leads and is followed by
+// year, make and model. Without one the state/province and plate lead instead
+// (e.g. "ON CXPZ101 · 2019 Honda Civic"). Friends' vehicles never carry plate
+// data, so they fall back to year, make and model alone.
+export const vehicleDescription = (v) => [v.year, v.make, v.model].filter(Boolean).join(' ');
+export const vehiclePlate = (v) => [v.plateRegion, v.plateNumber].filter(Boolean).join(' ');
+export const vehicleTitle = (v) => v.name || vehiclePlate(v) || vehicleDescription(v) || 'Unnamed vehicle';
+export const vehicleLabel = (v) => [v.name || vehiclePlate(v), vehicleDescription(v)].filter(Boolean).join(' \u00b7 ') || 'Unnamed vehicle';

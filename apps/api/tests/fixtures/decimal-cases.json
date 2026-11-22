@@ -1,5 +1,5 @@
 {
-  "description": "Shared fixtures for decimal, unit and economy rules in docs/CONTRACTS.md. Values are decimal strings.",
+  "description": "Shared fixtures for decimal, unit and economy rules. Values are decimal strings.",
   "units": {
     "gal_us_to_l": "3.785411784",
     "gal_imp_to_l": "4.54609",

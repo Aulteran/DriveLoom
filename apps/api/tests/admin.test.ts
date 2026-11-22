@@ -14,8 +14,8 @@ const skip = process.env['DATABASE_URL'] ? false : 'DATABASE_URL not set';
 
 interface Client { (method: string, path: string, body?: unknown): Promise<{ status: number; json: any }>; id: string }
 
-async function world(over: Parameters<typeof harness>[0], fn: (w: { h: Harness; anon: Client; signUp(email: string, extra?: Record<string, unknown>): Promise<Client> }) => Promise<void>) {
-  const h = (await harness(over))!;
+async function world(over: Parameters<typeof harness>[0], fn: (w: { h: Harness; anon: Client; signUp(email: string, extra?: Record<string, unknown>): Promise<Client> }) => Promise<void>, opts: Parameters<typeof harness>[1] = {}) {
+  const h = (await harness(over, opts))!;
   const routes = [...authRoutes(h.ctx), ...adminRoutes(h.ctx), ...vehicleRoutes(new VehicleService(h.ctx.db))];
   const server = createServer((q, s) => void createApp({ routes, authenticator: h.auth, publicOrigin: ORIGIN, ipTrust: h.ctx.config.ipTrust })(q, s));
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));

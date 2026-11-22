@@ -61,28 +61,41 @@ export function defaultConfig(over: Partial<AuthConfig> & Pick<AuthConfig, 'publ
 }
 
 /** Load from environment. Throws on inconsistent policy so misconfiguration fails at startup. */
-export function configFromEnv(env: Record<string, string | undefined>, smtpConfigured: boolean): AuthConfig {
+export function secretKeyFromEnv(env: Record<string, string | undefined>): Buffer {
+  const secret = env['DRIVELOOM_SECRET_KEY'];
+  if (!secret || secret.length < 32) throw new Error('DRIVELOOM_SECRET_KEY must be at least 32 characters');
+  return createHash('sha256').update(secret).digest();
+}
+export function smtpFromEnv(env: Record<string, string | undefined>): { url: string; from: string } | null {
+  return env['DRIVELOOM_SMTP_URL'] && env['DRIVELOOM_SMTP_FROM'] ? { url: env['DRIVELOOM_SMTP_URL'], from: env['DRIVELOOM_SMTP_FROM'] } : null;
+}
+export function oidcFromEnv(env: Record<string, string | undefined>, origin: string): OidcConfig | null {
+  const issuer = env['DRIVELOOM_OIDC_ISSUER'];
+  return issuer ? { issuer, clientId: need(env, 'DRIVELOOM_OIDC_CLIENT_ID'), clientSecret: need(env, 'DRIVELOOM_OIDC_CLIENT_SECRET'), redirectUri: `${origin}/v1/auth/oidc/callback` } : null;
+}
+
+/**
+ * `smtpConfigured` / `oidcConfigured` say whether a mailer / provider exists
+ * from any source (environment or the administrator's saved settings).
+ */
+export function configFromEnv(env: Record<string, string | undefined>, smtpConfigured: boolean, oidcConfigured = false): AuthConfig {
   const origin = env['DRIVELOOM_PUBLIC_ORIGIN'];
   if (!origin) throw new Error('DRIVELOOM_PUBLIC_ORIGIN is required');
   const u = new URL(origin);
   if (u.origin !== origin) throw new Error('DRIVELOOM_PUBLIC_ORIGIN must be an origin with no path or trailing slash');
-  const secret = env['DRIVELOOM_SECRET_KEY'];
-  if (!secret || secret.length < 32) throw new Error('DRIVELOOM_SECRET_KEY must be at least 32 characters');
+  const secretKey = secretKeyFromEnv(env);
   const requireEmailVerification = env['DRIVELOOM_REQUIRE_EMAIL_VERIFICATION'] === '1';
   if (requireEmailVerification && !smtpConfigured) throw new Error('DRIVELOOM_REQUIRE_EMAIL_VERIFICATION=1 needs SMTP (DRIVELOOM_SMTP_URL and DRIVELOOM_SMTP_FROM)');
   const emailSignInCodes = env['DRIVELOOM_EMAIL_SIGN_IN_CODES'] === '1';
   if (emailSignInCodes && !smtpConfigured) throw new Error('DRIVELOOM_EMAIL_SIGN_IN_CODES=1 needs SMTP (DRIVELOOM_SMTP_URL and DRIVELOOM_SMTP_FROM)');
   const registration = env['DRIVELOOM_REGISTRATION'] === 'open' ? 'open' : 'closed';
-  const issuer = env['DRIVELOOM_OIDC_ISSUER'];
-  const oidc = issuer
-    ? { issuer, clientId: need(env, 'DRIVELOOM_OIDC_CLIENT_ID'), clientSecret: need(env, 'DRIVELOOM_OIDC_CLIENT_SECRET'), redirectUri: `${origin}/v1/auth/oidc/callback` }
-    : null;
+  const oidc = oidcFromEnv(env, origin);
   const passwordEnabled = env['DRIVELOOM_PASSWORD_LOGIN'] !== '0';
-  if (!passwordEnabled && !oidc) throw new Error('password login disabled without OIDC leaves no primary sign-in method (passkeys alone cannot bootstrap)');
+  if (!passwordEnabled && !oidc && !oidcConfigured) throw new Error('password login disabled without OIDC leaves no primary sign-in method (passkeys alone cannot bootstrap)');
   return defaultConfig({
     publicOrigin: origin,
     rpId: env['DRIVELOOM_RP_ID'] ?? u.hostname,
-    secretKey: createHash('sha256').update(secret).digest(),
+    secretKey,
     registration,
     requireEmailVerification,
     emailSignInCodes,
