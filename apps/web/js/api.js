@@ -1,5 +1,6 @@
 // API client. Same origin, cookie session, CSRF token on every unsafe request.
 // Errors are RFC 9457 problems, raised as ApiError with the stable `code`.
+import { forgetSessionState } from './local.js';
 
 let csrf = null;
 export const setCsrf = (t) => { csrf = t; };
@@ -22,8 +23,12 @@ export async function api(method, path, body, opts = {}) {
   if (body instanceof Blob) { init.body = body; headers['content-type'] = body.type; }
   else if (body !== undefined) { init.body = JSON.stringify(body); headers['content-type'] = 'application/json'; }
   const res = await fetch(path, init);
-  // Signing out drops the service worker's caches too (both shells go through here).
-  if (res.ok && method === 'POST' && path === '/v1/auth/logout') import('./pwa.js').then((pwa) => pwa.clearCaches());
+  // Signing out drops what the browser kept for the person (both shells go through here):
+  // typed fill-up drafts, the saved return route and the service worker's non-shell caches.
+  if (res.ok && method === 'POST' && path === '/v1/auth/logout') {
+    forgetSessionState();
+    import('./pwa.js').then((pwa) => pwa.clearCaches());
+  }
   if (opts.raw && res.ok) return res;
   const text = await res.text();
   const data = text && /json/.test(res.headers.get('content-type') ?? '') ? JSON.parse(text) : null;

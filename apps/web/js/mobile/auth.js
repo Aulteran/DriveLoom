@@ -8,33 +8,39 @@
 // route is kept in localStorage for 15 minutes; landing signed in on #/ (which
 // is where password, passkey and the identity provider's redirect all arrive)
 // goes back to it. localStorage, not sessionStorage, because an identity
-// provider may return in a new tab.
+// provider may return in a new tab. The route is scoped to the account that was
+// signed in when it was saved: a different person signing in next does not get it,
+// and signing out (api.js) clears it.
 import { h } from '../ui.js';
 import { PUBLIC } from '../core.js';
 import { authView } from '../views/auth.js';
+import { RETURN_KEY as KEY, ACCOUNT_KEY, forgetReturn } from '../local.js';
 
-const KEY = 'driveloom.return-to';
 const TTL = 15 * 60 * 1000;
 
 /** Remember the protected route the sign-in screen is standing in for. */
 export function rememberReturn(hash) {
   const first = hash.replace(/^#\/?/, '').split(/[/?]/)[0];
   if (!first || PUBLIC.has(first) || first === 'fill') return;
-  try { localStorage.setItem(KEY, JSON.stringify({ hash, at: Date.now() })); } catch { /* not remembered */ }
+  try { localStorage.setItem(KEY, JSON.stringify({ hash, at: Date.now(), account: localStorage.getItem(ACCOUNT_KEY) })); } catch { /* not remembered */ }
 }
 
-/** The remembered route, once: null when there is none or it is stale. */
-export function takeReturn() {
+/** Note who is signed in, so a saved route is only handed back to them. */
+export function noteAccount(id) { try { localStorage.setItem(ACCOUNT_KEY, String(id)); } catch { /* not noted */ } }
+
+/** The remembered route, once: null when there is none, it is stale, or it belongs to another account. */
+export function takeReturn(accountId) {
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return null;
     localStorage.removeItem(KEY);
-    const { hash, at } = JSON.parse(raw);
+    const { hash, at, account } = JSON.parse(raw);
+    if (account && String(accountId) !== account) return null;
     return typeof hash === 'string' && hash.startsWith('#/') && Date.now() - at < TTL ? hash : null;
   } catch { return null; }
 }
 
-export function forgetReturn() { try { localStorage.removeItem(KEY); } catch { /* nothing kept */ } }
+export { forgetReturn };
 
 /** The desktop auth view, arranged for a phone. */
 export async function phoneAuthView(kind, query) {

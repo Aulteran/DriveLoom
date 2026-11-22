@@ -12,7 +12,7 @@ import { themeControl } from '../theme.js';
 import { screen } from './screens.js';
 import { startSystem } from './system.js';
 import { errorState } from './states.js';
-import { phoneAuthView, rememberReturn, takeReturn, forgetReturn } from './auth.js';
+import { phoneAuthView, rememberReturn, takeReturn, noteAccount, forgetReturn } from './auth.js';
 import { closeSheets } from './sheet.js';
 import { openVehicleSheet, initial } from './vehicle-sheet.js';
 import { openFillUp, clearFillUpDrafts } from './fillup.js';
@@ -158,7 +158,8 @@ async function renderPhone() {
   try {
     if (PUBLIC.has(first)) { closeSheets(); chrome(false); mountedHash = null; mount(authScreen(await phoneAuthView(first, query)), 'Sign in'); return; }
     // Just signed in (password, passkey or the identity provider's redirect to #/): back to where sign-in interrupted.
-    if (!first) { const back = takeReturn(); if (back && back !== location.hash) { location.replace(back); return; } }
+    if (state.account) noteAccount(state.account.id);
+    if (!first) { const back = takeReturn(state.account?.id); if (back && back !== location.hash) { location.replace(back); return; } }
     const [vehicles, friends] = await Promise.all([get('/v1/vehicles?includeArchived=true'), get('/v1/friends').catch(() => null)]);
     state.vehicles = vehicles.items;
     requests = friends?.incoming?.length ?? 0;

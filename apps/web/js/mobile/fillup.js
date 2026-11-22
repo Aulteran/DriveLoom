@@ -28,9 +28,9 @@ import {
   normalizeDecimal, checkDecimal, checkOccurredAt, checkSequence, previewInterval, latestFill, distanceBetween, unitPrice, difference, lowerIsBetter, RULES,
 } from '../economy.js';
 import { openSheet } from './sheet.js';
+import { DRAFT_PREFIX, clearFillUpDrafts } from '../local.js';
 
 // ---------- draft persistence ----------
-const DRAFT_PREFIX = 'driveloom.fillup-draft.';
 const FIELDS = ['occurredAt', 'odometer', 'odometerUnit', 'volume', 'volumeUnit', 'amount', 'currency', 'exchangeRate', 'reportingAmount', 'full', 'missedPrevious', 'notes'];
 const FLAGS = new Set(['full', 'missedPrevious']);
 const onlyFields = (x) => Object.fromEntries(FIELDS.filter((k) => k in x).map((k) => [k, FLAGS.has(k) ? x[k] === true : String(x[k] ?? '')]));
@@ -41,15 +41,7 @@ function readDraft(key) {
 function writeDraft(key, values) { try { sessionStorage.setItem(key, JSON.stringify(onlyFields(values))); } catch { /* not kept */ } }
 function dropDraft(key) { try { sessionStorage.removeItem(key); } catch { /* nothing kept */ } }
 
-/** Forget every fill-up draft in this tab (sign-out, session end). */
-export function clearFillUpDrafts() {
-  try {
-    for (let i = sessionStorage.length - 1; i >= 0; i--) {
-      const k = sessionStorage.key(i);
-      if (k?.startsWith(DRAFT_PREFIX)) sessionStorage.removeItem(k);
-    }
-  } catch { /* storage unavailable: nothing was kept */ }
-}
+export { clearFillUpDrafts };
 
 // ---------- on-screen keyboard ----------
 // The visual viewport shrinks under the keyboard; the sheet follows it through
