@@ -563,6 +563,28 @@ test('web client journeys', { skip, timeout: 180_000 }, async (t: TestContext) =
       await page.getByRole('heading', { name: 'Your friends' }).waitFor();
     });
 
+    await t.test('the service worker caches the shell, never an API response, and sign-out clears it', async () => {
+      // localhost is a secure context, so the worker registers.
+      await page.goto(`${base}/#/`);
+      // The page runs in a browser; the test's TypeScript has no DOM types, so the snippets are strings.
+      // Earlier sign-outs emptied the caches by design, so start from a fresh install.
+      await page.evaluate('navigator.serviceWorker.getRegistrations().then((rs) => Promise.all(rs.map((r) => r.unregister()))).then(() => caches.keys()).then((ks) => Promise.all(ks.map((k) => caches.delete(k))))');
+      await page.reload();
+      await page.evaluate('navigator.serviceWorker.ready.then(() => undefined)');
+      await page.waitForFunction("caches.keys().then((k) => Promise.all(k.map((n) => caches.open(n).then((c) => c.match('/js/pwa.js'))))).then((r) => r.some(Boolean))");
+      await page.evaluate("fetch('/v1/auth/session').then((r) => r.text())");
+      const cached = await page.evaluate(`(async () => {
+        const out = [];
+        for (const k of await caches.keys()) for (const r of await (await caches.open(k)).keys()) out.push(new URL(r.url).pathname);
+        return out;
+      })()`) as string[];
+      assert.ok(cached.includes('/') && cached.includes('/styles.css') && cached.includes('/js/pwa.js'), cached.join(' '));
+      assert.deepEqual(cached.filter((p) => p.startsWith('/v1/')), [], 'no API response is cached');
+      await page.getByRole('button', { name: /sign out/i }).click();
+      await page.getByRole('heading', { name: 'Sign in' }).waitFor();
+      await page.waitForFunction('caches.keys().then((k) => k.length === 0)');
+    });
+
     assert.deepEqual(problems, [], 'no console errors, page errors or CSP violations');
   } finally {
     await browser.close();

@@ -22,6 +22,8 @@ export async function api(method, path, body, opts = {}) {
   if (body instanceof Blob) { init.body = body; headers['content-type'] = body.type; }
   else if (body !== undefined) { init.body = JSON.stringify(body); headers['content-type'] = 'application/json'; }
   const res = await fetch(path, init);
+  // Signing out drops the service worker's caches too (both shells go through here).
+  if (res.ok && method === 'POST' && path === '/v1/auth/logout') import('./pwa.js').then((pwa) => pwa.clearCaches());
   if (opts.raw && res.ok) return res;
   const text = await res.text();
   const data = text && /json/.test(res.headers.get('content-type') ?? '') ? JSON.parse(text) : null;
