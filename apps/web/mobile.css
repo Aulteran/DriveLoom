@@ -120,7 +120,6 @@ dialog.m-sheet::backdrop { background: rgb(3 6 14 / 50%); backdrop-filter: blur(
 .m-sheet-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0 12px; }
 .m-sheet-head h2 { margin: 0; font: 600 1.25rem/1.2 var(--display); letter-spacing: -.02em; }
 .m-sheet-body { display: flex; flex-direction: column; gap: 12px; }
-.m-sheet-sub { margin: -10px 0 4px; color: var(--muted); font-size: .9rem; }
 .m-icon-btn, .m-icon-btn:hover {
   flex: none; width: var(--m-tap); height: var(--m-tap); min-height: var(--m-tap); padding: 0; justify-content: center;
   border-radius: 14px; border: 1px solid var(--line); background: var(--surface-2); color: var(--text); box-shadow: none;
@@ -144,10 +143,126 @@ dialog.m-sheet::backdrop { background: rgb(3 6 14 / 50%); backdrop-filter: blur(
 .m-sheet-actions { display: flex; gap: 10px; padding-top: 16px; }
 .m-sheet-actions .button { flex: 1; justify-content: center; min-height: 48px; }
 
-/* fill-up placeholder: the fields the next chunk brings */
-.m-plan { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
-.m-plan li { min-height: 58px; display: flex; align-items: center; padding: 0 16px; border: 1px dashed var(--line-strong); border-radius: 16px; color: var(--muted); font-weight: 600; }
+.m-sheet-titles { flex: 1; min-width: 0; }
+.m-sheet-subtitle { margin: 2px 0 0; color: var(--muted); font-size: .85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .m-wide { width: 100%; justify-content: center; min-height: 52px; font-size: 1rem; }
+
+/* ---------- quick fill-up sheet ---------- */
+/* Follows the visual viewport (--m-vvh, --m-kb set by fillup.js), so the save
+   bar sits on top of the on-screen keyboard. */
+dialog.m-fill {
+  bottom: var(--m-kb, 0px);
+  height: calc(min(100dvh, var(--m-vvh, 100dvh)) - var(--m-safe-top) - 12px);
+  max-height: calc(min(100dvh, var(--m-vvh, 100dvh)) - var(--m-safe-top) - 12px);
+}
+.m-fill .m-sheet-inner { padding-bottom: 20px; }
+.m-fill .m-sheet-head {
+  position: sticky; top: 0; z-index: 2; background: var(--surface-solid);
+  margin: 0 calc(-1 * max(20px, var(--m-safe-right))) 0 calc(-1 * max(20px, var(--m-safe-left)));
+  padding: 8px max(20px, var(--m-safe-right)) 12px max(20px, var(--m-safe-left));
+}
+.m-fu-form { display: flex; flex-direction: column; gap: 16px; }
+.m-fu-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.m-fu-label { margin: 0; font: 600 .84rem/1.3 var(--font); color: var(--muted); }
+.m-fu-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+
+/* A large field: the box draws the border, the input and its unit sit inside. */
+.m-fu-box {
+  display: flex; align-items: center; gap: 4px; min-height: 58px; padding-right: 6px;
+  border: 1px solid var(--line-strong); border-radius: 16px; background: var(--field);
+  transition: border-color .15s, box-shadow .2s;
+}
+.m-fu-box:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--line-strong)); }
+.m-fu-box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+.m-fu-box:has([aria-invalid="true"]) { border-color: var(--bad); box-shadow: 0 0 0 4px color-mix(in srgb, var(--bad) 16%, transparent); }
+.m-shell .m-fill .m-fu-box > input.m-fu-input {
+  flex: 1; min-width: 0; height: 56px; min-height: 56px; padding: 0 0 0 16px;
+  border: 0; border-radius: 16px 0 0 16px; background: transparent; box-shadow: none;
+  font: 500 1.5rem/1 var(--mono); font-variant-numeric: tabular-nums; color: var(--text);
+}
+.m-shell .m-fill .m-fu-box:not(.m-fu-has-unit) > input.m-fu-input { padding-right: 16px; border-radius: 16px; }
+.m-shell .m-fill .m-fu-pair .m-fu-box > input.m-fu-input { padding-left: 12px; font-size: 1.25rem; }
+.m-shell .m-fill .m-fu-box > input.m-fu-input:focus-visible { outline: none; box-shadow: none; }
+.m-shell .m-fill .m-fu-box > input.m-fu-input::placeholder { font: 400 1rem var(--font); }
+.m-fill select.m-fu-unit {
+  flex: none; width: auto; height: 44px; min-height: 44px; padding: 0 24px 0 10px;
+  border: 0; border-radius: 12px; background-color: color-mix(in srgb, var(--text) 7%, transparent); background-position: right 5px center; background-size: 16px;
+  font: 600 .95rem/1 var(--font); color: var(--muted);
+}
+/* Half-width fields: the unit chip drops its chevron so the digits keep the room. */
+.m-fill .m-fu-pair select.m-fu-unit { padding: 0 8px; background-image: none; text-align: center; }
+.m-fill select.m-fu-unit:focus-visible { outline: 2px solid var(--accent); outline-offset: 0; box-shadow: none; }
+.m-fu-hint { font-size: .8rem; color: var(--muted); overflow-wrap: anywhere; }
+.m-fu-hint:empty { display: none; }
+.m-fu-err { display: none; color: var(--bad); font-size: .85rem; font-weight: 600; }
+.m-fu-err.m-fu-err-on { display: block; }
+.m-shell .m-fill .m-fu-field > input.m-fu-when { height: 52px; min-height: 52px; border-radius: 14px; padding: 0 14px; font-family: var(--mono); }
+.m-shell .m-fill .m-fu-field > input.m-fu-when[aria-invalid="true"] { border-color: var(--bad); }
+.m-fill textarea.m-fu-notes { min-height: 72px; border-radius: 14px; }
+
+/* Switch rows: the whole label is the target; the switch itself is a native checkbox. */
+.m-fu-toggle { display: flex; align-items: center; gap: 12px; min-height: 60px; padding: 6px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.m-fu-toggle-text { flex: 1; min-width: 0; min-height: var(--m-tap); margin: 0; display: flex; flex-direction: column; justify-content: center; gap: 1px; cursor: pointer; }
+.m-fu-toggle-title { font-weight: 600; font-size: 1rem; color: var(--text); }
+.m-fu-toggle-sub { font-weight: 400; font-size: .8rem; color: var(--muted); }
+.m-fill input.m-switch {
+  appearance: none; -webkit-appearance: none; position: relative; flex: none; width: 52px; height: 32px; margin: 0;
+  border: 0; border-radius: 16px; background: color-mix(in srgb, var(--muted) 60%, transparent); cursor: pointer; transition: background-color .15s;
+}
+.m-fill input.m-switch::before {
+  content: ""; position: absolute; top: 3px; left: 3px; width: 26px; height: 26px; border-radius: 50%;
+  background: #ffffff; box-shadow: 0 2px 4px rgb(0 0 0 / 25%); transition: transform .15s var(--ease);
+}
+.m-fill input.m-switch:checked { background: var(--good); }
+.m-fill input.m-switch:checked::before { transform: translateX(20px); }
+.m-fill input.m-switch:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+.m-fu-more { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.m-fu-more > summary { list-style: none; display: flex; align-items: center; gap: 12px; min-height: 60px; cursor: pointer; }
+.m-fu-more > summary::-webkit-details-marker { display: none; }
+.m-fu-more > summary:focus-visible { outline-offset: -2px; border-radius: 8px; }
+.m-fu-more-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.m-fu-more .m-fu-more-caret { width: 20px; height: 20px; color: var(--muted); transition: transform .15s var(--ease); }
+.m-fu-more[open] .m-fu-more-caret { transform: rotate(180deg); }
+.m-fu-more .m-fu-toggle { border-bottom: 0; }
+.m-fu-more > .m-fu-field { padding: 4px 0 16px; }
+
+.m-fu-restored { display: flex; align-items: center; gap: 8px; margin: 0; padding: 10px 12px; border-radius: 12px; background: var(--accent-soft); color: var(--accent-ink); font-size: .875rem; font-weight: 600; }
+.m-fu-restored .icon { width: 18px; height: 18px; }
+.m-fu-note { margin: 0; color: var(--muted); font-size: .85rem; }
+.m-fu-rate { display: flex; flex-direction: column; gap: 12px; }
+
+/* Live preview card, in the body; the save bar repeats the figure above the keyboard. */
+.m-fu-preview {
+  padding: 16px; border-radius: var(--m-radius-card);
+  background: var(--accent-soft); border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+}
+.m-fu-preview .m-label { margin: 0 0 6px; }
+.m-fu-pv-line { margin: 0; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.m-fu-pv-big { font: 600 2.75rem/1.05 var(--display); letter-spacing: -.04em; font-variant-numeric: tabular-nums; }
+.m-fu-preview-empty .m-fu-pv-big { font-size: 1.1rem; letter-spacing: -.01em; }
+.m-fu-pv-unit { color: var(--muted); font-weight: 600; }
+.m-fu-pv-detail, .m-fu-pv-compare { margin: 4px 0 0; font-size: .875rem; color: var(--muted); }
+.m-fu-pv-detail:empty { display: none; }
+.m-fu-pv-compare { color: var(--text); }
+
+/* Save bar: pinned below the scrolling body, above the keyboard and the home indicator. */
+.m-fu-bar {
+  flex: none; display: flex; flex-direction: column; gap: 8px;
+  padding: 10px max(16px, var(--m-safe-right)) calc(12px + var(--m-safe-bottom)) max(16px, var(--m-safe-left));
+  border-top: 1px solid var(--line); background: var(--surface-solid); box-shadow: 0 -12px 24px -20px rgb(0 0 0 / 50%);
+}
+dialog.m-fill.m-kb-open .m-fu-bar { padding-bottom: 10px; }
+.m-fu-bar-preview { display: flex; align-items: baseline; gap: 8px; min-width: 0; color: var(--muted); }
+.m-fu-bar-k { flex: none; font: 650 .72rem/1.3 var(--font); letter-spacing: .07em; text-transform: uppercase; }
+.m-fu-bar-value { min-width: 0; color: var(--text); font: 600 1.05rem/1.25 var(--display); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.m-fu-bar-msg { margin: 0; color: var(--bad); font-size: .85rem; font-weight: 600; }
+.m-fu-bar-msg[data-tone="warn"] { color: var(--warn); }
+.m-fu-bar-actions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 10px; }
+.m-shell .m-fu-bar-actions button { min-height: 52px; justify-content: center; font-size: 1rem; border-radius: 16px; }
+.m-shell .m-fu-bar-actions .m-fu-save { background: var(--m-grad); }
+.m-shell .m-fu-bar-actions .m-fu-save:disabled { background: var(--line-strong); color: var(--muted); opacity: 1; cursor: not-allowed; box-shadow: none; }
+.m-fu-save .icon { width: 20px; height: 20px; }
 
 /* ---------- list screens (More, vehicle sections) ---------- */
 .m-screen { display: flex; flex-direction: column; }

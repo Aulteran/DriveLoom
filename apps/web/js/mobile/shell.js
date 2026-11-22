@@ -4,7 +4,7 @@
 // never imports main.js. Routes are the desktop's hash routes plus #/more and
 // #/fill. Screens come from screens.js.
 import { get, post, setCsrf, whenSignedOut } from '../api.js';
-import { state, refreshSession, go, render, setRenderer, parse, PUBLIC, defaultVehicle } from '../core.js';
+import { state, refreshSession, go, render, setRenderer, parse, PUBLIC, defaultVehicle, rememberVehicle } from '../core.js';
 import { mount, h, toast } from '../ui.js';
 import { icon } from '../icons.js';
 import { vehicleTitle } from '../format.js';
@@ -13,7 +13,7 @@ import { authView } from '../views/auth.js';
 import { screen } from './screens.js';
 import { closeSheets } from './sheet.js';
 import { openVehicleSheet, initial } from './vehicle-sheet.js';
-import { openFillUp } from './fillup.js';
+import { openFillUp, clearFillUpDrafts } from './fillup.js';
 
 // ---------- one-off page setup ----------
 function loadStyles() {
@@ -95,6 +95,7 @@ function switchVehicle() {
 
 async function signOut() {
   await post('/v1/auth/logout').catch(() => undefined);
+  clearFillUpDrafts();
   state.account = null; setCsrf(null); go('#/signin');
 }
 
@@ -124,6 +125,7 @@ async function renderPhone() {
   if (!state.instance) state.instance = await get('/v1/auth/instance').catch(() => ({}));
   if (!state.account && !PUBLIC.has(first)) {
     if (!(await refreshSession())) {
+      clearFillUpDrafts(); // the session ended: a typed fill-up must not outlive it
       if (ticket !== rendering) return;
       closeSheets(); chrome(false); mountedHash = null;
       mount(authScreen(await authView(state.instance.needs_setup ? 'register' : 'signin', query)), 'Sign in');
@@ -148,14 +150,26 @@ async function renderPhone() {
       } else chrome(true, { tab: currentTab, vehicle: active });
       const returnTo = mountedHash;
       const goBack = arrived;
+      // A refresh on #/fill reopens the sheet for this vehicle, with its draft.
+      if (active) rememberVehicle(active.id);
       openFillUp({
         vehicle: active,
-        onClose: () => {
+        onClose: ({ saved } = {}) => {
           if (parse().parts[0] !== 'fill') return; // a link inside the sheet already navigated
-          skipHash = returnTo;
+          // After a save the screen underneath is rendered again, so it shows the new record.
+          skipHash = saved ? null : returnTo;
           if (goBack) history.back(); else location.replace(returnTo);
         },
       });
+      return;
+    }
+    // Legacy "add a fill-up" links (the dashboard's, bookmarks) open the sheet over the fuel log.
+    if (first === 'vehicles' && parts[1] && parts[2] === 'log' && query.get('add') === '1') {
+      closeSheets();
+      const clean = `#/vehicles/${parts[1]}/log`;
+      history.replaceState(null, '', clean);
+      if (!(await show({ ...ctx, parts: parts.slice(0, 3), query: new URLSearchParams() }, clean, ticket))) return;
+      openFillUp({ vehicle: active, onClose: ({ saved } = {}) => { if (saved && location.hash === clean) render(); } });
       return;
     }
     closeSheets();
@@ -170,7 +184,7 @@ async function renderPhone() {
   }
 }
 
-whenSignedOut(() => { if (state.account) { state.account = null; toast('Your session ended. Please sign in again.'); render(); } });
+whenSignedOut(() => { clearFillUpDrafts(); if (state.account) { state.account = null; toast('Your session ended. Please sign in again.'); render(); } });
 setRenderer(renderPhone);
 window.addEventListener('hashchange', () => { viaHashchange = true; render(); });
 await loadStyles();

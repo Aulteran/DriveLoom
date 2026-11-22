@@ -14,6 +14,8 @@ import { defaultConfig } from '../../src/auth/config.ts';
 import { trustFromList } from '../../src/http/ip.ts';
 import { Integrations } from '../../src/admin/integrations.ts';
 import { createTestDb } from '../helpers/index.ts';
+import { Dec } from '../../src/decimal.ts';
+import { economy } from '../../src/units.ts';
 
 const skip = process.env['DATABASE_URL'] ? false : 'DATABASE_URL not set';
 const WEB = fileURLToPath(new URL('../../../web/', import.meta.url));
@@ -364,6 +366,125 @@ test('web client journeys', { skip, timeout: 180_000 }, async (t: TestContext) =
         assert.equal(await q.getByRole('navigation', { name: 'Main' }).isVisible(), false);
         assert.equal(await overflows(q), false, 'sign-in overflows on a phone');
       } finally { await anon.close(); }
+    });
+
+    await t.test('on a phone, the quick fill-up sheet logs a fill-up with a live economy preview', async () => {
+      const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, storageState: await page.context().storageState() });
+      const p = watch(await ctx.newPage());
+      p.setDefaultTimeout(8000);
+      const phoneAxe = async (label: string) => (await new AxeBuilder({ page: p }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']).analyze())
+        .violations.map((v) => `${label}: ${v.id} (${v.impact}) ${v.nodes.slice(0, 3).map((n) => n.target.join(' ')).join(' | ')}`);
+      const sheet = p.getByRole('dialog', { name: 'Add a fill-up' });
+      const odo = sheet.getByLabel('Odometer', { exact: true });
+      const fuel = sheet.getByLabel('Fuel', { exact: true });
+      const save = sheet.getByRole('button', { name: 'Save fill-up' });
+      const drafts = () => p.evaluate('Object.keys(sessionStorage).filter((k) => k.startsWith("driveloom.fillup-draft.")).length');
+      // The server's own arithmetic gives the figure the preview must show (economy is mpg (US) since the preferences test).
+      const expected = `${economy(Dec.parse('500'), Dec.parse('35.5'), 'mpg_us')!.toFixed(2)} mpg (US)`;
+      try {
+        await p.goto(`${base}/#/${vehicle}`);
+        await p.getByRole('heading', { name: 'Golf', level: 1 }).waitFor();
+        await p.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Fill up' }).click();
+        await sheet.waitFor();
+        // Opens on the odometer with the decimal keypad, prefilled with the latest reading.
+        await sheet.getByText('Last reading 11150 km').waitFor();
+        assert.equal(await odo.getAttribute('inputmode'), 'decimal');
+        assert.equal(await fuel.getAttribute('inputmode'), 'decimal');
+        assert.equal(await p.evaluate('document.activeElement?.getAttribute("name")'), 'odometer', 'odometer has focus');
+        assert.equal(await odo.inputValue(), '11150');
+        assert.equal(await overflows(p), false, 'the fill-up sheet overflows');
+        assert.equal(await drafts(), 0, 'nothing typed, nothing kept');
+
+        // A locale comma becomes a point, and the preview appears before saving.
+        await odo.fill('11650');
+        await fuel.fill('35,5');
+        assert.equal(await fuel.inputValue(), '35.5');
+        await sheet.locator('.m-fu-bar').getByText(expected).waitFor();
+        await sheet.getByText('500.0 km on 35.50 L').waitFor();
+
+        // The draft survives a reload, then reopens with the sheet.
+        assert.equal(await drafts(), 1);
+        await p.reload();
+        await sheet.waitFor();
+        await sheet.getByText('Restored the entry you were typing.').waitFor();
+        assert.equal(await odo.inputValue(), '11650');
+        assert.equal(await fuel.inputValue(), '35.5');
+        await sheet.locator('.m-fu-bar').getByText(expected).waitFor();
+
+        // Both themes pass axe with the sheet open.
+        const findings: string[] = [];
+        for (const colorScheme of ['dark', 'light'] as const) {
+          await p.emulateMedia({ colorScheme });
+          await p.waitForTimeout(300); // let colour transitions settle before measuring contrast
+          findings.push(...await phoneAxe(`fill-up sheet ${colorScheme}`));
+        }
+        assert.deepEqual(findings, []);
+
+        // Validation is inline, announced and checked on the phone before any request.
+        await odo.fill('9000');
+        await fuel.fill('');
+        await save.click();
+        await sheet.getByRole('alert').getByText('Fix 2 fields to save.').waitFor();
+        await sheet.getByText('The odometer reading is lower than an earlier record (11150 km). Check the digits.').waitFor();
+        await sheet.getByText('Enter how much fuel you bought.').waitFor();
+        assert.equal(await odo.getAttribute('aria-invalid'), 'true');
+        assert.equal(await p.evaluate('document.activeElement?.getAttribute("name")'), 'odometer', 'focus moves to the first error');
+        assert.match(await odo.getAttribute('aria-describedby') ?? '', /-err/);
+        await fuel.fill('35.5.1');
+        await fuel.blur();
+        await sheet.getByText('Use digits with an optional decimal point, like 42.5.').waitFor();
+        assert.deepEqual(await phoneAxe('fill-up sheet with errors'), []);
+        await odo.fill('11650');
+        await fuel.fill('35.5');
+        await sheet.getByRole('alert').waitFor({ state: 'hidden' });
+
+        // Offline: Save is disabled and says why; nothing is written.
+        await ctx.setOffline(true);
+        await sheet.getByText('You are offline.', { exact: false }).waitFor();
+        assert.equal(await save.isDisabled(), true);
+        assert.equal(await overflows(p), false);
+        await ctx.setOffline(false);
+        await sheet.getByText('You are offline.', { exact: false }).waitFor({ state: 'hidden' });
+        assert.equal(await save.isDisabled(), false);
+
+        // Saving closes the sheet, toasts the figure, clears the draft and refreshes the screen.
+        await save.click();
+        await sheet.waitFor({ state: 'detached' });
+        await p.locator('#toast').getByText(`Fill-up saved · ${expected}`).waitFor();
+        assert.equal(await drafts(), 0, 'the draft is gone after saving');
+        await p.getByRole('heading', { name: 'Golf', level: 1 }).waitFor();
+        await p.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'History' }).click();
+        await p.getByRole('heading', { name: 'Fuel log', level: 1 }).waitFor();
+        await p.locator('main tbody tr').first().getByText('11650 km').waitFor();
+        await p.locator('main tbody tr').first().getByText(expected).waitFor();
+
+        // Reopened, it starts from the new reading; untouched, Escape closes it at once.
+        await p.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Fill up' }).click();
+        await sheet.getByText('Last reading 11650 km').waitFor();
+        assert.equal(await sheet.getByText('Restored the entry you were typing.').isVisible(), false);
+        await p.keyboard.press('Escape');
+        await sheet.waitFor({ state: 'detached' });
+
+        // Typed, closing asks first; Discard drops the draft.
+        await p.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Fill up' }).click();
+        await sheet.getByText('Last reading 11650 km').waitFor();
+        await fuel.fill('20');
+        await sheet.getByRole('button', { name: 'Cancel' }).click();
+        await p.getByRole('button', { name: 'Keep editing' }).click();
+        assert.equal(await fuel.inputValue(), '20');
+        await sheet.getByRole('button', { name: 'Cancel' }).click();
+        await p.getByRole('button', { name: 'Discard' }).click();
+        await sheet.waitFor({ state: 'detached' });
+        assert.equal(await drafts(), 0);
+
+        // The dashboard's legacy "add" link opens the same sheet over the fuel log.
+        await p.goto(`${base}/#/${vehicle}/log?add=1`);
+        await sheet.waitFor();
+        assert.match(p.url(), /\/log$/);
+        await p.keyboard.press('Escape');
+        await sheet.waitFor({ state: 'detached' });
+        await p.getByRole('heading', { name: 'Fuel log', level: 1 }).waitFor();
+      } finally { await ctx.close(); }
     });
 
     await t.test('resizing across 700px reloads into the other shell', async () => {
