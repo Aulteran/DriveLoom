@@ -183,6 +183,11 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       const findings: string[] = [];
       for (const colorScheme of ['light', 'dark'] as const) {
         await page.emulateMedia({ colorScheme });
+        // The stylesheet promises that a theme switch is instant: no text or background colour may fade,
+        // or axe would measure a half-way blend (this failed intermittently in CI before).
+        const fading = await page.evaluate(`document.getAnimations()
+          .filter((a) => a instanceof CSSTransition && ['color', 'background-color'].includes(a.transitionProperty)).length`);
+        assert.equal(fading, 0, `switching to ${colorScheme} must not fade text or background colours`);
         for (const hash of [vehicle, `${vehicle}?window=all`, `${vehicle}/log`, `${vehicle}/members`, `${vehicle}/data`, `${vehicle}/settings`, 'garage', 'friends', 'settings/preferences', 'settings/security', 'admin/users', 'admin/invites', 'admin/units', 'admin/email', 'admin/signin', 'admin/audit']) {
           await page.goto(`${base}/#/${hash}`);
           await page.waitForLoadState('networkidle');

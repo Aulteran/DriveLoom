@@ -161,7 +161,7 @@ button, .button {
   background: var(--accent); color: var(--accent-text); text-decoration: none;
   display: inline-flex; align-items: center; gap: 8px;
   box-shadow: 0 1px 0 rgb(255 255 255 / 18%) inset, 0 1px 2px rgb(0 0 0 / 12%);
-  transition: box-shadow .2s, border-color .2s, background-color .15s;
+  transition: box-shadow .2s, border-color .2s;
 }
 button:hover, .button:hover { color: var(--accent-text); box-shadow: 0 1px 0 rgb(255 255 255 / 18%) inset, 0 4px 14px -4px var(--accent-glow); }
 button:active, .button:active { transform: translateY(1px); }
