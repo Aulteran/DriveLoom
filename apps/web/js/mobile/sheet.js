@@ -40,7 +40,9 @@ export function openSheet({ title, content, size = 'medium', label, onClose, sub
     footer ?? null);
   // A tap on the backdrop lands on the dialog itself; the inner box covers the rest.
   d.addEventListener('click', (e) => { if (e.target === d) requestClose(); });
-  if (guard) d.addEventListener('cancel', (e) => { e.preventDefault(); requestClose(); });
+  // A cancel the browser will not let the page refuse (repeated Escape, a back
+  // gesture) closes the sheet as asked; the guard is only consulted when it can.
+  if (guard) d.addEventListener('cancel', (e) => { if (!e.cancelable) return; e.preventDefault(); requestClose(); });
   d.addEventListener('close', () => {
     open.delete(d);
     d.remove();

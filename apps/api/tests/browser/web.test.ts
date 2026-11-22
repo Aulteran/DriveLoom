@@ -476,6 +476,18 @@ test('web client journeys', { skip, timeout: 180_000 }, async (t: TestContext) =
         await p.getByRole('button', { name: 'Discard' }).click();
         await sheet.waitFor({ state: 'detached' });
         assert.equal(await drafts(), 0);
+        // Repeated Escape never leaves a stray discard prompt over the screen.
+        await p.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Fill up' }).click();
+        await sheet.getByText('Last reading 11650 km').waitFor();
+        await fuel.fill('20');
+        for (let i = 0; i < 3; i++) { await p.keyboard.press('Escape'); await p.waitForTimeout(150); }
+        assert.ok(await p.locator('dialog[open]').count() <= 1, 'at most one dialog open');
+        if (await sheet.count()) {
+          if (await p.getByRole('button', { name: 'Discard' }).count()) await p.getByRole('button', { name: 'Discard' }).click();
+          else await sheet.getByRole('button', { name: 'Cancel' }).click().then(() => p.getByRole('button', { name: 'Discard' }).click());
+          await sheet.waitFor({ state: 'detached' });
+        }
+        await p.evaluate('sessionStorage.clear()');
 
         // The dashboard's legacy "add" link opens the same sheet over the fuel log.
         await p.goto(`${base}/#/${vehicle}/log?add=1`);
