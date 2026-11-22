@@ -7,13 +7,16 @@ import { withFreshSignIn } from './settings.js';
 import { unitFields } from '../units.js';
 import { icon } from '../icons.js';
 
-const SECTIONS = [['users', 'Accounts', 'users'], ['invites', 'Invitations', 'mail'], ['units', 'Default units', 'sliders'], ['email', 'Email', 'mail'], ['signin', 'Single sign-on', 'key'], ['audit', 'Audit log', 'list']];
+export const SECTIONS = [['users', 'Accounts', 'users'], ['invites', 'Invitations', 'mail'], ['units', 'Default units', 'sliders'], ['email', 'Email', 'mail'], ['signin', 'Single sign-on', 'key'], ['audit', 'Audit log', 'list']];
 
 const act = (label, fn, cls = 'secondary') => h('button', { class: cls, onclick: async (e) => {
   const btn = e.currentTarget; btn.disabled = true;
   try { const msg = await fn(); if (msg === false) { btn.disabled = false; return; } render(); if (typeof msg === 'string') toast(msg); }
-  catch (err) { toast(err.code === 'last_admin' ? 'The instance must keep an active administrator.' : err.message); btn.disabled = false; }
+  catch (err) { toast(adminError(err)); btn.disabled = false; }
 } }, label);
+
+/** The message for a failed administration request. */
+export const adminError = (err) => (err.code === 'last_admin' ? 'The instance must keep an active administrator.' : err.message);
 
 async function users() {
   const { items } = await get('/v1/admin/users');
@@ -54,7 +57,7 @@ async function invites() {
     h('button', { type: 'submit' }, 'Create invitation'),
   ], async (v, el) => {
     const inv = await withFreshSignIn(() => post('/v1/admin/invites', { email: v.email.trim() || null, expiresInDays: Number(v.days) }));
-    const link = `${location.origin}${location.pathname}#/register?invite=${encodeURIComponent(inv.token)}`;
+    const link = inviteLink(inv.token);
     el.reset();
     shown.replaceChildren(h('div', { class: 'notice' },
       h('p', {}, h('strong', {}, 'Copy this link now.'), ' It is shown only once and works once, until ', dateTime(inv.expiresAt), '.'),
@@ -71,6 +74,15 @@ async function invites() {
       h('p', { class: 'muted' }, state.instance.registration === 'open' ? 'Registration is open on this instance, so anyone can sign up. Invitations matter when it is closed.' : 'Registration is closed. Only people with an invitation can create an account.'),
       create, shown),
     h('section', { class: 'panel' }, h('h2', {}, 'Invitations'), table));
+}
+
+/** The one-time registration link for an invitation token. */
+export const inviteLink = (token) => `${location.origin}${location.pathname}#/register?invite=${encodeURIComponent(token)}`;
+
+/** One audit event's details as "key: value" pairs. */
+export function auditDetail(d) {
+  const parts = Object.entries(d ?? {}).filter(([, v]) => v !== null && v !== undefined).map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`);
+  return parts.length ? parts.join(', ') : '';
 }
 
 function inviteTable(items) {
@@ -91,10 +103,6 @@ function inviteTable(items) {
 async function audit(query) {
   const before = query?.get('before');
   const { items } = await get(`/v1/admin/audit?limit=100${before ? `&before=${encodeURIComponent(before)}` : ''}`);
-  const detail = (d) => {
-    const parts = Object.entries(d ?? {}).filter(([, v]) => v !== null && v !== undefined).map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`);
-    return parts.length ? parts.join(', ') : '';
-  };
   return h('section', { class: 'panel' },
     h('h2', {}, 'Audit log'),
     h('p', { class: 'muted' }, 'Security and sharing events, newest first. Fuel records and passwords are never logged.'),
@@ -105,7 +113,7 @@ async function audit(query) {
         h('td', {}, h('code', {}, e.action)),
         h('td', { class: 'hide-sm small' }, e.actorId ? h('code', {}, e.actorId.slice(-8)) : 'system'),
         h('td', { class: 'hide-sm small' }, e.subjectId ? `${e.subjectType ?? ''} ${e.subjectId.slice(-8)}` : ''),
-        h('td', { class: 'hide-sm small muted' }, detail(e.details))))))) : h('p', { class: 'muted' }, 'No events.'),
+        h('td', { class: 'hide-sm small muted' }, auditDetail(e.details))))))) : h('p', { class: 'muted' }, 'No events.'),
     h('p', { class: 'row' },
       before ? h('a', { href: '#/admin/audit' }, 'Newest') : null,
       items.length === 100 ? h('a', { href: `#/admin/audit?before=${items[items.length - 1].id}` }, 'Older events') : null));
@@ -126,7 +134,7 @@ async function units() {
 }
 
 // The sign-in screen and Security page read these public facts once; refresh them after a change here.
-const refreshInstance = async () => { state.instance = await get('/v1/auth/instance').catch(() => state.instance); };
+export const refreshInstance = async () => { state.instance = await get('/v1/auth/instance').catch(() => state.instance); };
 
 // Settings that server environment variables manage are shown read-only.
 const envNotice = (what, vars) => h('div', { class: 'notice' },
@@ -151,6 +159,20 @@ const removeButton = (label, path, confirm, done) => h('button', { type: 'button
 const enableToggle = (c, label, hint) => h('div', { class: 'field' },
   h('label', { class: 'row' }, h('input', { type: 'checkbox', name: 'enabled', checked: c.enabled }), h('strong', {}, label)),
   h('div', { class: 'hint' }, hint));
+
+/** The SMTP form's values as the request body: a blank password keeps the saved one. */
+export function smtpBody(v) {
+  const body = { enabled: !!v.enabled, host: v.host.trim(), port: Number(v.port), security: v.security, username: v.username.trim(), from: v.from.trim() };
+  if (v.clearPassword) body.password = null; else if (v.password) body.password = v.password;
+  return body;
+}
+
+/** The sign-on form's values as the request body: a blank secret keeps the saved one. */
+export function oidcBody(v) {
+  const body = { enabled: !!v.enabled, issuer: v.issuer.trim(), clientId: v.clientId.trim() };
+  if (v.clientSecret) body.clientSecret = v.clientSecret;
+  return body;
+}
 
 async function email() {
   const c = await get('/v1/admin/settings/smtp');
@@ -182,9 +204,7 @@ async function email() {
       c.source === 'database' ? removeButton('Remove email settings', '/v1/admin/settings/smtp', 'Remove the saved email settings? Email recovery, verification and sign-in codes stop working.', 'Email settings removed.') : null),
     h('p', { class: 'small muted' }, 'The password is stored encrypted and is never shown again. A test message goes to your own address using the saved settings.'),
   ], async (v) => {
-    const body = { enabled: !!v.enabled, host: v.host.trim(), port: Number(v.port), security: v.security, username: v.username.trim(), from: v.from.trim() };
-    if (v.clearPassword) body.password = null; else if (v.password) body.password = v.password;
-    await withFreshSignIn(() => put('/v1/admin/settings/smtp', body));
+    await withFreshSignIn(() => put('/v1/admin/settings/smtp', smtpBody(v)));
     await refreshInstance();
     render();
     return 'Email settings saved.';
@@ -224,9 +244,7 @@ async function signin() {
       c.source === 'database' ? removeButton('Remove sign-on', '/v1/admin/settings/oidc', 'Remove single sign-on? People who sign in only through the provider lose access until they have a password or passkey.', 'Single sign-on removed.') : null),
     h('p', { class: 'small muted' }, 'Changing the issuer is refused while any account depends on the current provider and has no password or passkey. The client secret is stored encrypted and never shown again.'),
   ], async (v) => {
-    const body = { enabled: !!v.enabled, issuer: v.issuer.trim(), clientId: v.clientId.trim() };
-    if (v.clientSecret) body.clientSecret = v.clientSecret;
-    await withFreshSignIn(() => put('/v1/admin/settings/oidc', body));
+    await withFreshSignIn(() => put('/v1/admin/settings/oidc', oidcBody(v)));
     await refreshInstance();
     render();
     return 'Sign-on settings saved.';

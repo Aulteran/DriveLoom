@@ -5,8 +5,8 @@ import { h, form, field, select, confirmDialog, toast } from '../ui.js';
 import { render } from '../core.js';
 import { UNIT, money, date, vehicleLabel } from '../format.js';
 
-const WINDOWS = [['30d', 'Last 30 days'], ['90d', 'Last 90 days'], ['365d', 'Last 12 months'], ['all', 'All time']];
-const COST_REASON = { currency_mismatch: 'different currency', no_cost_data: 'no cost data' };
+export const WINDOWS = [['30d', 'Last 30 days'], ['90d', 'Last 90 days'], ['365d', 'Last 12 months'], ['all', 'All time']];
+export const COST_REASON = { currency_mismatch: 'different currency', no_cost_data: 'no cost data' };
 
 function person(p) {
   return h('div', {}, h('strong', {}, p.displayName || p.email), p.displayName ? h('div', { class: 'small muted' }, p.email) : null);

@@ -8,10 +8,11 @@ import { icon } from '../icons.js';
 import { state } from '../core.js';
 import { vehicleTitle } from '../format.js';
 import { welcomeView } from '../views/vehicles.js';
-import { friendsView } from '../views/friends.js';
-import { settingsView } from '../views/settings.js';
-import { adminView } from '../views/admin.js';
-import { moreView, installView } from './more.js';
+import { moreView } from './more.js';
+import { installView } from './install.js';
+import { friendsScreen } from './friends.js';
+import { settingsScreen, profileScreen, securityScreen } from './account.js';
+import { adminScreen } from './admin.js';
 import { homeScreen } from './home.js';
 import { historyScreen } from './history.js';
 import { garageScreen, detailScreen, sectionScreen } from './vehicles.js';
@@ -52,11 +53,16 @@ export async function screen({ parts, query, active, requests, friends, signOut 
       if (second === 'install') return { view: installView(), title: 'Install the app', tab: 'more' };
       return { view: await moreView({ requests, onSignOut: signOut }), title: 'More', tab: 'more' };
     case 'friends':
-      return { view: withBack('#/more', 'More', await friendsView(query)), title: 'Friends', tab: 'more' };
-    case 'settings': case 'account':
-      return { view: withBack('#/more', 'More', await settingsView(second ?? 'preferences', query)), title: 'Settings', tab: 'more' };
+      return { view: friendsScreen(query), title: 'Friends', tab: 'more' };
+    case 'settings': case 'account': {
+      // The identity-provider link flow returns to #/account?linked=1.
+      const sec = query.get('linked') === '1' || first === 'account' ? 'security' : second;
+      if (sec === 'security') return { view: securityScreen(query), title: 'Account and security', tab: 'more' };
+      if (sec === 'profile') return { view: profileScreen(), title: 'Profile', tab: 'more' };
+      return { view: settingsScreen(), title: 'Settings', tab: 'more' };
+    }
     case 'admin':
-      return { view: withBack('#/more', 'More', await adminView(second ?? 'users', query)), title: 'Administration', tab: 'more' };
+      return { view: adminScreen(second ?? 'users', query), title: 'Administration', tab: 'more' };
     default:
       return { view: notFound(), title: 'Not found', tab: null };
   }
