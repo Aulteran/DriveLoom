@@ -6,7 +6,7 @@ import { UNIT, date } from '../format.js';
 let seq = 0;
 
 /** Round-number ticks from 0 (or `lo`) to at least `hi`. */
-function niceTicks(lo, hi, count = 4) {
+export function niceTicks(lo, hi, count = 4) {
   const span = hi - lo || Math.abs(hi) || 1;
   const raw = span / count;
   const mag = 10 ** Math.floor(Math.log10(raw));
@@ -17,7 +17,7 @@ function niceTicks(lo, hi, count = 4) {
   if (out.at(-1) < hi) out.push(Number((out.at(-1) + step).toFixed(6)));
   return out;
 }
-const tickText = (v) => (Math.abs(v) >= 1000 ? `${Number((v / 1000).toFixed(1))}k` : String(Number(v.toFixed(2))));
+export const tickText = (v) => (Math.abs(v) >= 1000 ? `${Number((v / 1000).toFixed(1))}k` : String(Number(v.toFixed(2))));
 
 /**
  * Wraps a chart with a hover tooltip; any element with data-tip gets one.
@@ -65,7 +65,7 @@ function frame(build, table) {
 }
 
 /** A collapsed data table: the accessible, exact alternative to the picture. */
-function dataTable(caption, headers, rows) {
+export function dataTable(caption, headers, rows) {
   return h('details', { class: 'chart-data' },
     h('summary', {}, 'Show data'),
     h('div', { class: 'table-wrap' }, h('table', {},

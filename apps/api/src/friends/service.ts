@@ -4,9 +4,10 @@
 // have an accepted friendship, (2) that user owns the vehicle and (3) the
 // owner opted the vehicle in. All three are checked in the query that builds
 // each response, so opting out or unfriending takes effect on the next request.
-// What crosses is a name, the vehicle's description and one aggregate economy
+// What crosses is the optional nickname, the vehicle's description and one aggregate economy
 // figure for a fixed window: no ids, records, dates, distances, volumes or
-// counts, and cost only when the currencies match.
+// counts, and cost only when the currencies match. Plate and VIN are private
+// to a vehicle's members and are never selected for friends.
 import type pg from 'pg';
 import { Dec } from '../decimal.ts';
 import { HttpProblem } from '../http/problem.ts';
@@ -122,7 +123,7 @@ export class FriendService {
     const prefs = await getPreferences(this.#pool, p.userId);
     const per = distanceUnitOf(prefs.economyUnit);
 
-    interface V { id: Id; name: string; make: string | null; model: string | null; model_year: number | null; currency: string }
+    interface V { id: Id; name: string | null; plate_region?: string | null; plate_number?: string | null; make: string | null; model: string | null; model_year: number | null; currency: string }
     const describe = (v: V) => ({ name: v.name, make: v.make, model: v.model, year: v.model_year });
     const figures = async (v: V, scale: number) => {
       const s = await this.#fuel.summary(v.id, w, prefs);
@@ -137,7 +138,7 @@ export class FriendService {
     };
 
     const mine = await this.#pool.query<V>(
-      `SELECT v.id, v.name, v.make, v.model, v.model_year, v.currency FROM vehicles v JOIN vehicle_members m ON m.vehicle_id = v.id AND m.user_id = $1
+      `SELECT v.id, v.name, v.make, v.model, v.model_year, v.plate_region, v.plate_number, v.currency FROM vehicles v JOIN vehicle_members m ON m.vehicle_id = v.id AND m.user_id = $1
         WHERE v.archived_at IS NULL ORDER BY v.id`, [p.userId]);
     // The grant: accepted friendship AND owner AND opt-in AND active account, evaluated now.
     const theirs = await this.#pool.query<V & { owner_id: Id; display_name: string }>(
@@ -160,7 +161,7 @@ export class FriendService {
     return {
       window: { key, from: w.from?.toISOString() ?? null, to: to.toISOString() },
       units: { economy: prefs.economyUnit, distance: per, currency: prefs.currency },
-      mine: await Promise.all(mine.rows.map(async (v) => ({ vehicleId: v.id, ...describe(v), ...(await figures(v, 2)) }))),
+      mine: await Promise.all(mine.rows.map(async (v) => ({ vehicleId: v.id, ...describe(v), plateRegion: v.plate_region ?? null, plateNumber: v.plate_number ?? null, ...(await figures(v, 2)) }))),
       friends: [...friends.values()],
     };
   }

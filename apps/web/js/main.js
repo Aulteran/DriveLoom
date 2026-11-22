@@ -1,9 +1,11 @@
-// Client-side router, session state and the signed-in app shell (sidebar with
-// the vehicle switcher). Hash routes keep the server simple: every non-API path
-// serves index.html, and the fragment never reaches it.
+// Desktop shell: the signed-in app chrome (sidebar with the vehicle switcher)
+// and the render pipeline. Routing and state live in core.js; hash routes keep
+// the server simple: every non-API path serves index.html.
 import { get, post, setCsrf, whenSignedOut } from './api.js';
+import { state, refreshSession, go, render, setRenderer, parse, PUBLIC, rememberVehicle, defaultVehicle } from './core.js';
 import { mount, h, toast } from './ui.js';
 import { icon } from './icons.js';
+import { vehicleLabel, vehicleTitle } from './format.js';
 import { themeControl } from './theme.js';
 import { authView } from './views/auth.js';
 import { garageView, welcomeView } from './views/vehicles.js';
@@ -11,40 +13,6 @@ import { vehicleView } from './views/vehicle.js';
 import { friendsView } from './views/friends.js';
 import { settingsView } from './views/settings.js';
 import { adminView } from './views/admin.js';
-
-export const state = { account: null, prefs: null, instance: null, vehicles: [] };
-
-/** Load (or reload) the signed-in account. Returns false when signed out. */
-export async function refreshSession() {
-  try {
-    const s = await get('/v1/auth/session', { quiet: true });
-    setCsrf(s.csrf_token);
-    state.account = s.account;
-    state.prefs = await get('/v1/preferences');
-    return true;
-  } catch { state.account = null; setCsrf(null); return false; }
-}
-
-export function go(hash) { if (location.hash === hash) render(); else location.hash = hash; }
-
-const PUBLIC = new Set(['signin', 'register', 'recover', 'mfa']);
-
-function parse() {
-  const raw = location.hash.replace(/^#\/?/, '');
-  const [path, qs] = raw.split('?');
-  return { parts: (path ?? '').split('/').filter(Boolean), query: new URLSearchParams(qs ?? '') };
-}
-
-// ---------- selected vehicle ----------
-// The URL is the source of truth; storage only answers "which vehicle does #/ open?".
-const lastKey = () => `driveloom.vehicle.${state.account?.id ?? ''}`;
-function rememberVehicle(id) { try { localStorage.setItem(lastKey(), id); } catch { /* not remembered */ } }
-function recalledVehicle() { try { return localStorage.getItem(lastKey()); } catch { return null; } }
-
-function defaultVehicle() {
-  const active = state.vehicles.filter((v) => !v.archived);
-  return active.find((v) => v.id === recalledVehicle()) ?? active[0] ?? null;
-}
 
 // ---------- shell ----------
 const VEHICLE_NAV = [['', 'Dashboard', 'gauge'], ['log', 'Fuel log', 'fuel'], ['members', 'Members', 'users'], ['data', 'Import & export', 'swap'], ['settings', 'Vehicle settings', 'gear']];
@@ -59,12 +27,8 @@ function switcher(current) {
   const sel = h('select', {
     id: 'vehicle-switch', name: 'vehicle',
     onchange: (e) => { rememberVehicle(e.target.value); go(`#/vehicles/${e.target.value}`); },
-  }, list.map((v) => h('option', { value: v.id, selected: v.id === current?.id }, v.archived ? `${v.name} (archived)` : v.name)));
-  return h('div', { class: 'switcher' },
-    h('label', { for: 'vehicle-switch' }, 'Vehicle'),
-    h('div', { class: 'switcher-box' }, current?.imageVersion
-      ? h('img', { src: `/v1/vehicles/${current.id}/image?v=${current.imageVersion}`, alt: '' })
-      : h('span', { class: 'switcher-icon' }, icon('car')), sel));
+  }, list.map((v) => h('option', { value: v.id, selected: v.id === current?.id }, v.archived ? `${vehicleLabel(v)} (archived)` : vehicleLabel(v))));
+  return h('div', { class: 'switcher' }, h('label', { for: 'vehicle-switch' }, 'Vehicle'), sel);
 }
 
 function buildSidebar(route) {
@@ -130,7 +94,7 @@ function withPublicTheme(view) {
 }
 
 let rendering = 0;
-export async function render() {
+async function renderDesktop() {
   const ticket = ++rendering;
   const { parts, query } = parse();
   const [first = '', second, third] = parts;
@@ -165,7 +129,7 @@ export async function render() {
         rememberVehicle(r.vehicle.id);
         // An archived vehicle opened from the garage is not in the default list but must show as selected.
         const listed = state.vehicles.find((x) => x.id === r.vehicle.id);
-        [view, title, route] = [r.view, `${r.title} · ${r.vehicle.name}`, { section: 'vehicle', tab, vehicle: listed ?? r.vehicle }];
+        [view, title, route] = [r.view, `${r.title} · ${vehicleTitle(r.vehicle)}`, { section: 'vehicle', tab, vehicle: listed ?? r.vehicle }];
         break;
       }
       case 'garage': [view, title, route] = [await garageView(query), 'Garage', { section: 'garage' }]; break;
@@ -196,5 +160,6 @@ document.addEventListener('keydown', (e) => {
 mobile.addEventListener('change', () => setDrawer(false));
 
 whenSignedOut(() => { if (state.account) { state.account = null; toast('Your session ended. Please sign in again.'); render(); } });
+setRenderer(renderDesktop);
 window.addEventListener('hashchange', render);
 render();

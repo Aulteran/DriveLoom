@@ -1,6 +1,6 @@
 // Shared nominal types. Brands exist only at compile time; they stop an
 // unvalidated string or a JSON number being used where an id or exact decimal
-// is required (see docs/CONTRACTS.md).
+// is required.
 declare const brand: unique symbol;
 type Brand<T, B extends string> = T & { readonly [brand]: B };
 

@@ -2,7 +2,7 @@
 //   node scripts/backup.ts create <file>
 //   node scripts/backup.ts verify <file>
 //   node scripts/backup.ts restore <file> [--replace]
-// See docs/DEPLOYMENT.md before using restore --replace.
+// Be careful with restore --replace: it overwrites the existing data.
 import pg from 'pg';
 import { BackupError, createBackup, restoreBackup, verifyBackup } from '../src/backup.ts';
 

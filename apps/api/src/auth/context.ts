@@ -5,12 +5,15 @@ import type { Id } from '../types.ts';
 import type { AuthConfig } from './config.ts';
 import type { Mailer } from './mailer.ts';
 import { sha256Hex } from './crypto.ts';
+import type { Integrations } from '../admin/integrations.ts';
 
 export interface OidcClaims { issuer: string; subject: string; email: string | null; emailVerified: boolean }
 /** Network-facing OIDC operations, injectable so tests need no identity provider. */
 export interface OidcProvider {
   authorizationUrl(a: { state: string; nonce: string; codeVerifier: string }): Promise<string>;
   /** Must verify the ID token signature, issuer, audience, expiry and `nonce`, using PKCE. */
+  /** Optional: fetch the provider's discovery document (the admin "test connection" button). */
+  discover?(): Promise<{ issuer: string; authorizationEndpoint: string | null }>;
   exchange(a: { callbackUrl: string; state: string; nonce: string; codeVerifier: string }): Promise<OidcClaims>;
 }
 
@@ -19,6 +22,8 @@ export interface AuthContext {
   readonly config: AuthConfig;
   readonly mailer: Mailer | null;
   readonly oidc: OidcProvider | null;
+  /** Administrator-editable SMTP/OIDC settings. When present, `mailer` and `oidc` read from it live. */
+  readonly integrations?: Integrations;
   readonly now: () => Date;
 }
 
