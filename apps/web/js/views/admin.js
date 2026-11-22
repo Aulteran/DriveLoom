@@ -1,7 +1,7 @@
 // Instance administration: accounts, invitations, default units, email (SMTP), single sign-on (OIDC) and the audit log.
 import { get, post, put, del } from '../api.js';
 import { h, form, field, select, confirmDialog, toast } from '../ui.js';
-import { render, state } from '../main.js';
+import { render, state } from '../core.js';
 import { date, dateTime } from '../format.js';
 import { withFreshSignIn } from './settings.js';
 import { unitFields } from '../units.js';

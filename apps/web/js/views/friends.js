@@ -2,7 +2,7 @@
 // for vehicles their owner opted in; never individual fill-ups.
 import { get, post, put, del } from '../api.js';
 import { h, form, field, select, confirmDialog, toast } from '../ui.js';
-import { render } from '../main.js';
+import { render } from '../core.js';
 import { UNIT, money, date, vehicleLabel } from '../format.js';
 
 const WINDOWS = [['30d', 'Last 30 days'], ['90d', 'Last 90 days'], ['365d', 'Last 12 months'], ['all', 'All time']];

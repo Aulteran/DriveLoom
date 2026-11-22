@@ -2,7 +2,7 @@
 // The sidebar in main.js links the sections; each returns its own heading.
 import { api, get, post, patch, put, del } from '../api.js';
 import { h, form, field, select, toast, confirmDialog, download } from '../ui.js';
-import { go, render, state } from '../main.js';
+import { go, render, state } from '../core.js';
 import { qty, date, dateTime, money, REASONS, ROLE, UNIT, localInput, toInstant, vehicleTitle, vehicleDescription, vehicleLabel } from '../format.js';
 import { economyChart, barChart } from './chart.js';
 import { currencyOptions, pageHead } from './vehicles.js';

@@ -2,7 +2,7 @@
 // and the first-run welcome screen shown before any vehicle exists.
 import { post } from '../api.js';
 import { h, form, field, select } from '../ui.js';
-import { go, state } from '../main.js';
+import { go, state } from '../core.js';
 import { ROLE, vehicleTitle, vehicleDescription } from '../format.js';
 import { icon } from '../icons.js';
 
