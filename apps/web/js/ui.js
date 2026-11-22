@@ -10,7 +10,9 @@ export function h(tag, attrs = {}, ...children) {
     // CSSOM, not the style attribute: the CSP (style-src 'self') blocks the latter.
     else if (k === 'style') el.style.cssText = v;
     else if (k === 'dataset') Object.assign(el.dataset, v);
-    else if (k in el && typeof v !== 'string') el[k] = v;
+    // `checked`/`selected` (and a numeric `value`) go in as attributes, so they are the control's
+    // default as drawn; dirty.js tells typing from the initial state by comparing with the default.
+    else if (k in el && typeof v !== 'string' && k !== 'checked' && k !== 'selected' && !(k === 'value' && typeof v === 'number')) el[k] = v;
     else el.setAttribute(k, v === true ? '' : String(v));
   }
   append(el, children);

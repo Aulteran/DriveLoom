@@ -13,8 +13,8 @@ import { h, toast } from '../ui.js';
 import { icon } from '../icons.js';
 import { onUpdateAvailable, applyUpdate, isOnline, onConnectionChange } from '../pwa.js';
 import { OFFLINE_SAVE } from './kit.js';
+import { trackTouched, updateHeld } from '../dirty.js';
 
-const touched = new WeakSet(); // forms the person typed into since they were drawn
 let loadedAt = null;           // when the screen on show finished loading, while online
 let updateWaiting = false;
 let updateDismissed = false;
@@ -43,13 +43,6 @@ const offlineBanner = h('div', { class: 'm-banner m-banner-offline', hidden: tru
   h('button', { type: 'button', class: 'm-icon-btn m-banner-x', 'aria-label': 'Dismiss', onclick: () => { offlineDismissed = true; sync(); } }, icon('close')));
 
 const stack = h('aside', { class: 'm-banners', 'aria-label': 'App status' }, offlineBanner, updateBanner);
-
-/** Is something open that a reload would throw away? */
-export function updateHeld() {
-  if (document.querySelector('dialog[open]')) return true;
-  for (const f of document.forms) if (touched.has(f) && f.isConnected) return true;
-  return false;
-}
 
 const slow = () => ['slow-2g', '2g'].includes(navigator.connection?.effectiveType);
 const clock = (d) => d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
@@ -85,10 +78,9 @@ export function startSystem({ head }) {
   onUpdateAvailable(() => { updateWaiting = true; sync(); });
 
   // Unsaved input: any typing in a form marks it until it is reset or replaced (a save re-renders it).
-  const mark = (e) => { const f = e.target?.form ?? e.target?.closest?.('form'); if (f) touched.add(f); };
-  document.addEventListener('input', mark, true);
-  document.addEventListener('change', mark, true);
-  document.addEventListener('reset', (e) => { touched.delete(e.target); setTimeout(sync); }, true);
+  // The tracking itself lives in dirty.js, which the entry point also uses to hold a shell switch.
+  trackTouched();
+  document.addEventListener('reset', () => setTimeout(sync), true);
   // Offline, nothing is written. The fill-up sheet disables its own Save and says why.
   document.addEventListener('submit', (e) => {
     const f = e.target;
