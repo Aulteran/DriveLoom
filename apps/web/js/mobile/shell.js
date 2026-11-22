@@ -204,7 +204,7 @@ async function renderPhone() {
     if (ticket !== rendering) return;
     chrome(!!state.account, { vehicle: state.account ? defaultVehicle() : null });
     mountedHash = null;
-    mount(h('div', { class: 'm-screen' }, errorState({ error: err, level: 1, onRetry: () => render() }), h('a', { class: 'm-back m-center', href: '#/' }, 'Back to your dashboard')), 'Error');
+    mount(h('div', { class: 'm-screen' }, errorState({ error: err, level: 1, onRetry: () => render() }), h('a', { class: 'm-back m-center-self', href: '#/' }, 'Back to your dashboard')), 'Error');
     if (navigator.onLine === false) addEventListener('online', () => render(), { once: true });
   }
 }

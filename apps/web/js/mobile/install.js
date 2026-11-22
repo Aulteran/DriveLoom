@@ -61,7 +61,7 @@ export function installView() {
       }
       const seg = h('div', { class: 'm-seg', role: 'group', 'aria-label': 'Device' },
         [['ios', 'iPhone, iPad'], ['android', 'Android']].map(([k, label]) => h('button', {
-          type: 'button', 'aria-pressed': String(platform === k), onclick: () => { chosen = k; draw(); slot.querySelector(`.m-seg [data-k="${k}"]`)?.focus(); }, dataset: { k },
+          type: 'button', class: 'm-seg-opt', 'aria-pressed': String(platform === k), onclick: () => { chosen = k; draw(); slot.querySelector(`.m-seg [data-k="${k}"]`)?.focus(); }, dataset: { k },
         }, label)));
       blocks.push(seg);
       if (platform === 'ios') blocks.push(iosSteps());

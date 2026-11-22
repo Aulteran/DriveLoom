@@ -41,7 +41,8 @@
 .m-link .m-link-next { width: 16px; height: 16px; }
 .m-label-out { margin: 6px 4px 0; }
 
-/* ---------- segmented period control ---------- */
+/* ---------- segmented control (Home period, Install device, Friends period, member role) ---------- */
+/* The one definition: options are .m-seg-opt links or buttons; selected is aria-current or aria-pressed. */
 .m-seg {
   display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: 2px; padding: 3px;
   border-radius: 14px; background: var(--surface-2); border: 1px solid var(--line);
@@ -50,6 +51,7 @@
   display: flex; align-items: center; justify-content: center; min-height: var(--m-tap); padding: 0 6px;
   border: 0; border-radius: 11px; background: transparent; box-shadow: none;
   color: var(--muted); font: 600 .9rem/1 var(--font); text-decoration: none;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .m-seg-opt:hover, .m-shell button.m-seg-opt:hover { color: var(--text); background: transparent; box-shadow: none; }
 .m-seg-opt[aria-current="true"], .m-seg-opt[aria-pressed="true"], .m-shell button.m-seg-opt[aria-pressed="true"] {

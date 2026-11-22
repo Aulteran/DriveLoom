@@ -25,7 +25,7 @@ function comparison(cmp, win) {
   const max = Math.max(...values, 0) || 1;
   const seg = h('div', { class: 'm-seg m-seg-4', role: 'group', 'aria-label': 'Comparison period' },
     WINDOWS.map(([k, label]) => h('button', {
-      type: 'button', 'aria-pressed': String(k === win), title: label,
+      type: 'button', class: 'm-seg-opt', 'aria-pressed': String(k === win), title: label,
       onclick: () => { location.hash = `#/friends?window=${k}`; },
     }, SHORT[k] ?? label)));
   return h('section', { class: 'm-group m-pad m-compare', 'aria-labelledby': 'm-cmp-h' },

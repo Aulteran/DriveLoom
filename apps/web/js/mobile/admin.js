@@ -141,8 +141,8 @@ const remove = (label, path, title, text, done) => adminAction(label, async () =
   await withFreshSignIn(() => del(path)); await refreshInstance(); render();
   return done;
 }, { cls: 'danger m-wide' });
-const toggle = (c, label, hint) => h('div', { class: 'm-switch-row' },
-  h('label', { class: 'm-switch-label', for: 'm-enabled' }, h('strong', {}, label), h('span', {}, hint)),
+const toggle = (c, label, hint) => h('div', { class: 'm-switch-field' },
+  h('label', { class: 'm-switch-field-label', for: 'm-enabled' }, h('strong', {}, label), h('span', {}, hint)),
   h('input', { type: 'checkbox', role: 'switch', class: 'm-sw', id: 'm-enabled', name: 'enabled', checked: c.enabled }));
 
 function email(c) {
@@ -239,7 +239,7 @@ export function adminScreen(section0, query) {
     return page({ title: 'Administrators only' }, emptyState({ title: 'You are not an administrator', text: 'Ask an administrator of this server if you need access.' }));
   }
   const sec = SECTIONS.some(([k]) => k === section0) ? section0 : 'users';
-  const chips = h('nav', { class: 'm-chips', 'aria-label': 'Administration sections' },
+  const chips = h('nav', { class: 'm-sections', 'aria-label': 'Administration sections' },
     h('ul', {}, SECTIONS.map(([k, label]) => h('li', {}, h('a', { class: 'm-chip-link', href: `#/admin/${k}`, 'aria-current': k === sec ? 'page' : undefined }, label)))));
   const slot = h('div', {});
   const before = query.get('before');
@@ -253,6 +253,6 @@ export function adminScreen(section0, query) {
   return page({
     title: 'Administration',
     action: sec === 'invites' ? h('button', { type: 'button', class: 'm-head-btn', onclick: inviteSheet }, icon('plus'), 'Invite') : null,
-  }, chips, h('h2', { class: 'm-sub' }, title), slot);
+  }, chips, h('h2', { class: 'm-subhead' }, title), slot);
 }
 

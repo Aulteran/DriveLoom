@@ -53,7 +53,7 @@ export function staticRow({ label, sub, trail, avatar }) {
 
 export const initials = (text) => (text ?? '').split(/[\s@.]+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('') || '?';
 export const avatar = (text, tone) => h('span', { class: 'm-avatar', 'aria-hidden': 'true', dataset: tone ? { tone: String(tone) } : undefined }, initials(text));
-export const pill = (text, tone = '') => h('span', { class: `m-pill${tone ? ` m-pill-${tone}` : ''}` }, text);
+export const pill = (text, tone = '') => h('span', { class: `m-status${tone ? ` m-status-${tone}` : ''}` }, text);
 
 /**
  * An explicit action button: disabled while running, refuses to run offline,

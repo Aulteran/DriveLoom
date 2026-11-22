@@ -754,7 +754,12 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
     const toastSays = (p: Page, text: string | RegExp) => p.locator('#toast').getByText(text).waitFor();
     /** Every segmented-control button is a full 44px touch target. */
     const segTargets = async (p: Page) => {
-      for (const b of await p.locator('.m-seg button').all()) assert.ok(((await b.boundingBox())?.height ?? 0) >= 44, 'segmented button under 44px');
+      // Layout heights once finite animations are done: the screen's entrance animation (a translate)
+      // makes transformed bounding boxes read 43.99998px mid-flight.
+      const heights = await p.evaluate(`Promise.all(document.getAnimations().filter((a) => a.effect?.getTiming().iterations !== Infinity).map((a) => a.finished.catch(() => undefined)))
+        .then(() => [...document.querySelectorAll('.m-seg button, .m-seg .m-seg-opt')].map((b) => b.offsetHeight))`) as number[];
+      assert.ok(heights.length > 0, 'no segmented control on screen');
+      for (const h of heights) assert.ok(h >= 44, `segmented button under 44px (${h})`);
     };
     /** axe in both themes on what is on screen now, waiting for colour transitions to settle. */
     const bothThemes = async (p: Page, phoneAxe: (label: string) => Promise<string[]>, label: string) => {

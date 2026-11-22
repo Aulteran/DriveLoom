@@ -1,5 +1,5 @@
 // Loading, empty and error states for phone screens. Plain functions that
-// return DOM nodes; style lives in mobile-system.css (classes m-skel, m-empty,
+// return DOM nodes; style lives in mobile-system.css (classes m-skel, m-state,
 // m-err). Any phone screen can adopt them:
 //
 //   skeleton({ label, rows, kind })   Placeholder blocks shaped like the final
@@ -50,10 +50,10 @@ export function skeleton({ label = 'content', rows = 4, kind = 'list' } = {}) {
 }
 
 export function emptyState({ title, text, action, icon: ic = null, level = 2 } = {}) {
-  return h('div', { class: 'm-empty' },
-    ic ? h('span', { class: 'm-empty-icon' }, icon(ic)) : null,
-    h(level === 1 ? 'h1' : 'h2', { class: 'm-empty-title' }, title),
-    text ? h('p', { class: 'm-empty-text' }, text) : null,
+  return h('div', { class: 'm-state' },
+    ic ? h('span', { class: 'm-state-icon' }, icon(ic)) : null,
+    h(level === 1 ? 'h1' : 'h2', { class: 'm-state-title' }, title),
+    text ? h('p', { class: 'm-state-text' }, text) : null,
     action ?? null);
 }
 
@@ -72,9 +72,9 @@ export function errorState({ error, title, text, onRetry, level = 2 } = {}) {
     } }, icon('refresh'), 'Try again');
   }
   return h('div', { class: 'm-err', role: 'alert' },
-    h('span', { class: 'm-empty-icon m-err-icon' }, icon(f.offline ? 'wifi' : 'alert')),
-    h(level === 1 ? 'h1' : 'h2', { class: 'm-empty-title' }, title ?? f.title),
-    h('p', { class: 'm-empty-text' }, text ?? f.text),
+    h('span', { class: 'm-state-icon m-err-icon' }, icon(f.offline ? 'wifi' : 'alert')),
+    h(level === 1 ? 'h1' : 'h2', { class: 'm-state-title' }, title ?? f.title),
+    h('p', { class: 'm-state-text' }, text ?? f.text),
     retry,
     error ? h('details', { class: 'm-err-details' }, h('summary', {}, 'Details for your admin'), h('p', {}, details.join(' · '))) : null);
 }
