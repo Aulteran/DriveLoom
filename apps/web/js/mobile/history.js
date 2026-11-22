@@ -187,6 +187,7 @@ export async function historyScreen(id, query) {
         h('p', {}, type ? 'Try another filter, or a longer period.' : `Nothing was logged in the ${periodLabel.toLowerCase()}.`),
         h('a', { class: 'button secondary', href: filterUrl(v, 'all', null) }, 'Show all fill-ups')));
     }
+    if (!shown.length && !done) list.replaceChildren(h('p', { class: 'm-summary m-center' }, 'None of the loaded fill-ups match. Load more to search older ones.'));
     more.hidden = done;
     status.textContent = done ? (shown.length ? `${shown.length} shown${type || from ? ` of ${total} in total` : ''}.` : '') : `${items.length} of ${total} loaded.`;
   }

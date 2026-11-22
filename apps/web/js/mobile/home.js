@@ -1,20 +1,19 @@
 // Home (route #/vehicles/:id on the phone): the daily glance for the active
 // vehicle. The latest tank leads, then the trend for the chosen period, the key
-// figures and the last three fill-ups. At most four requests: the period's
-// stats, the previous period's (for the comparison), five recent fill-ups and,
-// only when the shell already knows of friends, one comparison.
+// figures and the last three fill-ups. At most three requests: the period's
+// stats, the previous period's (for the comparison) and five recent fill-ups.
+// The friends card uses the count the shell already fetched.
 import { get } from '../api.js';
 import { state } from '../core.js';
 import { h } from '../ui.js';
 import { icon } from '../icons.js';
 import { qty, money, date, UNIT, ROLE, vehicleTitle, vehicleDescription } from '../format.js';
-import { Dec, difference, lowerIsBetter } from '../economy.js';
+import { difference, lowerIsBetter } from '../economy.js';
 import { DAY, statsUrl } from '../views/vehicle.js';
 import { touchEconomyChart } from './chart.js';
 import { PERIODS, fillRow, openFillDetail } from './history.js';
 
 const unitText = (u) => UNIT[u] ?? u;
-const COMPARE_WINDOW = { 30: '30d', 90: '90d', 365: '365d', all: 'all' };
 
 /** Period choice as a segmented row of links; `href(key)` builds each target. */
 export function periodControl(current, href, label = 'Period') {
@@ -34,24 +33,12 @@ export function compare(a, b, what) {
     `${better ? 'Better' : 'Worse'} than ${what} (${b.value})`);
 }
 
-const ordinal = (n) => { const s = ['th', 'st', 'nd', 'rd'], v = n % 100; return `${n}${s[(v - 20) % 10] ?? s[v] ?? s[0]}`; };
-
-/** Rank of this vehicle among friends' shared vehicles, from one comparison response. */
-function friendsCard(v, cmp, friends, period) {
-  const href = '#/friends';
-  let line = `${friends} ${friends === 1 ? 'friend' : 'friends'} on this server.`;
-  const mine = cmp?.mine?.find((x) => x.vehicleId === v.id);
-  const theirs = (cmp?.friends ?? []).flatMap((f) => f.vehicles.filter((x) => x.economy));
-  if (mine?.economy && theirs.length) {
-    const lower = lowerIsBetter(mine.economy.unit);
-    const better = theirs.filter((x) => { const c = Dec.parse(x.economy.value).cmp(Dec.parse(mine.economy.value)); return lower ? c < 0 : c > 0; }).length;
-    line = `${vehicleTitle(v)} ranks ${ordinal(better + 1)} of ${theirs.length + 1} shared vehicles at ${mine.economy.value} ${unitText(mine.economy.unit)}.`;
-  } else if (theirs.length) line = `${theirs.length} shared ${theirs.length === 1 ? 'vehicle' : 'vehicles'} from friends to compare with.`;
-  const periodText = PERIODS.find(([k]) => k === period)[1].toLowerCase();
+/** Friends, from the count the shell already fetched: no request of its own. */
+function friendsCard(friends) {
   return h('section', { class: 'm-card m-pad m-friends', 'aria-labelledby': 'm-fr-h' },
-    h('div', { class: 'm-card-head' }, h('h2', { id: 'm-fr-h' }, 'Friends'), h('a', { class: 'm-link', href }, 'Compare', icon('next', 'icon m-link-next'))),
-    h('p', {}, line),
-    h('p', { class: 'm-small m-muted' }, `Averages over the ${periodText}. Friends never see individual fill-ups.`));
+    h('div', { class: 'm-card-head' }, h('h2', { id: 'm-fr-h' }, 'Friends'), h('a', { class: 'm-link', href: '#/friends' }, 'Compare', icon('next', 'icon m-link-next'))),
+    h('p', {}, `${friends} ${friends === 1 ? 'friend' : 'friends'} on this server. Compare average economy with the vehicles they share.`),
+    h('p', { class: 'm-small m-muted' }, 'Friends never see individual fill-ups, dates or distances.'));
 }
 
 function stat(label, value, sub) {
@@ -66,11 +53,10 @@ export async function homeScreen(id, { query, friends = 0 }) {
   const days = win === 'all' ? null : Number(win);
   const now = Date.now();
   const from = days ? new Date(now - days * DAY) : null;
-  const [cur, prev, recent, cmp] = await Promise.all([
+  const [cur, prev, recent] = await Promise.all([
     get(statsUrl(v, from, null)),
     days ? get(statsUrl(v, new Date(now - 2 * days * DAY), from)).catch(() => null) : null,
     get(`/v1/vehicles/${v.id}/fill-ups?limit=5`),
-    friends > 0 ? get(`/v1/comparisons?window=${COMPARE_WINDOW[win]}`).catch(() => null) : null,
   ]);
   const periodLong = PERIODS.find(([k]) => k === win)[1];
   const periodShort = days === 365 ? '12-month' : days ? `${days}-day` : 'all-time';
@@ -84,7 +70,7 @@ export async function homeScreen(id, { query, friends = 0 }) {
         h('h2', { id: 'm-empty-h' }, 'No fill-ups yet'),
         h('p', {}, 'Log a fill-up each time you buy fuel. Economy needs two full fills: the first sets the starting point.'),
         canEdit ? h('div', { class: 'm-actions' }, h('a', { class: 'button', href: '#/fill' }, icon('plus'), 'Log a fill-up'), h('a', { class: 'button secondary', href: `#/vehicles/${v.id}/data` }, icon('upload'), 'Import')) : null),
-      friends > 0 ? friendsCard(v, cmp, friends, win) : null);
+      friends > 0 ? friendsCard(friends) : null);
   }
 
   // ---- latest tank ----
@@ -132,6 +118,6 @@ export async function homeScreen(id, { query, friends = 0 }) {
   return h('div', { class: 'm-screen m-stack m-home' }, title,
     periodControl(win, (k) => `#/vehicles/${v.id}${k === '90' ? '' : `?window=${k}`}`),
     hero, trend, figures, recentList,
-    friends > 0 ? friendsCard(v, cmp, friends, win) : null,
+    friends > 0 ? friendsCard(friends) : null,
     h('p', { class: 'm-small m-muted m-foot' }, `Figures for the ${periodLong.toLowerCase()}. Averages sum distance and fuel first, then divide; spending counts every costed purchase.`));
 }
