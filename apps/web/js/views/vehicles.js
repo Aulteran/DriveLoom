@@ -17,7 +17,7 @@ function card(v) {
       h('div', { class: 'muted small' }, (vehicleTitle(v) === vehicleDescription(v) ? '' : vehicleDescription(v)) || '—', v.archived ? ' · archived' : '')));
 }
 
-function createForm(hidden) {
+export function createForm(hidden) {
   const prefs = state.prefs;
   return form({ class: 'panel', hidden }, [
     h('h2', {}, 'Add a vehicle'),
@@ -38,7 +38,7 @@ function createForm(hidden) {
   });
 }
 
-function importForm(hidden) {
+export function importForm(hidden) {
   return form({ class: 'panel', hidden }, [
     h('h2', {}, 'Import a vehicle'),
     h('p', { class: 'muted' }, 'Choose a DriveLoom JSON export from this or another instance. You become the owner of the new vehicle.'),

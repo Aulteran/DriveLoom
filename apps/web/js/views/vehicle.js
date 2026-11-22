@@ -103,10 +103,10 @@ async function logTab(v, canEdit, query) {
 }
 
 // ---------- dashboard ----------
-const WINDOWS = [['30', 'Last 30 days'], ['90', 'Last 90 days'], ['365', 'Last 12 months'], ['all', 'All time']];
-const DAY = 86_400_000;
+export const WINDOWS = [['30', 'Last 30 days'], ['90', 'Last 90 days'], ['365', 'Last 12 months'], ['all', 'All time']];
+export const DAY = 86_400_000;
 
-const statsUrl = (v, from, to) => {
+export const statsUrl = (v, from, to) => {
   const q = new URLSearchParams();
   if (from) q.set('from', from.toISOString());
   if (to) q.set('to', to.toISOString());
@@ -114,7 +114,7 @@ const statsUrl = (v, from, to) => {
 };
 
 /** The last twelve calendar months in local time, oldest first. */
-function lastMonths(n = 12) {
+export function lastMonths(n = 12) {
   const now = new Date();
   return Array.from({ length: n }, (_, i) => {
     const from = new Date(now.getFullYear(), now.getMonth() - (n - 1 - i), 1);
@@ -143,7 +143,7 @@ function trend(cur, prev, periodName) {
 
 const prevNote = (text, periodName) => `Previous ${periodName}: ${text}`;
 
-function compactMoney(currency) {
+export function compactMoney(currency) {
   try {
     const f = new Intl.NumberFormat(undefined, { style: 'currency', currency, notation: 'compact', maximumFractionDigits: 1 });
     return (n) => f.format(n);

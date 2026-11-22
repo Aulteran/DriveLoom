@@ -4,9 +4,12 @@
 // current time. The save bar stays above the on-screen keyboard and carries a
 // live economy preview, computed by ../economy.js exactly as the server will.
 //
-// Contract with the shell: openFillUp({ vehicle, onClose })
+// Contract with the shell: openFillUp({ vehicle, onClose, edit })
 //   - vehicle: the active vehicle (from GET /v1/vehicles), or null when the
 //     account has none. Its id, odometerUnit and currency scope the form.
+//   - edit: optional, a FillUp from the API. The sheet then opens prefilled
+//     with its entered values, checks and previews it against the vehicle's
+//     other records, and saves with PATCH. Corrections keep no draft.
 //   - onClose({ saved }): called exactly once when the sheet goes away;
 //     `saved` is true after a fill-up was stored, so the shell refreshes the
 //     screen underneath.
@@ -15,7 +18,7 @@
 // typed entry (form fields only) is kept in sessionStorage while the sheet is
 // open, so a refresh restores it. It is dropped on save, on an explicit
 // discard and on sign-out (clearFillUpDrafts). Nothing is written offline.
-import { get, post, ApiError } from '../api.js';
+import { get, post, patch, ApiError } from '../api.js';
 import { h, toast, select, confirmDialog } from '../ui.js';
 import { icon } from '../icons.js';
 import { state } from '../core.js';
@@ -95,10 +98,10 @@ const unitText = (u) => UNIT[u] ?? u;
 
 let uid = 0;
 
-export function openFillUp({ vehicle, onClose } = {}) {
+export function openFillUp({ vehicle, onClose, edit = null } = {}) {
   if (!vehicle || vehicle.role === 'viewer' || vehicle.archived) return notAllowed(vehicle, onClose);
   const v = vehicle;
-  const key = `${DRAFT_PREFIX}${state.account?.id ?? ''}.${v.id}`;
+  const key = edit ? null : `${DRAFT_PREFIX}${state.account?.id ?? ''}.${v.id}`;
   const n = ++uid;
   const formId = `fu-form-${n}`;
   let prefs = { distanceUnit: 'km', volumeUnit: 'l', economyUnit: 'l_per_100km', ...(state.prefs ?? {}) };
@@ -172,7 +175,8 @@ export function openFillUp({ vehicle, onClose } = {}) {
   const barValue = h('span', { class: 'm-fu-bar-value' }, '—');
   const barMsgId = `fu-msg-${n}`;
   const barMsg = h('p', { id: barMsgId, class: 'm-fu-bar-msg', role: 'alert', hidden: true });
-  const saveBtn = h('button', { type: 'submit', form: formId, class: 'm-fu-save' }, icon('check'), h('span', {}, 'Save fill-up'));
+  const saveLabel = edit ? 'Save changes' : 'Save fill-up';
+  const saveBtn = h('button', { type: 'submit', form: formId, class: 'm-fu-save' }, icon('check'), h('span', {}, saveLabel));
   const footer = h('div', { class: 'm-fu-bar' },
     h('div', { class: 'm-fu-bar-preview', 'aria-live': 'polite', 'aria-atomic': 'true' }, h('span', { class: 'm-fu-bar-k' }, 'This tank'), ' ', barValue),
     barMsg,
@@ -212,10 +216,21 @@ export function openFillUp({ vehicle, onClose } = {}) {
     if ('missedPrevious' in x) missed.input.checked = x.missedPrevious;
     if ('notes' in x) notes.value = x.notes;
   };
+  // A correction starts from what was entered, not the converted display values.
+  if (edit) {
+    const c = edit.cost;
+    apply({
+      occurredAt: localInput(new Date(edit.occurredAt)), odometer: edit.odometer.value, odometerUnit: edit.odometer.unit,
+      volume: edit.volume.value, volumeUnit: edit.volume.unit, amount: c?.amount ?? '', currency: c?.currency ?? v.currency,
+      exchangeRate: c?.exchangeRate ?? '', reportingAmount: c && c.currency !== v.currency && !c.exchangeRate ? c.reportingAmount : '',
+      full: edit.full, missedPrevious: edit.missedPrevious, notes: edit.notes ?? '',
+    });
+    if (edit.missedPrevious || edit.notes) form.querySelector('.m-fu-more').open = true;
+  }
   let pristine = values();
   const isDirty = () => { const now = values(); return FIELDS.some((k) => now[k] !== pristine[k]); };
 
-  const draft = readDraft(key);
+  const draft = key ? readDraft(key) : null;
   if (draft) { apply(draft); restored.hidden = false; }
 
   // ---------- validation (the server's rules, on strings) ----------
@@ -338,7 +353,7 @@ export function openFillUp({ vehicle, onClose } = {}) {
   }
 
   // ---------- events ----------
-  const persist = () => { if (isDirty()) writeDraft(key, values()); else dropDraft(key); };
+  const persist = () => { if (!key) return; if (isDirty()) writeDraft(key, values()); else dropDraft(key); };
   for (const f of [odo, vol, cost, rate, reporting]) {
     f.input.addEventListener('input', () => {
       // A comma from a locale keypad becomes a point as it is typed.
@@ -397,17 +412,18 @@ export function openFillUp({ vehicle, onClose } = {}) {
     saving = true; updateOnline();
     saveBtn.lastChild.textContent = 'Saving…';
     try {
-      const made = await post(`/v1/vehicles/${v.id}/fill-ups`, body);
-      dropDraft(key);
+      const made = edit ? await patch(`/v1/vehicles/${v.id}/fill-ups/${edit.id}`, body) : await post(`/v1/vehicles/${v.id}/fill-ups`, body);
+      if (key) dropDraft(key);
       saved = true;
       const e2 = made?.interval?.available ? made.interval.economy : null;
       sheet.close();
-      toast(e2 ? `Fill-up saved · ${e2.value} ${unitText(e2.unit)}` : 'Fill-up saved.');
+      const done = edit ? 'Fill-up updated' : 'Fill-up saved';
+      toast(e2 ? `${done} · ${e2.value} ${unitText(e2.unit)}` : `${done}.`);
     } catch (err) {
       serverError(err);
     } finally {
       saving = false;
-      if (!saved) { saveBtn.lastChild.textContent = 'Save fill-up'; updateOnline(); }
+      if (!saved) { saveBtn.lastChild.textContent = saveLabel; updateOnline(); }
     }
   });
 
@@ -431,12 +447,12 @@ export function openFillUp({ vehicle, onClose } = {}) {
 
   // ---------- open ----------
   const sheet = openSheet({
-    title: 'Add a fill-up', sub: vehicleTitle(v), size: 'full', className: 'm-fill', label: 'Close without saving',
+    title: edit ? 'Edit fill-up' : 'Add a fill-up', sub: vehicleTitle(v), size: 'full', className: 'm-fill', label: 'Close without saving',
     content: form, footer,
     guard: async () => {
-      if (!isDirty()) { dropDraft(key); return true; }
-      const discard = await confirmDialog('Discard this fill-up? What you typed will be lost.', 'Discard', true, 'Keep editing');
-      if (discard) dropDraft(key);
+      if (!isDirty()) { if (key) dropDraft(key); return true; }
+      const discard = await confirmDialog(edit ? 'Discard your changes to this fill-up?' : 'Discard this fill-up? What you typed will be lost.', 'Discard', true, 'Keep editing');
+      if (discard && key) dropDraft(key);
       return discard;
     },
     onClose: () => {
@@ -464,8 +480,9 @@ export function openFillUp({ vehicle, onClose } = {}) {
   ]).then(([list, p, stats]) => {
     if (!sheet.dialog.isConnected) return;
     if (p) prefs = { ...prefs, distanceUnit: p.distanceUnit, volumeUnit: p.volumeUnit, economyUnit: p.economyUnit };
-    existing = list.items;
-    latest = latestFill(existing);
+    // A correction is checked against the other records only, never against itself.
+    existing = edit ? list.items.filter((x) => x.id !== edit.id) : list.items;
+    latest = edit ? null : latestFill(existing);
     average = stats?.economy ?? null;
     if (latest && !draft && !touched.size && !odo.input.value) {
       const reading = latest.odometer.unit === odoUnit.value ? latest.odometer.value
@@ -474,7 +491,7 @@ export function openFillUp({ vehicle, onClose } = {}) {
       pristine = { ...pristine, odometer: reading };
       if (document.activeElement === odo.input) odo.input.select();
     }
-    if (!latest) odo.hint.textContent = 'The first fill-up for this vehicle.';
+    if (!latest && !edit) odo.hint.textContent = 'The first fill-up for this vehicle.';
     if (touched.has('odometer') || draft) check('odometer');
     updatePreview();
   }, () => {
