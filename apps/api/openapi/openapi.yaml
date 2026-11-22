@@ -1006,6 +1006,46 @@ paths:
         '403': { $ref: '#/components/responses/Problem' }
         '404': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
+  /v1/vehicles/{vehicleId}/service-visibility:
+    parameters:
+      - { $ref: '#/components/parameters/VehicleId' }
+    get:
+      operationId: getServiceVisibility
+      summary: Whether the caller shows the Service page for this vehicle
+      description: 'Any member. A personal preference (default on); the instance module switch overrides it.'
+      tags: [vehicles]
+      responses:
+        '200':
+          description: Preference and effective visibility.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ServiceVisibility' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+    put:
+      operationId: setServiceVisibility
+      summary: Show or hide the Service page for this vehicle (personal; any member)
+      description: 'Affects only the caller''s menus. Works whether or not the instance module is enabled, and never changes permissions or deletes data.'
+      tags: [vehicles]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [showService]
+              additionalProperties: false
+              properties:
+                showService: { type: boolean }
+      responses:
+        '200':
+          description: New state.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ServiceVisibility' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
   /v1/comparisons:
     get:
       operationId: compareWithFriends
@@ -1306,6 +1346,47 @@ paths:
               schema: { $ref: '#/components/schemas/UnitSettings' }
         '401': { $ref: '#/components/responses/Problem' }
         '403': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/admin/settings/modules:
+    get:
+      operationId: adminGetModules
+      summary: Opt-in modules and whether each is enabled on this instance
+      tags: [admin]
+      responses:
+        '200':
+          description: Module flags (all false until enabled).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModulesResponse' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+  /v1/admin/settings/modules/{module}:
+    parameters:
+      - { name: module, in: path, required: true, schema: { type: string, enum: [service] } }
+    put:
+      operationId: adminSetModule
+      summary: Turn a module on or off for the whole instance
+      description: 'Turning a module off hides it and makes its endpoints return 404 `module_disabled`; stored data and personal preferences are kept. Audited as `admin.module_changed`.'
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              additionalProperties: false
+              properties:
+                enabled: { type: boolean }
+      responses:
+        '200':
+          description: The updated flags.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModulesResponse' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
   /v1/admin/settings/smtp:
     get:
@@ -1618,13 +1699,34 @@ components:
       properties:
         password: { type: string }
         code: { type: string }
+    Modules:
+      type: object
+      description: 'Opt-in feature modules and whether the instance administrator has enabled each. All are off by default.'
+      required: [service]
+      additionalProperties: false
+      properties:
+        service: { type: boolean }
+    ModulesResponse:
+      type: object
+      required: [modules]
+      properties:
+        modules: { $ref: '#/components/schemas/Modules' }
+    ServiceVisibility:
+      type: object
+      description: 'Whether the caller sees this vehicle''s Service page. `visible` is `moduleEnabled && showService`: the server switch overrides the personal preference. Only menus are affected; permissions and stored data never change.'
+      required: [showService, moduleEnabled, visible]
+      properties:
+        showService: { type: boolean, description: 'The caller''s own preference (true when never set).' }
+        moduleEnabled: { type: boolean }
+        visible: { type: boolean }
     AccountSession:
       type: object
-      required: [csrf_token, session_id, account]
+      required: [csrf_token, session_id, account, modules]
       properties:
         csrf_token: { type: string }
         session_id: { $ref: '#/components/schemas/Id' }
         account: { $ref: '#/components/schemas/Account' }
+        modules: { $ref: '#/components/schemas/Modules' }
     Account:
       type: object
       required: [id, email, instanceRole, emailVerified, credentials]

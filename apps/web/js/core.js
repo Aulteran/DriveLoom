@@ -4,7 +4,7 @@
 // setRenderer() at start-up.
 import { get, setCsrf } from './api.js';
 
-export const state = { account: null, prefs: null, instance: null, vehicles: [] };
+export const state = { account: null, prefs: null, instance: null, modules: { service: false }, vehicles: [] };
 
 let renderer = async () => {};
 /** Register the active shell's render pipeline. */
@@ -18,6 +18,7 @@ export async function refreshSession() {
     const s = await get('/v1/auth/session', { quiet: true });
     setCsrf(s.csrf_token);
     state.account = s.account;
+    state.modules = s.modules ?? { service: false };
     state.prefs = await get('/v1/preferences');
     return true;
   } catch { state.account = null; setCsrf(null); return false; }

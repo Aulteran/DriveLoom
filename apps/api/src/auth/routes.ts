@@ -1,4 +1,5 @@
 // HTTP surface of the auth module. Contract: openapi.yaml, tag `auth`.
+import { getModules } from '../modules.ts';
 import { getInstanceDefaults } from '../preferences.ts';
 import { SESSION_COOKIE, type AuthMode, type HttpRequest, type HttpResult, type Route } from '../http/app.ts';
 import { HttpProblem } from '../http/problem.ts';
@@ -75,7 +76,7 @@ export function authRoutes(ctx: AuthContext): Route[] {
     }),
     r('GET', '/v1/auth/session', 'required', async (req) => {
       const p = requirePrincipal(req.ctx);
-      return ok(200, { csrf_token: req.session!.csrfToken, session_id: p.sessionId, account: await acct.describeAccount(ctx, p) });
+      return ok(200, { csrf_token: req.session!.csrfToken, session_id: p.sessionId, account: await acct.describeAccount(ctx, p), modules: await getModules(ctx.db) });
     }),
     r('POST', '/v1/auth/reauth', 'required', async (req) => {
       const b = body(req);

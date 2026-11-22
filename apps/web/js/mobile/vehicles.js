@@ -264,6 +264,7 @@ async function settingsBody(v) {
   const owner = v.role === 'owner';
   const canEdit = canEditVehicle(v);
   const optIn = await get(`/v1/vehicles/${v.id}/comparison`);
+  const vis = await get(`/v1/vehicles/${v.id}/service-visibility`);
   const rowBtn = (ic, label, sub, onclick) => h('li', {}, h('button', { type: 'button', class: 'm-row m-row-btn', onclick }, ic, h('span', { class: 'm-row-label' }, label, sub ? h('span', { class: 'm-row-sub' }, sub) : null), icon('next', 'icon m-row-next')));
 
   const openDetails = () => formSheet('Vehicle details', form({ class: 'm-form' }, [
@@ -308,6 +309,17 @@ async function settingsBody(v) {
       : h('p', {}, optIn.enabled ? 'The owner shares this vehicle with their friends.' : 'Not shared. Only the owner can change this.'),
     h('p', { class: 'm-small m-muted' }, 'Friends see the nickname, make, model, year and the average economy for the period they choose. Never the plate or VIN, fill-ups, dates, distances, notes or members.'));
 
+  const svcId = 'm-svc-sw';
+  const service = vis.moduleEnabled ? h('section', { class: 'm-card m-pad m-stack-s', 'aria-labelledby': 'm-svc-h' },
+    h('h2', { id: 'm-svc-h' }, 'Service page'),
+    h('div', { class: 'm-switch-row' },
+      h('label', { for: svcId }, 'Show Service page for this vehicle'),
+      h('input', { id: svcId, type: 'checkbox', role: 'switch', class: 'm-toggle', checked: vis.showService, onchange: async (e) => {
+        const on = e.target.checked;
+        try { await put(`/v1/vehicles/${v.id}/service-visibility`, { showService: on }); toast(on ? 'Service page shown.' : 'Service page hidden.'); } catch (err) { e.target.checked = !on; toast(err.message); }
+      } })),
+    h('p', { class: 'm-small m-muted' }, 'Only changes your own menus. Service data and what you are allowed to do are not affected.')) : null;
+
   const archive = owner ? h('section', { class: 'm-card m-pad m-stack-s', 'aria-labelledby': 'm-arch-h' },
     h('h2', { id: 'm-arch-h' }, v.archived ? 'Archived' : 'Archive'),
     h('p', { class: 'm-small m-muted' }, v.archived ? 'Archived vehicles are read-only and folded away in Vehicles.' : 'Archive a vehicle you no longer drive. Its history stays and can be exported.'),
@@ -324,5 +336,5 @@ async function settingsBody(v) {
     canEdit ? h('ul', { class: 'm-card m-rows', 'aria-label': 'Edit' },
       rowBtn(glyph('edit'), 'Details', [vehicleDescription(v), v.plateNumber ? [v.plateRegion, v.plateNumber].filter(Boolean).join(' ') : ''].filter(Boolean).join(' · ') || 'Nickname, make, model, plate, units', openDetails),
       rowBtn(glyph('image'), 'Photo', v.imageVersion ? 'Change or remove the photo' : 'Add a photo', openPhoto)) : null,
-    share, archive);
+    share, service, archive);
 }

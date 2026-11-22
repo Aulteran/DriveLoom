@@ -53,6 +53,8 @@ async function seed(h: NonNullable<Awaited<ReturnType<typeof harness>>>) {
   await fuel.create(pb, v.id, { occurredAt: '2026-05-01T08:00:00Z', odometer: { value: '1000.5', unit: 'mi' }, volume: { value: '10.250', unit: 'gal_us' }, cost: { amount: '55.10', currency: 'CHF', exchangeRate: '1.0637' }, notes: 'näïve "quotes"\n☃' });
   await fuel.create(pb, v.id, { occurredAt: '2026-05-09T08:00:00Z', odometer: { value: '1300', unit: 'mi' }, volume: { value: '9', unit: 'gal_us' } });
   await h.ctx.db.query('INSERT INTO vehicle_images (vehicle_id, content_type, data, uploaded_by) VALUES ($1,$2,$3,$4)', [v.id, 'image/png', PNG, pb.userId]);
+  await h.ctx.db.query("INSERT INTO instance_modules (module, enabled) VALUES ('service', true)");
+  await h.ctx.db.query('INSERT INTO vehicle_user_prefs (vehicle_id, user_id, show_service) VALUES ($1,$2,false)', [v.id, pa.userId]);
   return { a, b, pb, v, totp };
 }
 
@@ -70,6 +72,8 @@ test('full restore into an isolated instance preserves users, vehicles, records 
     const info = await createBackup(h.ctx.db, file);
     assert.equal(info.tables['users'], 2);
     assert.equal(info.tables['vehicle_images'], 1);
+    assert.equal(info.tables['instance_modules'], 1);
+    assert.equal(info.tables['vehicle_user_prefs'], 1);
     for (const t of EPHEMERAL_TABLES) assert.ok(!(t in info.tables), `${t} is not archived`);
     assert.deepEqual(await verifyBackup(file), info);
 
@@ -77,6 +81,8 @@ test('full restore into an isolated instance preserves users, vehicles, records 
     assert.deepEqual(await snapshot(target.client), await snapshot(h.ctx.db));
     const img = await target.client.query('SELECT data FROM vehicle_images WHERE vehicle_id = $1', [v.id]);
     assert.ok((img.rows[0].data as Buffer).equals(PNG), 'image bytes are identical');
+    assert.deepEqual((await target.client.query('SELECT module, enabled FROM instance_modules')).rows, [{ module: 'service', enabled: true }]);
+    assert.deepEqual((await target.client.query('SELECT show_service FROM vehicle_user_prefs')).rows, [{ show_service: false }]);
     // Sessions do not survive: the old cookie is dead on the restored instance, but the password works.
     assert.equal((await target.client.query('SELECT count(*)::int AS n FROM sessions')).rows[0].n, 0);
     const pool = new pg.Pool({ connectionString: target.url, max: 2 });

@@ -355,6 +355,15 @@ async function settingsTab(v) {
     owner ? h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: optIn.enabled, onchange: async (e) => {
       try { await put(`/v1/vehicles/${v.id}/comparison`, { enabled: e.target.checked }); toast(e.target.checked ? 'Shared with friends.' : 'No longer shared.'); } catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
     } }), 'Share this vehicle\'s economy with my friends') : h('p', {}, optIn.enabled ? 'The owner shares this vehicle with their friends.' : 'Not shared. Only the owner can change this.')));
+  const vis = await get(`/v1/vehicles/${v.id}/service-visibility`);
+  if (vis.moduleEnabled) {
+    parts.push(h('div', { class: 'panel' },
+      h('h2', {}, 'Service page'),
+      h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: vis.showService, onchange: async (e) => {
+        try { await put(`/v1/vehicles/${v.id}/service-visibility`, { showService: e.target.checked }); toast(e.target.checked ? 'Service page shown.' : 'Service page hidden.'); } catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
+      } }), 'Show Service page for this vehicle'),
+      h('p', { class: 'small muted' }, 'Only changes your own menus. Service data and what you are allowed to do are not affected.')));
+  }
   if (owner) {
     parts.push(h('div', { class: 'panel' },
       h('h2', {}, v.archived ? 'Archived' : 'Archive'),
