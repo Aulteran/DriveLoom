@@ -40,7 +40,7 @@ test('web client: files, client routes and security headers', { skip }, () => wi
   const index = await call('GET', '/');
   assert.equal(index.status, 200);
   assert.match(index.type, /^text\/html/);
-  assert.match(index.text, /<script type="module" src="\/js\/main\.js"><\/script>/);
+  assert.match(index.text, /<script type="module" src="\/js\/boot\.js"><\/script>/);
   const csp = index.headers.get('content-security-policy')!;
   assert.match(csp, /script-src 'self';/);
   assert.match(csp, /frame-ancestors 'none'/);
@@ -49,9 +49,12 @@ test('web client: files, client routes and security headers', { skip }, () => wi
   assert.equal(index.headers.get('strict-transport-security'), 'max-age=31536000', 'secure deployments send HSTS');
   assert.equal(index.headers.get('cache-control'), 'no-cache');
 
-  const js = await call('GET', '/js/main.js');
-  assert.equal(js.status, 200);
-  assert.match(js.type, /^text\/javascript/);
+  for (const file of ['/js/main.js', '/js/mobile/shell.js']) {
+    const js = await call('GET', file);
+    assert.equal(js.status, 200);
+    assert.match(js.type, /^text\/javascript/);
+  }
+  assert.match((await call('GET', '/mobile.css')).type, /^text\/css/);
   assert.equal((await call('GET', '/manifest.webmanifest')).type, 'application/manifest+json');
 
   // A path without an extension is a client route; a missing file is a 404.

@@ -10,7 +10,9 @@ export function h(tag, attrs = {}, ...children) {
     // CSSOM, not the style attribute: the CSP (style-src 'self') blocks the latter.
     else if (k === 'style') el.style.cssText = v;
     else if (k === 'dataset') Object.assign(el.dataset, v);
-    else if (k in el && typeof v !== 'string') el[k] = v;
+    // `checked`/`selected` (and a numeric `value`) go in as attributes, so they are the control's
+    // default as drawn; dirty.js tells typing from the initial state by comparing with the default.
+    else if (k in el && typeof v !== 'string' && k !== 'checked' && k !== 'selected' && !(k === 'value' && typeof v === 'number')) el[k] = v;
     else el.setAttribute(k, v === true ? '' : String(v));
   }
   append(el, children);
@@ -90,13 +92,13 @@ export const select = (name, options, value, attrs = {}) =>
   h('select', { name, ...attrs }, options.map(([v, label]) => h('option', { value: v, selected: v === value }, label)));
 
 /** Modal confirmation; resolves true when confirmed. */
-export function confirmDialog(message, confirmLabel = 'Confirm', danger = true) {
+export function confirmDialog(message, confirmLabel = 'Confirm', danger = true, cancelLabel = 'Cancel') {
   return new Promise((resolve) => {
     const d = h('dialog', {},
       h('p', {}, message),
       h('div', { class: 'row' },
         h('button', { class: danger ? 'danger' : '', onclick: () => { d.close(); resolve(true); } }, confirmLabel),
-        h('button', { class: 'secondary', onclick: () => { d.close(); resolve(false); } }, 'Cancel')));
+        h('button', { class: 'secondary', onclick: () => { d.close(); resolve(false); } }, cancelLabel)));
     d.addEventListener('close', () => { d.remove(); resolve(false); });
     document.body.append(d); d.showModal();
   });

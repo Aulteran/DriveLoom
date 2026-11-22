@@ -1,7 +1,7 @@
 // Setup, sign-in (password, passkey, OIDC), second factor, registration and recovery.
 import { get, post, setCsrf, passkeysSupported, getPasskey } from '../api.js';
 import { h, form, field } from '../ui.js';
-import { go, refreshSession, state } from '../main.js';
+import { go, refreshSession, state } from '../core.js';
 import { unitFields, readUnits } from '../units.js';
 
 const ERRORS = {
@@ -50,8 +50,8 @@ function signInView(info, query) {
   return shell('Sign in', null,
     err ? h('div', { class: 'error', role: 'alert' }, ERRORS[err] ?? `Sign-in did not complete (${err}).`) : null,
     info.password_login !== false ? form({}, [
-      field('Email', h('input', { name: 'email', type: 'email', autocomplete: 'username', required: true })),
-      field('Password', h('input', { name: 'password', type: 'password', autocomplete: 'current-password', required: true })),
+      field('Email', h('input', { name: 'email', type: 'email', autocomplete: 'username', required: true, autocapitalize: 'none', spellcheck: 'false', autocorrect: 'off', enterkeyhint: 'next' })),
+      field('Password', h('input', { name: 'password', type: 'password', autocomplete: 'current-password', required: true, enterkeyhint: 'go' })),
       h('button', { type: 'submit', style: 'width:100%;justify-content:center' }, 'Sign in'),
     ], async (v) => signedIn(await post('/v1/auth/login', { email: v.email, password: v.password }))) : null,
     alt.length ? h('div', { class: 'stack', style: 'margin-top:16px' }, alt) : null,
@@ -83,7 +83,7 @@ function registerView(info, query) {
   // With an identity provider, the account can also be created through it: the administrator on an empty instance, or anyone while registration is open.
   const viaOidc = info.oidc && (setup || info.registration === 'open')
     ? form({}, [
-      setup && info.setup_token_required ? field('Setup token', h('input', { name: 'setup_token', required: true, autocomplete: 'off' }), 'Set by the operator in DRIVELOOM_SETUP_TOKEN.') : null,
+      setup && info.setup_token_required ? field('Setup token', h('input', { name: 'setup_token', required: true, autocomplete: 'off', autocapitalize: 'none', spellcheck: 'false', autocorrect: 'off' }), 'Set by the operator in DRIVELOOM_SETUP_TOKEN.') : null,
       h('button', { class: 'secondary', type: 'submit', style: 'width:100%;justify-content:center' }, setup ? 'Set up with your identity provider' : 'Sign up with your identity provider'),
     ], async (v) => {
       location.assign((await post('/v1/auth/oidc/start', { mode: 'login', setup_token: v.setup_token || undefined, units: chosenUnits() })).authorization_url);
@@ -92,11 +92,11 @@ function registerView(info, query) {
   return shell(setup ? 'Set up this instance' : 'Create your account',
     setup ? 'No account exists yet. The account you create now is the administrator.' : info.registration === 'open' ? null : 'Registration is by invitation on this instance.',
     passwordForm ? form({}, [
-      field('Name', h('input', { name: 'display_name', autocomplete: 'name', maxlength: 80 })),
-      field('Email', h('input', { name: 'email', type: 'email', autocomplete: 'username', required: true })),
+      field('Name', h('input', { name: 'display_name', autocomplete: 'name', maxlength: 80, autocapitalize: 'words', enterkeyhint: 'next' })),
+      field('Email', h('input', { name: 'email', type: 'email', autocomplete: 'username', required: true, autocapitalize: 'none', spellcheck: 'false', autocorrect: 'off', enterkeyhint: 'next' })),
       field('Password', h('input', { name: 'password', type: 'password', autocomplete: 'new-password', required: true, minlength: 12 }), 'At least 12 characters. A passphrase works well.'),
-      info.setup_token_required ? field('Setup token', h('input', { name: 'setup_token', required: true, autocomplete: 'off' }), 'Set by the operator in DRIVELOOM_SETUP_TOKEN.') : null,
-      !setup && info.registration !== 'open' ? field('Invitation code', h('input', { name: 'invite_token', required: true, value: invite, autocomplete: 'off' })) : null,
+      info.setup_token_required ? field('Setup token', h('input', { name: 'setup_token', required: true, autocomplete: 'off', autocapitalize: 'none', spellcheck: 'false', autocorrect: 'off' }), 'Set by the operator in DRIVELOOM_SETUP_TOKEN.') : null,
+      !setup && info.registration !== 'open' ? field('Invitation code', h('input', { name: 'invite_token', required: true, value: invite, autocomplete: 'off', autocapitalize: 'none', spellcheck: 'false', autocorrect: 'off' })) : null,
       unitsBlock,
       h('button', { type: 'submit', style: 'width:100%;justify-content:center' }, setup ? 'Create administrator account' : 'Create account'),
     ], async (v, el) => {
@@ -132,7 +132,7 @@ function mfaView() {
       again);
   }
   let recovery = false;
-  const input = h('input', { name: 'code', inputmode: 'numeric', autocomplete: 'one-time-code', required: true, autofocus: true });
+  const input = h('input', { name: 'code', inputmode: 'numeric', autocomplete: 'one-time-code', required: true, autofocus: true, autocapitalize: 'none', spellcheck: 'false', autocorrect: 'off', enterkeyhint: 'done' });
   const label = h('label', { for: 'mfa-code' }, 'Authenticator code');
   input.id = 'mfa-code';
   const toggle = h('button', { type: 'button', class: 'ghost', onclick: () => {
@@ -154,7 +154,7 @@ function recoverView(info) {
     field('New password', h('input', { name: 'new_password', type: 'password', minlength: 12, required: true, autocomplete: 'new-password' })),
     h('button', { type: 'submit' }, 'Set new password'),
   ], async (v) => { await post('/v1/auth/recovery/complete', { email: emailInput.value, code: v.code, new_password: v.new_password }); go('#/signin'); return 'Password changed. Every session was signed out.'; });
-  const emailInput = h('input', { name: 'email', type: 'email', required: true, autocomplete: 'username' });
+  const emailInput = h('input', { name: 'email', type: 'email', required: true, autocomplete: 'username', autocapitalize: 'none', spellcheck: 'false', autocorrect: 'off' });
   const first = form({}, [field('Email', emailInput), h('button', { type: 'submit' }, 'Email me a code')], async () => {
     await post('/v1/auth/recovery/request', { email: emailInput.value });
     second.hidden = false; emailInput.readOnly = true;
