@@ -95,11 +95,29 @@ test('without a sw.js nothing is injected, and traversal stays blocked', async (
   } finally { rmSync(dir, { recursive: true }); }
 });
 
-test('the worker source never caches API responses or non-GET requests', () => {
+test('the worker source is network-first for the shell and bypasses the API and non-GET requests', () => {
+  // A secondary guard on the source; the browser test proves the behaviour (no /v1 request in any cache).
   assert.ok(/pathname\.startsWith\('\/v1\/'\)/.test(SW), 'API paths are passed through');
   assert.ok(/req\.method !== 'GET'/.test(SW), 'non-GET passes through');
   assert.ok(!/skipWaiting\(\)/.test(SW.replace(/if \(type === 'SKIP_WAITING'\) self\.skipWaiting\(\);/, '')), 'skipWaiting only on the message');
-  assert.ok(/cache: 'reload'/.test(SW));
+  assert.ok(/cache: 'reload'/.test(SW), 'precache bypasses the HTTP cache');
+  assert.ok(/fetch\(req, \{ cache: 'no-cache' \}\)/.test(SW), 'the shell is fetched revalidated, network first');
+  assert.ok(!/caches\.match\([^)]*\)\s*\|\|\s*fetch/.test(SW), 'no cache-first lookup before the network');
+  assert.ok(/res\.status === 200 && res\.type === 'basic'/.test(SW), 'only plain 200 responses refresh the cache');
+  // Sign-out keeps the (static) shell caches so an offline cold start still works.
+  const clear = /const clearAll = [^\n]*/.exec(SW)?.[0] ?? '';
+  assert.ok(/startsWith\('driveloom-shell-'\)/.test(clear) && /!key\.startsWith/.test(clear), clear);
+  assert.ok(/!key\.startsWith\('driveloom-shell-'\)/.test(readFileSync(`${WEB}js/pwa.js`, 'utf8')), 'pwa.js keeps the shell caches too');
+});
+
+test('file names with replacement patterns in them are injected literally', () => {
+  const dir = fixture({ 'sw.js': SW, 'index.html': '<p>a</p>', 'js/a$&b$1.js': 'export {};' });
+  try {
+    const { source, precache } = buildServiceWorker(dir)!;
+    assert.ok(precache.includes('/js/a%24&b%241.js') || precache.includes('/js/a$&b$1.js'), precache.join(' '));
+    assert.ok(source.includes(JSON.stringify(precache)), 'precache list injected verbatim');
+    assert.ok(!source.includes('/*PRECACHE*/') && !source.includes('__BUILD__'));
+  } finally { rmSync(dir, { recursive: true }); }
 });
 
 interface Icon { src: string; sizes: string; type: string; purpose?: string }

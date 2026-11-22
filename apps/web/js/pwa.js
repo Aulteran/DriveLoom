@@ -2,7 +2,9 @@
 // and install state. UI lives elsewhere and builds on these exports. The worker is
 // only registered in a secure context (HTTPS or localhost); over plain HTTP the app
 // is an ordinary website. Updates are prompt-only: a new worker waits until
-// applyUpdate() is called, and the page never reloads by itself.
+// applyUpdate() is called, and the page never reloads by itself. The worker serves the
+// shell network-first, so a waiting worker only means the precache list changed; the
+// files themselves are never stale.
 
 const canWorker = () => 'serviceWorker' in navigator && window.isSecureContext;
 
@@ -52,12 +54,15 @@ export function applyUpdate() {
   waiting.postMessage({ type: 'SKIP_WAITING' });
 }
 
-/** Deletes every service worker cache. Call on sign-out. Safe without a worker. */
+/**
+ * Sign-out housekeeping: deletes every cache except the app shell's (driveloom-shell-*), which
+ * holds static files only and is what lets the app cold-start offline. Safe without a worker.
+ */
 export async function clearCaches() {
   try {
     const reg = registration ?? (canWorker() ? await navigator.serviceWorker.getRegistration('/') : null);
     (navigator.serviceWorker?.controller ?? reg?.active)?.postMessage({ type: 'CLEAR_CACHES' });
-    if ('caches' in window) for (const key of await caches.keys()) await caches.delete(key);
+    if ('caches' in window) for (const key of await caches.keys()) if (!key.startsWith('driveloom-shell-')) await caches.delete(key);
   } catch { /* nothing cached, nothing to clear */ }
 }
 

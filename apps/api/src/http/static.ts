@@ -44,8 +44,9 @@ export function buildServiceWorker(dir: string): { source: string; build: string
   const precache = files.filter((f) => f !== 'sw.js' && !f.endsWith('.txt') && !f.split('/').some((p) => p.startsWith('.')))
     .map((f) => (f === 'index.html' ? '/' : `/${encodeURI(f)}`));
   const source = readFileSync(path.join(root, 'sw.js'), 'utf8')
-    .replace("'__BUILD__'", JSON.stringify(build))
-    .replace('/*PRECACHE*/ []', JSON.stringify(precache));
+    // Function replacers: a `$&` or `$1` in a file name must not be read as a replacement pattern.
+    .replace("'__BUILD__'", () => JSON.stringify(build))
+    .replace('/*PRECACHE*/ []', () => JSON.stringify(precache));
   return { source, build, precache };
 }
 
