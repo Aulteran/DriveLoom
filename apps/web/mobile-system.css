@@ -114,7 +114,6 @@ ul.m-list { list-style: none; margin: 0; padding: 0; }
 .m-row-static { color: var(--text); }
 .m-row-static:hover { background: transparent; }
 .m-row-static > button { flex: none; min-height: var(--m-tap); }
-.m-row-label { overflow-wrap: anywhere; }
 /* Row buttons share mobile-screens.css; list rows here keep the 56px row height. */
 .m-shell .m-list button.m-row-btn { min-height: 56px; font-weight: 400; }
 .m-row-btn:focus-visible { outline-offset: -3px; }
