@@ -728,9 +728,9 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
     const IOS_UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1';
     const ANDROID_UA = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36';
     /** A signed-in (or not) phone page. `lenient` ignores failed-resource console lines, for tests that cut the network on purpose. */
-    const phonePage = async (opts: { signedIn?: boolean; userAgent?: string; init?: string; lenient?: boolean } = {}) => {
+    const phonePage = async (opts: { signedIn?: boolean; userAgent?: string; init?: string; lenient?: boolean; viewport?: { width: number; height: number }; touch?: boolean } = {}) => {
       const ctx = await browser.newContext({
-        viewport: { width: 390, height: 844 }, ...(opts.userAgent ? { userAgent: opts.userAgent } : {}),
+        viewport: opts.viewport ?? { width: 390, height: 844 }, ...(opts.touch ? { hasTouch: true, isMobile: true } : {}), ...(opts.userAgent ? { userAgent: opts.userAgent } : {}),
         ...(opts.signedIn === false ? {} : { storageState: await page.context().storageState() }),
       });
       if (opts.init) await ctx.addInitScript(opts.init);
@@ -1159,6 +1159,154 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       } finally { await ctx.close(); }
     });
 
+    /** Every request URL path held by any cache, in this page's origin. */
+    const cachedPaths = (p: Page) => p.evaluate(`(async () => {
+      const out = [];
+      for (const k of await caches.keys()) for (const r of await (await caches.open(k)).keys()) out.push(new URL(r.url).pathname + new URL(r.url).search);
+      return out;
+    })()`) as Promise<string[]>;
+    const controlled = async (p: Page) => {
+      await p.evaluate('navigator.serviceWorker.ready.then(() => undefined)');
+      for (let i = 0; i < 80 && !(await p.evaluate('!!navigator.serviceWorker.controller')); i++) await p.waitForTimeout(100);
+      assert.equal(await p.evaluate('!!navigator.serviceWorker.controller'), true, 'the worker controls the page');
+    };
+    const inPhoneShell = (p: Page) => p.evaluate("document.body.classList.contains('m-shell')");
+
+    /** Polls a page expression until it is true. (Page.waitForFunction would need 'unsafe-eval', which the CSP forbids.) */
+    const until = async (p: Page, expr: string, timeout = 8000) => {
+      const end = Date.now() + timeout;
+      while (!(await p.evaluate(expr).catch(() => false))) {
+        assert.ok(Date.now() < end, `timed out waiting for: ${expr}`);
+        await new Promise((r) => setTimeout(r, 50));
+      }
+    };
+
+    await t.test('on a desktop, a changed client arrives on the next reload with no banner, and an offline reload still renders the cached shell', async () => {
+      const { ctx, p } = await phonePage({ lenient: true, viewport: { width: 1100, height: 900 } });
+      // A second build of the client with one changed web file.
+      const dir = mkdtempSync(path.join(tmpdir(), 'driveloom-web-'));
+      cpSync(WEB, dir, { recursive: true });
+      appendFileSync(path.join(dir, 'js/main.js'), '\n// NEW-BUILD-MARKER\n');
+      const original = handler;
+      try {
+        await p.goto(`${base}/#/settings/profile`);
+        await p.getByRole('heading', { name: 'Settings', level: 1 }).waitFor();
+        await controlled(p);
+        assert.equal(await inPhoneShell(p), false, 'the desktop shell');
+        await p.evaluate('window.__sameDocument = true');
+        // Authenticated API calls go straight to the network: no cache ever holds a /v1 request.
+        await p.evaluate("Promise.all(['/v1/vehicles', '/v1/preferences', '/v1/auth/session'].map((u) => fetch(u).then((r) => r.text())))");
+        const before = await cachedPaths(p);
+        assert.ok(before.includes('/js/main.js'), before.join(' '));
+        assert.deepEqual(before.filter((x) => x.includes('/v1')), [], 'no API request is cached');
+        assert.equal(await p.evaluate("fetch('/js/main.js').then((r) => r.text()).then((t) => t.includes('NEW-BUILD-MARKER'))"), false);
+
+        // Deploy: the worker updates and waits (the file list is the same, so it is only a new build id).
+        handler = createApplication(deps, { webDir: dir });
+        await p.evaluate('navigator.serviceWorker.getRegistration().then((r) => r.update())');
+        for (let i = 0; i < 80 && !(await p.evaluate('navigator.serviceWorker.getRegistration().then((r) => !!r.waiting)')); i++) await p.waitForTimeout(100);
+        assert.equal(await p.evaluate('navigator.serviceWorker.getRegistration().then((r) => !!r.waiting)'), true, 'a new worker is waiting');
+
+        // One reload in the same tab, no banner and no tab closed: the new file is what runs.
+        await p.reload();
+        await p.getByRole('heading', { name: 'Settings', level: 1 }).waitFor();
+        assert.equal(await p.evaluate('window.__sameDocument === true'), false, 'the page did reload');
+        assert.equal(await p.evaluate("fetch('/js/main.js').then((r) => r.text()).then((t) => t.includes('NEW-BUILD-MARKER'))"), true, 'the new main.js is served');
+        assert.equal(await p.evaluate("caches.match('/js/main.js').then((r) => r.text()).then((t) => t.includes('NEW-BUILD-MARKER'))"), true, 'and the cached copy follows it');
+        assert.equal(await p.getByText('Update available').count(), 0, 'no banner on a desktop');
+        assert.deepEqual((await cachedPaths(p)).filter((x) => x.includes('/v1')), []);
+
+        // Offline cold start: the cached shell loads and runs; it says it is unreachable instead of a browser error page.
+        await ctx.setOffline(true);
+        await p.reload();
+        await until(p, "document.querySelector('#main, main')?.textContent?.trim().length > 0 && !!document.querySelector('link[href=\"/styles.css\"]')");
+        assert.equal(await p.evaluate("document.title.length > 0 && !!document.querySelector('script[src=\"/js/boot.js\"]')"), true, 'the cached index.html was served');
+        assert.equal(await p.evaluate("typeof window.__sameDocument"), 'undefined', 'a fresh document');
+        assert.ok(await p.locator('body').innerText().then((x) => x.length > 20), 'something rendered');
+        await ctx.setOffline(false);
+      } finally {
+        handler = original;
+        await ctx.close();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    await t.test('crossing the phone width keeps unsaved input and open dialogs, and switches shells when nothing would be lost', async () => {
+      // Typed text survives 1100 -> 683 until it is cleared.
+      {
+        const { ctx, p } = await phonePage({ lenient: true, viewport: { width: 1100, height: 900 } });
+        try {
+          await p.goto(`${base}/#/settings/profile`);
+          const name = p.getByLabel('Display name');
+          await name.waitFor();
+          const original = await name.inputValue();
+          await p.evaluate('window.__sameDocument = true');
+          await name.fill('Typed but unsaved');
+          await p.setViewportSize({ width: 683, height: 800 });
+          await p.waitForTimeout(2600); // past the 2 s re-check
+          assert.equal(await p.evaluate('window.__sameDocument === true'), true, 'no reload over typed text');
+          assert.equal(await inPhoneShell(p), false);
+          assert.equal(await name.inputValue(), 'Typed but unsaved');
+          await name.fill(original);
+          await until(p, "document.body.classList.contains('m-shell')");
+          assert.equal(await p.evaluate('window.__sameDocument === true'), false, 'reloaded once clean');
+        } finally { await ctx.close(); }
+      }
+      // An open sheet survives 390 -> 1100 until it closes.
+      {
+        const { ctx, p } = await phonePage({ lenient: true });
+        try {
+          await p.goto(`${base}/#/${vehicle}`);
+          await p.getByRole('heading', { name: 'Golf', level: 1 }).waitFor();
+          await p.evaluate('window.__sameDocument = true');
+          await p.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Fill up' }).click();
+          const sheet = p.getByRole('dialog', { name: 'Add a fill-up' });
+          await sheet.waitFor();
+          await p.setViewportSize({ width: 1100, height: 900 });
+          await p.waitForTimeout(2600);
+          assert.equal(await p.evaluate('window.__sameDocument === true'), true, 'no reload under an open dialog');
+          assert.equal(await sheet.isVisible(), true);
+          await sheet.getByRole('button', { name: 'Cancel' }).click();
+          await sheet.waitFor({ state: 'detached' });
+          await until(p, "!document.body.classList.contains('m-shell')");
+        } finally { await ctx.close(); }
+      }
+      // With nothing typed, a normal resize switches shells both ways at once (the vehicle page has a select).
+      {
+        const { ctx, p } = await phonePage({ lenient: true, viewport: { width: 1100, height: 900 } });
+        try {
+          await p.goto(`${base}/#/${vehicle}`);
+          await p.getByRole('heading', { name: 'Golf', level: 1 }).waitFor();
+          assert.equal(await inPhoneShell(p), false);
+          await p.setViewportSize({ width: 683, height: 800 });
+          await until(p, "document.body.classList.contains('m-shell')", 1900);
+          await p.getByRole('heading', { name: 'Golf', level: 1 }).waitFor();
+          await p.setViewportSize({ width: 1100, height: 900 });
+          await until(p, "!document.body.classList.contains('m-shell')", 1900);
+        } finally { await ctx.close(); }
+      }
+      // A phone on its side (844x390, touch) is still a phone; a short desktop window with a mouse is not.
+      {
+        const { ctx, p } = await phonePage({ lenient: true, viewport: { width: 844, height: 390 }, touch: true });
+        try {
+          await p.goto(`${base}/#/`);
+          await until(p, "document.body.classList.contains('m-shell')");
+          await p.setViewportSize({ width: 390, height: 844 });
+          await p.waitForTimeout(500);
+          await p.setViewportSize({ width: 844, height: 390 });
+          await p.waitForTimeout(2600);
+          assert.equal(await inPhoneShell(p), true, 'landscape on a touch phone keeps the phone shell');
+          assert.equal(await p.getByRole('navigation', { name: 'Main' }).isVisible(), true);
+        } finally { await ctx.close(); }
+        const desk = await phonePage({ lenient: true, viewport: { width: 844, height: 390 } });
+        try {
+          await desk.p.goto(`${base}/#/`);
+          await desk.p.locator('#sidebar .side-nav').first().waitFor({ state: 'attached' });
+          assert.equal(await inPhoneShell(desk.p), false, 'a short window with a mouse keeps the desktop shell');
+        } finally { await desk.ctx.close(); }
+      }
+    });
+
     await t.test('signing out and back in, the request is accepted', async () => {
       await page.getByRole('button', { name: /sign out/i }).click();
       await page.getByRole('heading', { name: 'Sign in' }).waitFor();
@@ -1172,26 +1320,30 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       await page.getByRole('heading', { name: 'Your friends' }).waitFor();
     });
 
-    await t.test('the service worker caches the shell, never an API response, and sign-out clears it', async () => {
+    await t.test('the service worker caches the shell, never an API response, and sign-out keeps the shell but drops other caches', async () => {
       // localhost is a secure context, so the worker registers.
       await page.goto(`${base}/#/`);
       // The page runs in a browser; the test's TypeScript has no DOM types, so the snippets are strings.
-      // Earlier sign-outs emptied the caches by design, so start from a fresh install.
+      // Start from a fresh install.
       await page.evaluate('navigator.serviceWorker.getRegistrations().then((rs) => Promise.all(rs.map((r) => r.unregister()))).then(() => caches.keys()).then((ks) => Promise.all(ks.map((k) => caches.delete(k))))');
       await page.reload();
       await page.evaluate('navigator.serviceWorker.ready.then(() => undefined)');
       await page.waitForFunction("caches.keys().then((k) => Promise.all(k.map((n) => caches.open(n).then((c) => c.match('/js/pwa.js'))))).then((r) => r.some(Boolean))");
-      await page.evaluate("fetch('/v1/auth/session').then((r) => r.text())");
-      const cached = await page.evaluate(`(async () => {
-        const out = [];
-        for (const k of await caches.keys()) for (const r of await (await caches.open(k)).keys()) out.push(new URL(r.url).pathname);
-        return out;
-      })()`) as string[];
+      // Authenticated API traffic, reads and a write, in both the page and the worker's reach.
+      await page.evaluate("Promise.all(['/v1/auth/session', '/v1/vehicles', '/v1/preferences', '/v1/friends'].map((u) => fetch(u).then((r) => r.text())))");
+      const cached = await cachedPaths(page);
       assert.ok(cached.includes('/') && cached.includes('/styles.css') && cached.includes('/js/pwa.js'), cached.join(' '));
-      assert.deepEqual(cached.filter((p) => p.startsWith('/v1/')), [], 'no API response is cached');
+      assert.deepEqual(cached.filter((p) => p.includes('/v1')), [], 'no API request is cached');
+      // Something that is not the shell, which sign-out must drop.
+      await page.evaluate("caches.open('scratch-data').then((c) => c.put('/scratch', new Response('x')))");
       await page.getByRole('button', { name: /sign out/i }).click();
       await page.getByRole('heading', { name: 'Sign in' }).waitFor();
-      await page.waitForFunction('caches.keys().then((k) => k.length === 0)');
+      await page.waitForFunction("caches.keys().then((k) => !k.includes('scratch-data'))");
+      const keys = await page.evaluate('caches.keys()') as string[];
+      assert.ok(keys.length > 0 && keys.every((k) => k.startsWith('driveloom-shell-')), `only shell caches remain: ${keys.join(' ')}`);
+      const after = await cachedPaths(page);
+      assert.ok(after.includes('/') && after.includes('/js/main.js') && after.includes('/js/pwa.js'), 'the shell survives sign-out, so an offline cold start still works');
+      assert.deepEqual(after.filter((p) => p.includes('/v1')), [], 'still no API request cached');
     });
 
     assert.deepEqual(problems, [], 'no console errors, page errors or CSP violations');

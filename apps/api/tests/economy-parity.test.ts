@@ -222,3 +222,69 @@ test('the latest reading prefills from the newest record in authoritative order'
   assert.equal(web.latestFill(items)!.odometer.value, items[0].odometer.value, 'matches the server newest-first order');
   assert.equal(web.latestFill([]), null);
 });
+
+// ---------- edits (PATCH) ----------
+// The phone's edit sheet previews with the record itself left out of the list and the draft in its
+// place (the draft's id replaces the record's), then saves with PATCH.
+type Edit = { target: number; at?: string; odo?: [string, DistanceUnit]; vol?: [string, VolumeUnit]; full?: boolean; missed?: boolean };
+
+test('an edit previews, and is refused, exactly as the server PATCH answers', { skip }, async () => {
+  const prefs: Prefs = { distanceUnit: 'km', volumeUnit: 'l', economyUnit: 'l_per_100km' };
+  assert.equal((await app.call(owner, 'PUT', '/v1/preferences', { ...prefs, currency: 'EUR' })).status, 200);
+  const v = await app.call(owner, 'POST', '/v1/vehicles', { name: 'edits', odometerUnit: 'km', currency: 'EUR' });
+  assert.equal(v.status, 201, v.text);
+  const url = `/v1/vehicles/${v.json.id}/fill-ups`;
+  const ids: string[] = [];
+  for (const [n, odo, vol, full] of [[0, '1000', '40', true], [1, '1500', '35', true], [2, '2000', '30', true], [3, '2600', '20', false], [4, '3000', '38', true]] as const) {
+    const r = await app.call(owner, 'POST', url, { occurredAt: day(n), odometer: { value: odo, unit: 'km' }, volume: { value: vol, unit: 'l' }, full });
+    assert.equal(r.status, 201, r.text);
+    ids.push(r.json.id);
+  }
+  let compared = 0, refusedCount = 0, accepted = 0;
+  const run = async (label: string, e: Edit) => {
+    const items = (await app.call(owner, 'GET', `${url}?limit=5000`)).json.items;
+    const cur = items.find((x: { id: string }) => x.id === ids[e.target]);
+    assert.ok(cur, label);
+    const draft: Draft = {
+      occurredAt: e.at ?? cur.occurredAt, odometer: e.odo ? { value: e.odo[0], unit: e.odo[1] } : cur.odometer, volume: e.vol ? { value: e.vol[0], unit: e.vol[1] } : cur.volume,
+      full: e.full ?? cur.full, missedPrevious: e.missed ?? cur.missedPrevious,
+    };
+    const existing = items.filter((x: { id: string }) => x.id !== cur.id);
+    const refused = web.checkSequence(existing, draft);
+    const preview = refused ? null : web.previewInterval(existing, draft, prefs);
+    const r = await app.call(owner, 'PATCH', `${url}/${cur.id}`, { occurredAt: draft.occurredAt, odometer: draft.odometer, volume: draft.volume, full: draft.full, missedPrevious: draft.missedPrevious });
+    if (refused) {
+      assert.deepEqual([r.status, r.json.code, r.json.detail], [422, refused.code, refused.detail], label);
+      refusedCount++;
+    } else {
+      assert.equal(r.status, 200, `${label}: ${r.text}`);
+      assert.deepEqual(preview, r.json.interval, label);
+      accepted++;
+    }
+    compared++;
+  };
+  // Within its own neighbours: only the volume, then the reading.
+  await run('volume only', { target: 2, vol: ['33.5', 'l'] });
+  await run('odometer inside its range', { target: 2, odo: ['1800', 'km'] });
+  // Raise or lower into a neighbour's range: past the next record, below the previous, exactly level with one.
+  await run('odometer past the next record', { target: 1, odo: ['1900', 'km'] });
+  await run('odometer below the previous record', { target: 2, odo: ['900', 'km'] });
+  await run('odometer equal to the previous record', { target: 2, odo: ['1500', 'km'] });
+  await run('odometer equal to the next record', { target: 1, odo: ['1500', 'km'] });
+  // Backdate across an interval: the record moves between two others and takes its place in the order.
+  await run('backdate between two records, reading fits', { target: 4, at: day(1, 20), odo: ['1600', 'km'] });
+  await run('backdate, reading too high for its new place', { target: 3, at: day(0, 12), odo: ['2600', 'km'] });
+  await run('backdate to before everything', { target: 4, at: day(-2), odo: ['500', 'km'] });
+  // Move forward past the others.
+  await run('move to the end', { target: 0, at: day(9), odo: ['4000', 'km'] });
+  await run('move to the end, reading too low', { target: 1, at: day(10), odo: ['3500', 'km'] });
+  // A partial fill, a missed fill, and the same time as another record.
+  await run('turn into a partial fill', { target: 2, full: false });
+  await run('turn back into a full fill', { target: 2, full: true });
+  await run('mark a missed fill', { target: 3, missed: true });
+  await run('same moment as another record', { target: 4, at: day(2) });
+  // Units on the draft: a miles reading against kilometre records.
+  await run('odometer entered in miles', { target: 3, odo: ['1200', 'mi'] });
+  assert.ok(accepted >= 8 && refusedCount >= 4, `accepted ${accepted}, refused ${refusedCount}`);
+  assert.ok(compared >= 15);
+});
