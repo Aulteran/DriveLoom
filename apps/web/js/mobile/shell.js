@@ -9,20 +9,22 @@ import { mount, h, toast } from '../ui.js';
 import { icon } from '../icons.js';
 import { vehicleTitle } from '../format.js';
 import { themeControl } from '../theme.js';
-import { authView } from '../views/auth.js';
 import { screen } from './screens.js';
+import { startSystem } from './system.js';
+import { errorState } from './states.js';
+import { phoneAuthView, rememberReturn, takeReturn, forgetReturn } from './auth.js';
 import { closeSheets } from './sheet.js';
 import { openVehicleSheet, initial } from './vehicle-sheet.js';
 import { openFillUp, clearFillUpDrafts } from './fillup.js';
 
 // ---------- one-off page setup ----------
 function loadStyles() {
-  return new Promise((resolve) => {
-    const link = h('link', { rel: 'stylesheet', href: '/mobile.css' });
+  return Promise.all(['/mobile.css', '/mobile-system.css'].map((href) => new Promise((resolve) => {
+    const link = h('link', { rel: 'stylesheet', href });
     link.addEventListener('load', resolve);
     link.addEventListener('error', resolve);
     document.head.append(link);
-  });
+  })));
 }
 // Draw under the notch and home indicator; the shell pads with env(safe-area-inset-*).
 const vp = document.querySelector('meta[name="viewport"]');
@@ -53,6 +55,7 @@ const tabs = h('nav', { class: 'm-tabs', 'aria-label': 'Main', hidden: true },
 const main = document.getElementById('main');
 main.before(head);
 main.after(tabs);
+startSystem({ head });
 
 let active = null;   // the active vehicle: context for Home, History and Fill up
 let currentTab = null;
@@ -95,11 +98,18 @@ function switchVehicle() {
 
 async function signOut() {
   await post('/v1/auth/logout').catch(() => undefined);
-  clearFillUpDrafts();
+  clearFillUpDrafts(); forgetReturn();
   state.account = null; setCsrf(null); go('#/signin');
 }
 
 const authScreen = (view) => h('div', { class: 'm-auth' }, h('div', { class: 'public-theme' }, themeControl(true)), view);
+
+/** Full-screen "can't load" state (offline cold start, server down); retries by itself on reconnect. */
+function unreachable(err) {
+  closeSheets(); chrome(false); mountedHash = null;
+  mount(h('div', { class: 'm-screen m-cold' }, errorState({ error: err, level: 1, onRetry: () => render() })), 'Can’t connect');
+  addEventListener('online', () => render(), { once: true });
+}
 
 // ---------- render pipeline ----------
 let rendering = 0;
@@ -122,19 +132,32 @@ async function renderPhone() {
   const arrived = viaHashchange; viaHashchange = false;
   const { parts, query } = parse();
   const first = parts[0] ?? '';
-  if (!state.instance) state.instance = await get('/v1/auth/instance').catch(() => ({}));
+  if (!state.instance) {
+    // Offline or a server that does not answer is not "signed out": say so, and keep any typed draft.
+    let failure = null;
+    state.instance = await get('/v1/auth/instance').catch((err) => { failure = err; return null; });
+    if (ticket !== rendering) return;
+    if (!state.instance) {
+      if (navigator.onLine === false || failure instanceof TypeError || failure?.status >= 500) { unreachable(failure); return; }
+      state.instance = {};
+    }
+  }
   if (!state.account && !PUBLIC.has(first)) {
+    if (navigator.onLine === false) { unreachable(new TypeError('offline')); return; }
     if (!(await refreshSession())) {
+      rememberReturn(location.hash); // signing in here comes back to this route
       clearFillUpDrafts(); // the session ended: a typed fill-up must not outlive it
       if (ticket !== rendering) return;
       closeSheets(); chrome(false); mountedHash = null;
-      mount(authScreen(await authView(state.instance.needs_setup ? 'register' : 'signin', query)), 'Sign in');
+      mount(authScreen(await phoneAuthView(state.instance.needs_setup ? 'register' : 'signin', query)), 'Sign in');
       return;
     }
   }
   if (ticket !== rendering) return;
   try {
-    if (PUBLIC.has(first)) { closeSheets(); chrome(false); mountedHash = null; mount(authScreen(await authView(first, query)), 'Sign in'); return; }
+    if (PUBLIC.has(first)) { closeSheets(); chrome(false); mountedHash = null; mount(authScreen(await phoneAuthView(first, query)), 'Sign in'); return; }
+    // Just signed in (password, passkey or the identity provider's redirect to #/): back to where sign-in interrupted.
+    if (!first) { const back = takeReturn(); if (back && back !== location.hash) { location.replace(back); return; } }
     const [vehicles, friends] = await Promise.all([get('/v1/vehicles?includeArchived=true'), get('/v1/friends').catch(() => null)]);
     state.vehicles = vehicles.items;
     requests = friends?.incoming?.length ?? 0;
@@ -180,7 +203,8 @@ async function renderPhone() {
     if (ticket !== rendering) return;
     chrome(!!state.account, { vehicle: state.account ? defaultVehicle() : null });
     mountedHash = null;
-    mount(h('div', { class: 'panel' }, h('h1', {}, err.status === 404 ? 'Not found' : 'Something went wrong'), h('p', { class: 'muted' }, err.message), h('a', { href: '#/' }, 'Back to your dashboard')), 'Error');
+    mount(h('div', { class: 'm-screen' }, errorState({ error: err, level: 1, onRetry: () => render() }), h('a', { class: 'm-back m-center', href: '#/' }, 'Back to your dashboard')), 'Error');
+    if (navigator.onLine === false) addEventListener('online', () => render(), { once: true });
   }
 }
 
