@@ -7,6 +7,8 @@ const phone = matchMedia('(max-width: 699px)');
 const isPhone = phone.matches;
 phone.addEventListener('change', () => { if (phone.matches !== isPhone) location.reload(); });
 
+import('./pwa.js').then((pwa) => pwa.start());
+
 if (isPhone) {
   import('./mobile/shell.js');
 } else {

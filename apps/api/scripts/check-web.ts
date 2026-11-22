@@ -38,5 +38,11 @@ for (const f of files) {
 const index = readFileSync(path.join(root, 'index.html'), 'utf8');
 if (/<script(?![^>]*\bsrc=)[^>]*>/.test(index) || /\son[a-z]+=/i.test(index) || /\sstyle=/i.test(index)) errors.push('index.html: inline script, handler or style would be blocked by the CSP');
 
+// The service worker sits at the site root (outside js/) and the server fills in its placeholders.
+const swFile = path.join(root, 'sw.js');
+try { execFileSync(process.execPath, ['--check', swFile], { stdio: 'pipe' }); } catch (e) { errors.push(`sw.js: ${(e as { stderr: Buffer }).stderr.toString().split('\n').slice(0, 5).join(' ')}`); }
+const swSrc = readFileSync(swFile, 'utf8');
+if (!swSrc.includes("'__BUILD__'") || !swSrc.includes('/*PRECACHE*/ []')) errors.push('sw.js: lost its __BUILD__ or PRECACHE placeholder, the server cannot version it');
+
 if (errors.length) { console.error(errors.join('\n')); process.exit(1); }
 console.log(`web: ok (${files.length} modules)`);
