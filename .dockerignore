@@ -5,6 +5,5 @@ apps/marketing
 apps/api/tests
 apps/api/openapi
 deploy
-docs
 **/.env
 **/*.dl-backup

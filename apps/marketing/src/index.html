@@ -180,14 +180,13 @@
       </div>
       <div class="terminal">
         <div class="terminal-bar" aria-hidden="true"><span></span><span></span><span></span></div>
-<pre tabindex="0" aria-label="Quick start commands"><code><span class="c"># settings: public URL, secret key, passwords</span>
-cp deploy/.env.example deploy/.env
+<pre tabindex="0" aria-label="Quick start commands"><code><span class="c"># grab the compose file, no clone needed</span>
+curl -fsSLO https://raw.githubusercontent.com/Aulteran/DriveLoom/main/deploy/compose.yml
 
-<span class="c"># build and start the app and database</span>
-docker compose -f deploy/compose.yml \
-  --env-file deploy/.env up -d --build --wait
+<span class="c"># set DRIVELOOM_SECRET_KEY in it, then start</span>
+docker compose up -d
 
-<span class="c"># then point your proxy at 127.0.0.1:8080</span></code></pre>
+<span class="c"># open http://localhost:8080</span></code></pre>
       </div>
     </section>
 

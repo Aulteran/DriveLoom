@@ -22,4 +22,4 @@ Use Node 22. From `apps/marketing/`: `npm run build`, `npm run check`, `npm test
 - `main` is the release branch: merging `dev` into `main` publishes the Docker image to ghcr.io and deploys the marketing site. Never push feature work to `main`, and do not merge to `main` without the owner's approval.
 - Always start work on a new, descriptively named branch (for example `feature/instance-default-units`), never a generic or auto-generated name.
 - When the work is done and its checks pass, open the PR into `dev` yourself and merge it once CI is green. This standing approval covers PRs into `dev` only.
-- Never commit secrets, `deploy/.env` or local overrides.
+- Never commit secrets or local `.env` files.
