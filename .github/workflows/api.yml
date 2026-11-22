@@ -75,6 +75,7 @@ jobs:
         run: |
           docker build -t ghcr.io/aulteran/driveloom:latest .
           sed -i "s|replace-me|$(openssl rand -hex 32)|" deploy/compose.yml
+          docker compose -f deploy/compose.yml pull db
           docker compose -f deploy/compose.yml up -d --pull never --wait --wait-timeout 240
       - name: Serves the API and the web client
         run: |
