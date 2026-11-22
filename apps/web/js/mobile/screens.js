@@ -1,38 +1,31 @@
 // Route table of the phone shell. Each entry turns a hash route into a screen:
-// { view, title, tab, vehicle? } or { redirect }. Most screens are interim
-// adapters around the desktop views; a later chunk swaps an entry for a
-// phone-native screen without touching the shell.
+// { view, title, tab, vehicle? } or { redirect }. Home, History and Vehicles
+// (a vehicle's detail hub and its sections) are phone-native screens; the
+// others are still interim adapters around the desktop views, which a later
+// chunk swaps for phone-native screens without touching the shell.
 import { h } from '../ui.js';
 import { icon } from '../icons.js';
 import { state } from '../core.js';
 import { vehicleTitle } from '../format.js';
-import { garageView, welcomeView } from '../views/vehicles.js';
-import { vehicleView } from '../views/vehicle.js';
+import { welcomeView } from '../views/vehicles.js';
 import { friendsView } from '../views/friends.js';
 import { settingsView } from '../views/settings.js';
 import { adminView } from '../views/admin.js';
 import { moreView, installView } from './more.js';
+import { homeScreen } from './home.js';
+import { historyScreen } from './history.js';
+import { garageScreen, detailScreen, sectionScreen } from './vehicles.js';
 
 // Tabs: home, history, fill, vehicles, more.
-const VEHICLE_TAB = { overview: 'home', log: 'history', members: 'vehicles', data: 'vehicles', settings: 'vehicles' };
-const VEHICLE_SECTIONS = [['members', 'Members', 'users'], ['data', 'Import & export', 'swap'], ['settings', 'Vehicle settings', 'gear']];
+const SECTIONS = new Set(['members', 'data', 'settings']);
 
 const back = (href, label) => h('a', { class: 'm-back', href }, icon('back'), label);
 const withBack = (href, label, view) => h('div', { class: 'm-screen' }, back(href, label), view);
 
-/** The vehicle's own pages, which the desktop sidebar links and the phone has no room for. */
-function vehicleSections(v, current) {
-  return h('nav', { class: 'm-group', 'aria-label': current ? 'Vehicle sections' : `${vehicleTitle(v)} sections` },
-    current ? null : h('h2', { class: 'm-label m-pad-x' }, vehicleTitle(v)),
-    h('ul', {}, VEHICLE_SECTIONS.map(([key, label, ic]) => h('li', {},
-      h('a', { class: 'm-row', href: `#/vehicles/${v.id}/${key}`, 'aria-current': key === current ? 'page' : undefined },
-        icon(ic), h('span', { class: 'm-row-label' }, label), icon('next', 'icon m-row-next'))))));
-}
-
 const notFound = () => h('div', { class: 'panel empty' }, h('h1', {}, 'Not found'), h('p', {}, h('a', { href: '#/' }, 'Back to your dashboard')));
 
-/** ctx: { parts, query, active, requests, signOut } */
-export async function screen({ parts, query, active, requests, signOut }) {
+/** ctx: { parts, query, active, requests, friends, signOut } */
+export async function screen({ parts, query, active, requests, friends, signOut }) {
   const [first = '', second, third] = parts;
   switch (first) {
     case '':
@@ -40,16 +33,21 @@ export async function screen({ parts, query, active, requests, signOut }) {
       return { view: await welcomeView(), title: 'Welcome', tab: 'home' };
     case 'vehicles': {
       if (!second) return { redirect: '#/garage' };
-      const tab = !third || third === 'stats' ? 'overview' : third;
-      const r = await vehicleView(second, tab, query);
-      // An archived vehicle opened from the garage is not in the default list but is still the context.
-      const vehicle = state.vehicles.find((x) => x.id === r.vehicle.id) ?? r.vehicle;
-      const section = VEHICLE_TAB[tab] === 'vehicles';
-      const view = section ? withBack('#/garage', 'Vehicles', h('div', {}, r.view, vehicleSections(vehicle, tab))) : r.view;
-      return { view, title: `${r.title} · ${vehicleTitle(r.vehicle)}`, tab: VEHICLE_TAB[tab] ?? 'home', vehicle };
+      // Every vehicle the account belongs to, archived included, is in state.vehicles.
+      const known = state.vehicles.find((x) => x.id === second);
+      const name = known ? ` · ${vehicleTitle(known)}` : '';
+      // Home and History make the vehicle the context; browsing its detail and sections does not.
+      if (!third || third === 'stats') return { view: await homeScreen(second, { query, friends }), title: `Home${name}`, tab: 'home', vehicle: known };
+      if (third === 'log') return { view: await historyScreen(second, query), title: `History${name}`, tab: 'history', vehicle: known };
+      if (SECTIONS.has(third)) {
+        const r = await sectionScreen(second, third);
+        return { view: r.view, title: `${r.title} · ${vehicleTitle(r.vehicle)}`, tab: 'vehicles' };
+      }
+      // The detail hub at #/vehicles/:id/overview (the desktop's dashboard route); unknown sections land here too.
+      return { view: await detailScreen(second, query, active), title: known ? vehicleTitle(known) : 'Vehicle', tab: 'vehicles' };
     }
     case 'garage':
-      return { view: h('div', {}, await garageView(query), active ? vehicleSections(active) : null), title: 'Vehicles', tab: 'vehicles' };
+      return { view: await garageScreen(query, active), title: 'Vehicles', tab: 'vehicles' };
     case 'more':
       if (second === 'install') return { view: installView(), title: 'Install the app', tab: 'more' };
       return { view: await moreView({ requests, onSignOut: signOut }), title: 'More', tab: 'more' };

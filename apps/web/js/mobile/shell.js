@@ -17,12 +17,13 @@ import { openFillUp, clearFillUpDrafts } from './fillup.js';
 
 // ---------- one-off page setup ----------
 function loadStyles() {
-  return new Promise((resolve) => {
-    const link = h('link', { rel: 'stylesheet', href: '/mobile.css' });
+  // The shell's own styles, then the phone screens' (Home, History, Vehicles).
+  return Promise.all(['/mobile.css', '/mobile-screens.css'].map((href) => new Promise((resolve) => {
+    const link = h('link', { rel: 'stylesheet', href });
     link.addEventListener('load', resolve);
     link.addEventListener('error', resolve);
     document.head.append(link);
-  });
+  })));
 }
 // Draw under the notch and home indicator; the shell pads with env(safe-area-inset-*).
 const vp = document.querySelector('meta[name="viewport"]');
@@ -139,7 +140,7 @@ async function renderPhone() {
     state.vehicles = vehicles.items;
     requests = friends?.incoming?.length ?? 0;
     if (ticket !== rendering) return;
-    const ctx = { query, active: defaultVehicle(), requests, signOut };
+    const ctx = { query, active: defaultVehicle(), requests, friends: friends?.friends?.length ?? 0, signOut };
 
     if (first === 'fill') {
       // The sheet opens over the screen the person came from, or over Home on a direct visit.
