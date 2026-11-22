@@ -6,8 +6,8 @@
 import { get, del } from '../api.js';
 import { h, toast } from '../ui.js';
 import { icon } from '../icons.js';
-import { go, render } from '../core.js';
-import { qty, money, dateTime, REASONS, UNIT, vehicleTitle } from '../format.js';
+import { go, render, state } from '../core.js';
+import { qty, money, dateTime, REASONS, UNIT, vehicleTitle, canAddFuel, canChangeFill, canEditVehicle } from '../format.js';
 import { Dec, unitPrice } from '../economy.js';
 import { DAY, statsUrl } from '../views/vehicle.js';
 import { openSheet } from './sheet.js';
@@ -58,7 +58,7 @@ export function fillRow(f, onOpen, { month = false } = {}) {
 
 /** The detail sheet for one fill-up. `v` is the vehicle (role decides the actions). */
 export function openFillDetail(v, f) {
-  const canEdit = v.role !== 'viewer' && !v.archived;
+  const canEdit = !v.archived && canChangeFill(v, f, state.account?.id);
   const i = f.interval;
   const hero = i?.available && i.economy
     ? h('p', { class: 'm-hero-line' }, h('span', { class: 'm-big' }, i.economy.value), h('span', { class: 'm-big-unit' }, unitText(i.economy.unit)))
@@ -130,7 +130,7 @@ function monthSpend(items) {
 
 export async function historyScreen(id, query) {
   const v = await get(`/v1/vehicles/${id}`);
-  const canEdit = v.role !== 'viewer' && !v.archived;
+  const canEdit = canAddFuel(v) && !v.archived;
   const period = PERIODS.some(([k]) => k === query.get('period')) ? query.get('period') : 'all';
   const type = TYPES.some(([k]) => k === query.get('type')) ? query.get('type') : null;
   const from = period === 'all' ? null : new Date(Date.now() - Number(period) * DAY);
@@ -214,7 +214,7 @@ export async function historyScreen(id, query) {
         h('span', { class: 'm-empty-art', 'aria-hidden': 'true' }, icon('history')),
         h('h2', {}, 'No fill-ups yet'),
         h('p', {}, 'Each fill-up you log appears here, newest first. Economy appears after two full fills: the first sets the starting point.'),
-        canEdit ? h('div', { class: 'm-actions' }, h('a', { class: 'button', href: '#/fill' }, icon('plus'), 'Log a fill-up'), h('a', { class: 'button secondary', href: `#/vehicles/${v.id}/data` }, icon('upload'), 'Import')) : null));
+        canEdit ? h('div', { class: 'm-actions' }, h('a', { class: 'button', href: '#/fill' }, icon('plus'), 'Log a fill-up'), canEditVehicle(v) ? h('a', { class: 'button secondary', href: `#/vehicles/${v.id}/data` }, icon('upload'), 'Import') : null) : null));
   }
   draw();
   return h('div', { class: 'm-screen m-stack' }, head, chips, summary, list, status, more);

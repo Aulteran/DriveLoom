@@ -1,7 +1,8 @@
 import type { DistanceUnit, Id } from '../types.ts';
 
-export type Role = 'owner' | 'editor' | 'viewer';
-export type GrantableRole = 'editor' | 'viewer';
+/** `editor` is presented to people as "Authorized Manager". */
+export type Role = 'owner' | 'editor' | 'driver' | 'viewer';
+export type GrantableRole = 'editor' | 'driver' | 'viewer';
 
 export interface Vehicle {
   id: Id;

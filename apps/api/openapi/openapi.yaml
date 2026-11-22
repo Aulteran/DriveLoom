@@ -696,7 +696,7 @@ paths:
         - { $ref: '#/components/parameters/VehicleId' }
     put:
       operationId: transferVehicleOwnership
-      summary: Transfer ownership to an existing member (owner only); the previous owner becomes an editor
+      summary: Transfer ownership to an existing active member (owner only); the previous owner becomes an editor (Authorized Manager)
       tags: [vehicles]
       requestBody:
         required: true
@@ -824,7 +824,7 @@ paths:
         '404': { $ref: '#/components/responses/Problem' }
     post:
       operationId: createFillUp
-      summary: Record a purchase (editor or owner)
+      summary: Record a purchase (owner, editor or driver)
       description: >
         Units are chosen explicitly. The odometer may not run backwards in time
         (`odometer_out_of_sequence`), the same instant and reading is a
@@ -865,7 +865,7 @@ paths:
         '404': { $ref: '#/components/responses/Problem' }
     patch:
       operationId: updateFillUp
-      summary: Correct a purchase; the merged record is validated again as a whole
+      summary: Correct a purchase (owner or editor; a driver only their own); the merged record is validated again as a whole
       tags: [fuel]
       requestBody:
         required: true
@@ -885,7 +885,7 @@ paths:
         '422': { $ref: '#/components/responses/Problem' }
     delete:
       operationId: deleteFillUp
-      summary: Delete a purchase
+      summary: Delete a purchase (owner or editor; a driver only their own)
       tags: [fuel]
       responses:
         '204': { description: Deleted. }
@@ -1500,10 +1500,17 @@ components:
       enum: [l, gal_us, gal_imp]
     Role:
       type: string
-      enum: [owner, editor, viewer]
+      description: >
+        The caller's or a member's role on a vehicle. `editor` is presented as
+        "Authorized Manager": edits details, photo, imports and every fill-up.
+        `driver` reads everything and adds fill-ups, changing or deleting only
+        the ones they recorded. `viewer` only reads. Only the `owner` manages
+        members, transfers ownership, archives and opts into comparisons.
+      enum: [owner, editor, driver, viewer]
     GrantableRole:
       type: string
-      enum: [editor, viewer]
+      description: Roles the owner can grant. `owner` moves only through ownership transfer.
+      enum: [editor, driver, viewer]
     VehicleInput:
       type: object
       additionalProperties: false

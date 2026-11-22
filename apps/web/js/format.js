@@ -18,7 +18,22 @@ export function localInput(d = new Date()) {
 }
 /** datetime-local value -> RFC 3339 with the browser's offset */
 export function toInstant(local) { return new Date(local).toISOString(); }
-export const ROLE = { owner: 'Owner', editor: 'Editor', viewer: 'Viewer' };
+// Vehicle roles. The API value `editor` is shown as "Authorized Manager".
+// These mirror apps/api/src/vehicles/permissions.ts; the server decides.
+export const ROLE = { owner: 'Owner', editor: 'Authorized Manager', driver: 'Driver', viewer: 'Viewer' };
+/** Roles the owner can grant, most capable first, for pickers. */
+export const GRANTABLE_ROLES = [['editor', ROLE.editor], ['driver', ROLE.driver], ['viewer', ROLE.viewer]];
+export const ROLE_HELP = {
+  editor: 'Edits the vehicle details and photo, imports, and adds or corrects any fill-up.',
+  driver: 'Adds fill-ups and corrects or deletes the ones they logged.',
+  viewer: 'Can only read.',
+};
+/** Details, photo and import (ignores archiving; callers check it). */
+export const canEditVehicle = (v) => v.role === 'owner' || v.role === 'editor';
+/** Logging new fill-ups. */
+export const canAddFuel = (v) => canEditVehicle(v) || v.role === 'driver';
+/** Editing or deleting one fill-up: drivers only their own. */
+export const canChangeFill = (v, f, userId) => canEditVehicle(v) || (v.role === 'driver' && !!f.createdBy && f.createdBy === userId);
 
 // How a vehicle is named in the UI. A nickname, when set, leads and is followed by
 // year, make and model. Without one the state/province and plate lead instead

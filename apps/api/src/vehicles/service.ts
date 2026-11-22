@@ -10,6 +10,7 @@ import { getPreferences } from '../preferences.ts';
 import type { Principal } from '../identity.ts';
 import { ApiError, conflict, forbidden, invalid, notFound } from './errors.ts';
 import type { GrantableRole, Member, Role, Vehicle, VehicleAccess, VehicleInput, VehiclePatch } from './types.ts';
+import { canArchive, canEditVehicle, canManageMembers, canTransferOwnership, isGrantableRole } from './permissions.ts';
 
 type Q = pg.PoolClient;
 interface VehicleRow {
@@ -163,7 +164,7 @@ export class VehicleService {
     if ('currency' in patch) add('currency', currency(patch.currency));
     return this.#tx(async (c) => {
       const v = await this.#lock(c, p, vehicleId);
-      if (v.role === 'viewer') throw forbidden('editing this vehicle');
+      if (!canEditVehicle(v.role)) throw forbidden('editing this vehicle');
       if ('currency' in patch) {
         // Changing the reporting currency would silently relabel recorded costs.
         const costs = await c.query('SELECT 1 FROM fill_ups WHERE vehicle_id = $1 AND cost_amount IS NOT NULL AND $2 <> (SELECT currency FROM vehicles WHERE id = $1) LIMIT 1', [v.id, patch.currency]);
@@ -180,7 +181,7 @@ export class VehicleService {
   async setArchived(p: Principal, vehicleId: unknown, archived: boolean): Promise<Vehicle> {
     return this.#tx(async (c) => {
       const v = await this.#lock(c, p, vehicleId);
-      if (v.role !== 'owner') throw forbidden('archiving this vehicle');
+      if (!canArchive(v.role)) throw forbidden('archiving this vehicle');
       await c.query('UPDATE vehicles SET archived_at = CASE WHEN $2 THEN COALESCE(archived_at, now()) ELSE NULL END, updated_at = now() WHERE id = $1', [v.id, archived]);
       await this.#audit(c, p.userId, archived ? 'vehicle.archive' : 'vehicle.unarchive', v.id);
       return this.#load(c, p, v.id);
@@ -197,7 +198,7 @@ export class VehicleService {
   }
 
   #grantable(role: unknown): GrantableRole {
-    if (role !== 'editor' && role !== 'viewer') throw invalid("role must be 'editor' or 'viewer'.");
+    if (!isGrantableRole(role)) throw invalid("role must be 'editor', 'driver' or 'viewer'.");
     return role;
   }
 
@@ -209,7 +210,7 @@ export class VehicleService {
     if (!byEmail && !isUuid(who.userId)) throw invalid('userId must be a user id (or pass email).');
     return this.#tx(async (c) => {
       const v = await this.#lock(c, p, vehicleId);
-      if (v.role !== 'owner') throw forbidden('managing members');
+      if (!canManageMembers(v.role)) throw forbidden('managing members');
       const u = await c.query<{ id: Id; display_name: string; email: string }>(
         `SELECT id, display_name, email FROM users WHERE status = 'active' AND ${byEmail ? 'email = lower(btrim($1))' : 'id = $1'}`, [byEmail ? who.email : who.userId]);
       if (!u.rows[0]) throw invalid('No active user matches.');
@@ -228,7 +229,7 @@ export class VehicleService {
     const uid = id(userId);
     return this.#tx(async (c) => {
       const v = await this.#lock(c, p, vehicleId);
-      if (v.role !== 'owner') throw forbidden('managing members');
+      if (!canManageMembers(v.role)) throw forbidden('managing members');
       const cur = await c.query<{ role: Role }>('SELECT role FROM vehicle_members WHERE vehicle_id = $1 AND user_id = $2', [v.id, uid]);
       if (!cur.rows[0]) throw invalid('That user is not a member.');
       if (cur.rows[0].role === 'owner') throw conflict('owner_immutable', 'The owner role changes only through ownership transfer.');
@@ -244,7 +245,7 @@ export class VehicleService {
     await this.#tx(async (c) => {
       const v = await this.#lock(c, p, vehicleId);
       const self = uid === p.userId;
-      if (v.role !== 'owner' && !self) throw forbidden('removing other members');
+      if (!canManageMembers(v.role) && !self) throw forbidden('removing other members');
       const cur = await c.query<{ role: Role }>('SELECT role FROM vehicle_members WHERE vehicle_id = $1 AND user_id = $2', [v.id, uid]);
       if (!cur.rows[0]) throw invalid('That user is not a member.');
       if (cur.rows[0].role === 'owner') throw conflict('owner_required', 'A vehicle must keep an owner. Transfer ownership first.');
@@ -253,12 +254,16 @@ export class VehicleService {
     });
   }
 
-  /** Owner hands ownership to an existing member; the previous owner becomes an editor. */
+  /**
+   * Owner hands ownership to an existing active member, atomically under the
+   * vehicle lock: the previous owner becomes an editor (Authorized Manager),
+   * whom the new owner may later demote with changeMemberRole.
+   */
   async transferOwnership(p: Principal, vehicleId: unknown, toUserId: unknown): Promise<Vehicle> {
     const to = id(toUserId);
     return this.#tx(async (c) => {
       const v = await this.#lock(c, p, vehicleId);
-      if (v.role !== 'owner') throw forbidden('transferring ownership');
+      if (!canTransferOwnership(v.role)) throw forbidden('transferring ownership');
       if (to === p.userId) throw conflict('already_owner', 'You already own this vehicle.');
       const t = await c.query("SELECT 1 FROM vehicle_members m JOIN users u ON u.id = m.user_id WHERE m.vehicle_id = $1 AND m.user_id = $2 AND u.status = 'active'", [v.id, to]);
       if (!t.rowCount) throw invalid('The new owner must be an active member of the vehicle.');

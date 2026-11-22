@@ -8,6 +8,7 @@ import { requirePrincipal } from '../identity.ts';
 import { uuidv7 } from '../ids.ts';
 import type { VehicleService } from './service.ts';
 import { stripImageMetadata } from './image-metadata.ts';
+import { canEditVehicle } from './permissions.ts';
 
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const TYPES = ['image/jpeg', 'image/png', 'image/webp'] as const;
@@ -28,7 +29,7 @@ export function imageRoutes(pool: pg.Pool, vehicles: VehicleService): Route[] {
     try {
       await c.query('BEGIN');
       const v = await vehicles.access(c, p, r.params['vehicleId'], true);
-      if (v.role === 'viewer') throw new HttpProblem(403, 'forbidden', 'Forbidden', 'Your role does not allow changing the image.');
+      if (!canEditVehicle(v.role)) throw new HttpProblem(403, 'forbidden', 'Forbidden', 'Your role does not allow changing the image.');
       if (v.archived) throw new HttpProblem(409, 'vehicle_archived', 'Conflict', 'This vehicle is archived.');
       const out = await fn(c, v.id);
       await c.query("INSERT INTO audit_events (id, actor_id, action, subject_type, subject_id) VALUES ($1,$2,$3,'vehicle',$4)", [uuidv7(), p.userId, action, v.id]);

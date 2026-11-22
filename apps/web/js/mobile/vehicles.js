@@ -7,7 +7,7 @@ import { api, get, post, put, patch, del } from '../api.js';
 import { h, form, field, select, toast, download } from '../ui.js';
 import { icon } from '../icons.js';
 import { state, go, render, rememberVehicle } from '../core.js';
-import { qty, money, date, UNIT, ROLE, vehicleTitle, vehicleDescription, vehicleLabel } from '../format.js';
+import { qty, money, date, UNIT, ROLE, GRANTABLE_ROLES, ROLE_HELP, vehicleTitle, vehicleDescription, vehicleLabel, canEditVehicle } from '../format.js';
 import { Dec, lowerIsBetter } from '../economy.js';
 import { DAY, statsUrl, lastMonths, compactMoney } from '../views/vehicle.js';
 import { createForm, importForm, currencyOptions } from '../views/vehicles.js';
@@ -163,15 +163,15 @@ async function membersBody(v) {
     const parts = [];
     if (owner && !self) {
       parts.push(h('div', { class: 'm-field' }, h('p', { class: 'm-label', id: 'm-role-l' }, 'Role'),
-        h('div', { class: 'm-seg', role: 'group', 'aria-labelledby': 'm-role-l' }, [['editor', 'Editor'], ['viewer', 'Viewer']].map(([r, label]) =>
+        h('div', { class: 'm-seg', role: 'group', 'aria-labelledby': 'm-role-l' }, GRANTABLE_ROLES.map(([r, label]) =>
           h('button', { type: 'button', class: 'm-seg-opt', 'aria-pressed': String(m.role === r), onclick: async () => {
             if (m.role === r) return;
             try { await put(`/v1/vehicles/${v.id}/members/${m.userId}`, { role: r }); sheet.close(); toast('Role changed.'); render(); } catch (err) { toast(err.message); }
           } }, label))),
-        h('p', { class: 'm-small m-muted' }, 'Editors add and correct fill-ups and edit details. Viewers can only read.')));
+        h('p', { class: 'm-small m-muted' }, ROLE_HELP[m.role] ?? '')));
       parts.push(h('div', { class: 'm-actions m-actions-col' },
         h('button', { type: 'button', class: 'secondary', onclick: async () => {
-          if (await confirmSheet({ title: 'Transfer ownership?', message: `${who(m)} becomes the owner of ${vehicleTitle(v)}. You become an editor and can no longer manage members.`, confirmLabel: 'Make owner', action: () => put(`/v1/vehicles/${v.id}/owner`, { userId: m.userId }) })) {
+          if (await confirmSheet({ title: 'Transfer ownership?', message: `${who(m)} becomes the owner of ${vehicleTitle(v)}. You become an Authorized Manager and can no longer manage members; the new owner can change your role.`, confirmLabel: 'Make owner', action: () => put(`/v1/vehicles/${v.id}/owner`, { userId: m.userId }) })) {
             sheet.close(); toast('Ownership transferred.'); render();
           }
         } }, icon('key'), 'Make owner'),
@@ -181,7 +181,7 @@ async function membersBody(v) {
           }
         } }, glyph('trash'), 'Remove from vehicle')));
     } else if (self && m.role !== 'owner') {
-      parts.push(h('p', {}, `You are ${m.role === 'editor' ? 'an editor' : 'a viewer'} of this vehicle.`),
+      parts.push(h('p', {}, `You are ${m.role === 'editor' ? 'an' : 'a'} ${ROLE[m.role] ?? m.role} of this vehicle. ${ROLE_HELP[m.role] ?? ''}`),
         h('div', { class: 'm-actions m-actions-col' }, h('button', { type: 'button', class: 'danger', onclick: async () => {
           if (await confirmSheet({ title: 'Leave this vehicle?', message: `You will lose access to ${vehicleTitle(v)} and its fill-ups until an owner adds you again.`, confirmLabel: 'Leave vehicle', action: () => del(`/v1/vehicles/${v.id}/members/${m.userId}`) })) {
             sheet.close(); go('#/garage');
@@ -204,7 +204,7 @@ async function membersBody(v) {
   const addMember = () => formSheet('Share this vehicle', form({ class: 'm-form' }, [
     h('p', { class: 'm-small m-muted' }, 'Add a person who already has an account on this server. Only you, the owner, can manage members.'),
     field('Email', h('input', { name: 'email', type: 'email', required: true, autocomplete: 'off' })),
-    field('Role', select('role', [['viewer', 'Viewer: can only read'], ['editor', 'Editor: adds and corrects fill-ups']], 'viewer')),
+    field('Role', select('role', GRANTABLE_ROLES.map(([r, label]) => [r, `${label}: ${ROLE_HELP[r]}`]), 'viewer')),
     h('button', { type: 'submit', class: 'm-wide' }, icon('plus'), 'Add member'),
   ], async (x) => { await post(`/v1/vehicles/${v.id}/members`, { email: x.email, role: x.role }); render(); return 'Member added.'; }));
 
@@ -215,7 +215,7 @@ async function membersBody(v) {
 }
 
 function dataBody(v) {
-  const canEdit = v.role !== 'viewer' && !v.archived;
+  const canEdit = canEditVehicle(v) && !v.archived;
   const exporter = (format, label, sub) => h('li', {}, h('button', { type: 'button', class: 'm-row m-row-btn', onclick: async (e) => {
     const b = e.currentTarget; b.disabled = true;
     try {
@@ -262,7 +262,7 @@ function dataBody(v) {
 
 async function settingsBody(v) {
   const owner = v.role === 'owner';
-  const canEdit = v.role !== 'viewer';
+  const canEdit = canEditVehicle(v);
   const optIn = await get(`/v1/vehicles/${v.id}/comparison`);
   const rowBtn = (ic, label, sub, onclick) => h('li', {}, h('button', { type: 'button', class: 'm-row m-row-btn', onclick }, ic, h('span', { class: 'm-row-label' }, label, sub ? h('span', { class: 'm-row-sub' }, sub) : null), icon('next', 'icon m-row-next')));
 

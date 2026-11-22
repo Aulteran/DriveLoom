@@ -22,7 +22,7 @@ import { get, post, patch, ApiError } from '../api.js';
 import { h, toast, select, confirmDialog } from '../ui.js';
 import { icon } from '../icons.js';
 import { state } from '../core.js';
-import { UNIT, vehicleTitle, localInput, toInstant, date as shortDate } from '../format.js';
+import { UNIT, vehicleTitle, localInput, toInstant, date as shortDate, canAddFuel, canChangeFill } from '../format.js';
 import { currencyOptions } from '../views/vehicles.js';
 import {
   normalizeDecimal, checkDecimal, checkOccurredAt, checkSequence, previewInterval, latestFill, distanceBetween, unitPrice, difference, lowerIsBetter, RULES,
@@ -91,7 +91,7 @@ const unitText = (u) => UNIT[u] ?? u;
 let uid = 0;
 
 export function openFillUp({ vehicle, onClose, edit = null } = {}) {
-  if (!vehicle || vehicle.role === 'viewer' || vehicle.archived) return notAllowed(vehicle, onClose);
+  if (!vehicle || vehicle.archived || !(edit ? canChangeFill(vehicle, edit, state.account?.id) : canAddFuel(vehicle))) return notAllowed(vehicle, onClose, edit);
   const v = vehicle;
   const key = edit ? null : `${DRAFT_PREFIX}${state.account?.id ?? ''}.${v.id}`;
   const n = ++uid;
@@ -495,10 +495,10 @@ export function openFillUp({ vehicle, onClose, edit = null } = {}) {
   return sheet;
 }
 
-/** No vehicle, a viewer role or an archived vehicle: say why, offer the way on. */
-function notAllowed(vehicle, onClose) {
+/** No vehicle, a read-only role (or another member's fill-up) or an archived vehicle: say why, offer the way on. */
+function notAllowed(vehicle, onClose, edit = null) {
   const content = !vehicle
     ? [h('p', {}, 'Add a vehicle first, then log its fill-ups here.'), h('a', { class: 'button m-wide', href: '#/garage' }, icon('car'), 'Go to Vehicles')]
-    : [h('p', {}, vehicle.archived ? 'This vehicle is archived. Unarchive it to add fill-ups.' : 'You can view this vehicle but not add fill-ups to it.')];
+    : [h('p', {}, vehicle.archived ? 'This vehicle is archived. Unarchive it to add fill-ups.' : edit ? 'You can change only the fill-ups you logged.' : 'You can view this vehicle but not add fill-ups to it.')];
   return openSheet({ title: 'Add a fill-up', sub: vehicle ? vehicleTitle(vehicle) : null, size: 'full', content, onClose: () => onClose?.({ saved: false }) });
 }

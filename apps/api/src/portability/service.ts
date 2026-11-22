@@ -16,6 +16,7 @@ import type { Id } from '../types.ts';
 import { parseFillUp, rowToBody, type FillUpRow, type FuelService, type ParsedFillUp } from '../fuel/service.ts';
 import type { VehicleService } from '../vehicles/service.ts';
 import type { Vehicle, VehicleAccess } from '../vehicles/types.ts';
+import { canEditVehicle } from '../vehicles/permissions.ts';
 import { CsvError, denormalise, neutralise, parseCsv, toCsv } from './csv.ts';
 
 export const EXPORT_FORMAT = 'driveloom.vehicle';
@@ -177,7 +178,7 @@ export class PortabilityService {
     const candidates = b['format'] === 'csv' ? csvCandidates(b['data']) : b['format'] === 'json' ? jsonDocument(b['data']).candidates : (() => { throw invalid("format must be 'csv' or 'json'."); })();
     return this.#transaction(dryRun, async (c) => {
       const v = await this.#vehicles.access(c, p, vehicleId, true);
-      if (v.role === 'viewer') throw new HttpProblem(403, 'forbidden', 'Forbidden', 'Your role does not allow importing into this vehicle.');
+      if (!canEditVehicle(v.role)) throw new HttpProblem(403, 'forbidden', 'Forbidden', 'Your role does not allow importing into this vehicle.');
       if (v.archived) throw new HttpProblem(409, 'vehicle_archived', 'Conflict', 'This vehicle is archived.');
       return this.#run(c, p, v, candidates, dryRun);
     });
