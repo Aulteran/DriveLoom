@@ -89,15 +89,19 @@ function registerView(info, query) {
       location.assign((await post('/v1/auth/oidc/start', { mode: 'login', setup_token: v.setup_token || undefined, units: chosenUnits() })).authorization_url);
     })
     : null;
-  return shell(setup ? 'Set up this instance' : 'Create your account',
+  const view = shell(setup ? 'Set up this instance' : 'Create your account',
     setup ? 'No account exists yet. The account you create now is the administrator.' : info.registration === 'open' ? null : 'Registration is by invitation on this instance.',
     passwordForm ? form({}, [
+      // Two columns on wide screens (account | units); stacked on phones.
+      h('div', { class: 'auth-split' },
+        h('div', {}, [
       field('Name', h('input', { name: 'display_name', autocomplete: 'name', maxlength: 80, autocapitalize: 'words', enterkeyhint: 'next' })),
       field('Email', h('input', { name: 'email', type: 'email', autocomplete: 'username', required: true, autocapitalize: 'none', spellcheck: 'false', autocorrect: 'off', enterkeyhint: 'next' })),
       field('Password', h('input', { name: 'password', type: 'password', autocomplete: 'new-password', required: true, minlength: 12 }), 'At least 12 characters. A passphrase works well.'),
       info.setup_token_required ? field('Setup token', h('input', { name: 'setup_token', required: true, autocomplete: 'off', autocapitalize: 'none', spellcheck: 'false', autocorrect: 'off' }), 'Set by the operator in DRIVELOOM_SETUP_TOKEN.') : null,
       !setup && info.registration !== 'open' ? field('Invitation code', h('input', { name: 'invite_token', required: true, value: invite, autocomplete: 'off', autocapitalize: 'none', spellcheck: 'false', autocorrect: 'off' })) : null,
-      unitsBlock,
+        ]),
+        unitsBlock),
       h('button', { type: 'submit', style: 'width:100%;justify-content:center' }, setup ? 'Create administrator account' : 'Create account'),
     ], async (v, el) => {
       const body = { email: v.email, password: v.password, display_name: v.display_name || undefined, setup_token: v.setup_token || undefined, invite_token: v.invite_token || undefined, units: chosenUnits() };
@@ -111,6 +115,8 @@ function registerView(info, query) {
     }) : (viaOidc ? unitsBlock : null),
     viaOidc ? h('div', { class: 'stack', style: 'margin-top:16px' }, viaOidc) : null,
     h('p', { class: 'small', style: 'margin-top:16px' }, h('a', { href: '#/signin' }, 'Already have an account? Sign in')));
+  if (passwordForm) view.classList.add('narrow-wide');
+  return view;
 }
 
 function verifyForm(email) {
