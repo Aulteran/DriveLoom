@@ -12,7 +12,7 @@ import { openSheet } from './sheet.js';
 import { page, section, staticRow, row, avatar, action, confirmSheet, sheetForm } from './kit.js';
 import { loadInto, emptyState } from './states.js';
 
-const SHORT = { '30d': '30 d', '90d': '90 d', '365d': '12 mo', all: 'All' };
+const SHORT = { '30d': '30 days', '90d': '90 days', '365d': '12 months', all: 'All time' };
 const name = (p) => p.displayName || p.email;
 
 function comparison(cmp, win) {
@@ -25,7 +25,7 @@ function comparison(cmp, win) {
   const max = Math.max(...values, 0) || 1;
   const seg = h('div', { class: 'm-seg m-seg-4', role: 'group', 'aria-label': 'Comparison period' },
     WINDOWS.map(([k, label]) => h('button', {
-      type: 'button', 'aria-pressed': String(k === win), 'aria-label': label,
+      type: 'button', 'aria-pressed': String(k === win), title: label,
       onclick: () => { location.hash = `#/friends?window=${k}`; },
     }, SHORT[k] ?? label)));
   return h('section', { class: 'm-group m-pad m-compare', 'aria-labelledby': 'm-cmp-h' },

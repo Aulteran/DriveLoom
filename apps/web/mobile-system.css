@@ -45,7 +45,9 @@
 .m-shell:not(.m-signed-in) main { padding-bottom: calc(var(--m-safe-bottom) + 32px + var(--m-banners-h)); }
 .m-shell:not(.m-signed-in) .toast { bottom: calc(var(--m-safe-bottom) + 16px + var(--m-banners-h)); }
 /* Offline, save buttons look paused; tapping one explains why (system.js). */
-.m-offline main form button:not([type="button"]), .m-offline dialog:not(.m-fill) form button:not([type="button"]) { opacity: .55; }
+.m-shell.m-offline main form button:not([type="button"]), .m-shell.m-offline dialog:not(.m-fill) form button:not([type="button"]) {
+  background: var(--surface-2); color: var(--muted); border: 1px dashed var(--line-strong); box-shadow: none;
+}
 
 /* ---------- loading skeletons ---------- */
 .m-skel { display: block; }
