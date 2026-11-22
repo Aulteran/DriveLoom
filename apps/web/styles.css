@@ -298,6 +298,14 @@ ul.codes { columns: 2; list-style: none; padding: 0; margin: 12px 0; } ul.codes 
 .narrow > .panel { padding: 30px; }
 .narrow > .panel h1 { font-size: 1.8rem; }
 .narrow form > button[type="submit"]:only-of-type { margin-top: 4px; }
+/* Registration and first-time setup: account fields beside the unit defaults on wide screens. */
+@media (min-width: 760px) {
+  .narrow-wide:not(.m-authv) { max-width: 880px; margin: 3vh auto; }
+  .public-theme:has(+ .narrow-wide:not(.m-authv)) { max-width: 880px; }
+  .narrow-wide:not(.m-authv) .auth-split { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; align-items: start; }
+  .narrow-wide:not(.m-authv) .auth-split fieldset { margin: 0 0 16px; }
+  .narrow-wide:not(.m-authv) .auth-split fieldset .grid { grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0 14px; }
+}
 
 /* ---------- app shell: sidebar + content ---------- */
 .app { min-height: 100vh; min-height: 100dvh; }
