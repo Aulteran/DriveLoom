@@ -7,8 +7,9 @@ import { qty, date, dateTime, money, REASONS, ROLE, GRANTABLE_ROLES, ROLE_HELP, 
 import { economyChart, barChart } from './chart.js';
 import { currencyOptions, pageHead } from './vehicles.js';
 import { icon } from '../icons.js';
+import { serviceTab } from './service.js';
 
-const SECTIONS = { overview: 'Dashboard', log: 'Fuel log', members: 'Members', data: 'Import & export', settings: 'Vehicle settings' };
+const SECTIONS = { overview: 'Dashboard', log: 'Fuel log', service: 'Service', members: 'Members', data: 'Import & export', settings: 'Vehicle settings' };
 
 const meta = (v) => [vehicleTitle(v) === vehicleDescription(v) ? '' : vehicleDescription(v), ' ', h('span', { class: `badge ${v.role === 'owner' ? 'accent' : ''}` }, ROLE[v.role]), v.archived ? h('span', { class: 'badge warn' }, 'Archived') : null];
 
@@ -16,6 +17,7 @@ export async function vehicleView(id, tab, query) {
   const v = await get(`/v1/vehicles/${id}`);
   if (!SECTIONS[tab]) tab = 'overview';
   const canAdd = canAddFuel(v) && !v.archived;
+  if (tab === 'service') return { vehicle: v, title: SECTIONS[tab], view: await serviceTab(v, query, pageHead, meta) };
   if (tab === 'overview') return { vehicle: v, title: SECTIONS[tab], view: await overviewTab(v, canAdd, query) };
   const body = tab === 'members' ? await membersTab(v) : tab === 'data' ? dataTab(v, canEditVehicle(v) && !v.archived)
     : tab === 'settings' ? await settingsTab(v) : await logTab(v, canAdd, query);
@@ -289,6 +291,7 @@ function dataTab(v, canEdit) {
   const showReport = (r) => report.replaceChildren(h('div', { class: r.committed ? 'notice' : r.summary.invalid ? 'error' : 'notice' },
     h('p', {}, r.committed ? 'Imported.' : r.dryRun ? 'Preview only. Nothing has been saved yet.' : 'Nothing was imported.'),
     h('p', {}, `${r.summary.total} rows: ${r.summary.created} ${r.committed ? 'added' : 'to add'}, ${r.summary.duplicates} already present, ${r.summary.invalid} invalid.`),
+    r.serviceVisits ? h('p', {}, `${r.serviceVisits.total} service visits: ${r.serviceVisits.created} ${r.committed ? 'added' : 'to add'}, ${r.serviceVisits.duplicates} already present, ${r.serviceVisits.invalid} invalid.`) : null,
     r.errors.length ? h('ul', {}, r.errors.map((e) => h('li', {}, `Row ${e.row}: ${e.message}`))) : null));
   return h('div', {},
     h('div', { class: 'panel' }, h('h2', {}, 'Export'),
@@ -360,7 +363,7 @@ async function settingsTab(v) {
     parts.push(h('div', { class: 'panel' },
       h('h2', {}, 'Service page'),
       h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: vis.showService, onchange: async (e) => {
-        try { await put(`/v1/vehicles/${v.id}/service-visibility`, { showService: e.target.checked }); toast(e.target.checked ? 'Service page shown.' : 'Service page hidden.'); } catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
+        try { await put(`/v1/vehicles/${v.id}/service-visibility`, { showService: e.target.checked }); toast(e.target.checked ? 'Service page shown.' : 'Service page hidden.'); render(); } catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
       } }), 'Show Service page for this vehicle'),
       h('p', { class: 'small muted' }, 'Only changes your own menus. Service data and what you are allowed to do are not affected.')));
   }

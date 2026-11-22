@@ -1312,6 +1312,106 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       }
     });
 
+    await t.test('service history: off by default, then a desktop visit is added, corrected and deleted', async () => {
+      // Off: no menu entry, and the page says so instead of failing.
+      await page.goto(`${base}/#/${vehicle}`);
+      await page.getByRole('heading', { name: 'At a glance' }).waitFor();
+      assert.equal(await page.getByRole('navigation', { name: 'Vehicle' }).getByRole('link', { name: 'Service' }).count(), 0);
+      await page.goto(`${base}/#/${vehicle}/service`);
+      await page.getByText('The Service module is not enabled on this server.').waitFor();
+
+      await db.pool.query("INSERT INTO instance_modules (module, enabled) VALUES ('service', true) ON CONFLICT (module) DO UPDATE SET enabled = true");
+      await page.goto(`${base}/#/${vehicle}`);
+      await page.reload();
+      await page.getByRole('heading', { name: 'At a glance' }).waitFor();
+      await page.getByRole('navigation', { name: 'Vehicle' }).getByRole('link', { name: 'Service' }).click();
+      await page.getByRole('heading', { name: 'Service', level: 1 }).waitFor();
+      await page.getByText('Start from today. Adding past service is optional.').waitFor();
+      assert.deepEqual(await axe('service empty'), []);
+
+      await page.getByRole('button', { name: 'Add service visit' }).click();
+      await page.getByLabel('Date of service').waitFor();
+      await page.getByLabel('Date of service').fill('2026-03-14');
+      await page.getByLabel('Odometer reading').fill('45210');
+      await page.getByLabel('Provider (optional)').fill('Corner Garage');
+      await page.getByLabel('Item', { exact: true }).first().fill('Oil change');
+      await page.getByRole('button', { name: 'Add another item' }).click();
+      await page.getByLabel('Item', { exact: true }).nth(1).fill('Wipers');
+      await page.getByLabel(/^Cost \(.*optional\)$/).first().fill('0');
+      await page.getByLabel(/^Total cost for the visit/).fill('89.50');
+      assert.deepEqual(await axe('service form'), []);
+      await page.getByRole('button', { name: 'Add visit' }).click();
+      const card = page.locator('article.svc-visit').first();
+      await card.waitFor();
+      await card.getByText('Oil change').waitFor();
+      await card.getByText('Wipers').waitFor();
+      assert.match(await card.innerText(), /89\.50/);
+      assert.match(await card.innerText(), /Corner Garage/);
+      assert.deepEqual(await axe('service list'), []);
+
+      // The visit lives in the API with exact strings: an item left empty stays unknown, a typed 0 stays zero.
+      const stored = await db.pool.query("SELECT i.name, i.cost::text AS cost, v.visit_total_cost::text AS total, v.odometer_input::text AS odo FROM service_visits v JOIN service_items i ON i.visit_id = v.id ORDER BY i.position");
+      assert.deepEqual(stored.rows, [{ name: 'Oil change', cost: '0', total: '89.50', odo: '45210' }, { name: 'Wipers', cost: null, total: '89.50', odo: '45210' }]);
+      assert.equal((await db.pool.query('SELECT count(*)::int AS n FROM fill_ups')).rows[0].n, 3, 'fuel records are untouched');
+
+      // Search narrows the list.
+      await page.getByLabel('Search').fill('nothing like this');
+      await page.getByRole('button', { name: 'Apply' }).click();
+      await page.getByText('No service visits match these filters.').waitFor();
+      await page.getByRole('link', { name: 'Clear' }).click();
+      await card.waitFor();
+
+      // Correct, then delete with confirmation.
+      await card.getByRole('button', { name: /^Edit service visit/ }).click();
+      await page.getByLabel('Provider (optional)').fill('Main Street Garage');
+      await page.getByRole('button', { name: 'Save changes' }).click();
+      await page.getByText('Main Street Garage').waitFor();
+      await page.locator('article.svc-visit').first().getByRole('button', { name: /^Delete service visit/ }).click();
+      await page.getByRole('dialog').getByRole('button', { name: 'Delete' }).click();
+      await page.getByText('Start from today. Adding past service is optional.').waitFor();
+      await noErrorPage();
+    });
+
+    await t.test('service history on a phone: reachable from the vehicle screen, add sheet, list, hidden by preference', async () => {
+      const { ctx, p, phoneAxe, open } = await phonePage();
+      try {
+        await open(`${vehicle}/overview`);
+        await p.getByRole('link', { name: /^Service/ }).click();
+        await p.getByRole('heading', { name: 'Service', level: 1 }).waitFor();
+        await p.getByText('Start from today. Adding past service is optional.').first().waitFor();
+        assert.equal(await overflows(p), false, 'service overflows on a phone');
+        assert.equal(await p.getByRole('navigation', { name: 'Main' }).getByRole('link').count(), 5, 'bottom navigation is unchanged');
+        await p.getByRole('button', { name: 'Add service visit' }).click();
+        const sheet = p.getByRole('dialog');
+        await sheet.getByLabel('Item', { exact: true }).first().fill('Brake pads');
+        await sheet.getByLabel(/^Cost \(.*optional\)$/).first().fill('120.00');
+        assert.deepEqual(await bothThemes(p, phoneAxe, 'service sheet'), []);
+        await sheet.getByRole('button', { name: 'Add visit' }).click();
+        await p.locator('article.svc-visit').first().waitFor();
+        await p.locator('article.svc-visit').getByText('Brake pads').waitFor();
+        assert.equal(await overflows(p), false);
+        assert.deepEqual(await bothThemes(p, phoneAxe, 'service list'), []);
+        await p.emulateMedia({ colorScheme: 'light' });
+        // More leads to it as well.
+        await open('more');
+        await p.getByRole('link', { name: /^Service/ }).waitFor();
+        // Hiding the page for this vehicle removes the entries but not the data.
+        const who = (await db.pool.query('SELECT id FROM users WHERE email = $1', [ADMIN.email])).rows[0].id;
+        await db.pool.query('INSERT INTO vehicle_user_prefs (vehicle_id, user_id, show_service) VALUES ($1,$2,false)', [vehicle.split('/')[1], who]);
+        await open(`${vehicle}/overview`);
+        assert.equal(await p.getByRole('link', { name: /^Service/ }).count(), 0);
+        await open('more');
+        assert.equal(await p.getByRole('link', { name: /^Service/ }).count(), 0);
+      } finally { await ctx.close(); }
+      assert.equal((await db.pool.query('SELECT count(*)::int AS n FROM service_visits')).rows[0].n, 1, 'data kept while hidden');
+      // Restore: module off and nothing hidden, so the rest of the journey is as before.
+      await db.pool.query("DELETE FROM vehicle_user_prefs");
+      await db.pool.query("UPDATE instance_modules SET enabled = false WHERE module = 'service'");
+      await page.goto(`${base}/#/${vehicle}`);
+      await page.reload();
+      await page.getByRole('heading', { name: 'At a glance' }).waitFor();
+    });
+
     await t.test('signing out and back in, the request is accepted', async () => {
       await page.getByRole('button', { name: /sign out/i }).click();
       await page.getByRole('heading', { name: 'Sign in' }).waitFor();

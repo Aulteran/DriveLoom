@@ -6,7 +6,7 @@
 import { api, get, post, put, patch, del } from '../api.js';
 import { h, form, field, select, toast, download } from '../ui.js';
 import { icon } from '../icons.js';
-import { state, go, render, rememberVehicle } from '../core.js';
+import { state, go, render, rememberVehicle, serviceVisible } from '../core.js';
 import { qty, money, date, UNIT, ROLE, GRANTABLE_ROLES, ROLE_HELP, vehicleTitle, vehicleDescription, vehicleLabel, canEditVehicle } from '../format.js';
 import { Dec, lowerIsBetter } from '../economy.js';
 import { DAY, statsUrl, lastMonths, compactMoney } from '../views/vehicle.js';
@@ -129,9 +129,11 @@ export async function detailScreen(id, query, active) {
     barChart({ items: spendItems, label: `spending per month in ${v.currency}`, unitLabel: `Spent (${v.currency})`, tick: compactMoney(v.currency), empty: 'No costs recorded in the last 12 months.' }),
     h('p', { class: 'm-small m-muted' }, `This month so far: ${spendItems.at(-1).text}. Tap a bar to read it.`));
 
+  const showService = await serviceVisible(v.id);
+  const rows = showService ? [['service', 'wrench', 'Service', 'Oil changes, repairs and costs'], ...SECTION_ROWS] : SECTION_ROWS;
   const sections = h('nav', { class: 'm-stack-s', 'aria-labelledby': 'm-sec-h' },
     h('h2', { class: 'm-label m-label-out', id: 'm-sec-h' }, 'This vehicle'),
-    h('ul', { class: 'm-card m-rows' }, SECTION_ROWS.map(([key, ic, label, sub]) => h('li', {},
+    h('ul', { class: 'm-card m-rows' }, rows.map(([key, ic, label, sub]) => h('li', {},
       h('a', { class: 'm-row', href: `#/vehicles/${v.id}/${key}` }, icon(ic), h('span', { class: 'm-row-label' }, label, h('span', { class: 'm-row-sub' }, sub)), icon('next', 'icon m-row-next'))))));
 
   return h('div', { class: 'm-screen m-stack' }, head,
@@ -230,6 +232,7 @@ function dataBody(v) {
     const show = (r) => report.replaceChildren(h('div', { class: r.committed ? 'notice' : r.summary.invalid ? 'error' : 'notice' },
       h('p', {}, r.committed ? 'Imported.' : r.dryRun ? 'Preview only. Nothing has been saved yet.' : 'Nothing was imported.'),
       h('p', {}, `${r.summary.total} rows: ${r.summary.created} ${r.committed ? 'added' : 'to add'}, ${r.summary.duplicates} already present, ${r.summary.invalid} invalid.`),
+      r.serviceVisits ? h('p', {}, `${r.serviceVisits.total} service visits: ${r.serviceVisits.created} ${r.committed ? 'added' : 'to add'}, ${r.serviceVisits.duplicates} already present, ${r.serviceVisits.invalid} invalid.`) : null,
       r.errors.length ? h('ul', {}, r.errors.slice(0, 20).map((x) => h('li', {}, `Row ${x.row}: ${x.message}`))) : null));
     const f = form({ class: 'm-form' }, [
       h('p', { class: 'm-small m-muted' }, 'A DriveLoom CSV or JSON export, or a CSV with the columns occurred_at, odometer, odometer_unit, volume, volume_unit and optionally full, missed_previous, cost_amount, cost_currency, exchange_rate, reporting_amount, notes. Rows already present are skipped; if any row is invalid, nothing is imported.'),

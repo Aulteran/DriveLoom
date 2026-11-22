@@ -14,6 +14,8 @@ import { vehicleRoutes } from './vehicles/routes.ts';
 import { imageRoutes } from './vehicles/images.ts';
 import { FuelService } from './fuel/service.ts';
 import { fuelRoutes } from './fuel/routes.ts';
+import { ServiceService } from './service/service.ts';
+import { serviceRoutes } from './service/routes.ts';
 import { preferenceRoutes } from './preferences.ts';
 import { vehiclePrefRoutes } from './modules.ts';
 import { FriendService } from './friends/service.ts';
@@ -39,6 +41,7 @@ export function systemRoutes(pool: pg.Pool): Route[] {
 export function allRoutes(ctx: AuthContext): Route[] {
   const vehicles = new VehicleService(ctx.db);
   const fuel = new FuelService(ctx.db, vehicles, ctx.now);
+  const service = new ServiceService(ctx.db, vehicles, ctx.now);
   return [
     ...systemRoutes(ctx.db),
     ...authRoutes(ctx),
@@ -47,9 +50,10 @@ export function allRoutes(ctx: AuthContext): Route[] {
     ...imageRoutes(ctx.db, vehicles),
     ...vehiclePrefRoutes(ctx.db),
     ...fuelRoutes(fuel),
+    ...serviceRoutes(service),
     ...preferenceRoutes(ctx.db),
     ...friendRoutes(new FriendService(ctx.db, vehicles, fuel, ctx.now)),
-    ...portabilityRoutes(new PortabilityService(ctx.db, vehicles, fuel, ctx.now)),
+    ...portabilityRoutes(new PortabilityService(ctx.db, vehicles, fuel, service, ctx.now)),
   ];
 }
 

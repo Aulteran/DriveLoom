@@ -168,7 +168,10 @@ export class VehicleService {
       if ('currency' in patch) {
         // Changing the reporting currency would silently relabel recorded costs.
         const costs = await c.query('SELECT 1 FROM fill_ups WHERE vehicle_id = $1 AND cost_amount IS NOT NULL AND $2 <> (SELECT currency FROM vehicles WHERE id = $1) LIMIT 1', [v.id, patch.currency]);
-        if (costs.rowCount) throw conflict('currency_locked', 'The reporting currency cannot change once costs are recorded.');
+        const svc = await c.query(
+          `SELECT 1 FROM service_visits sv WHERE sv.vehicle_id = $1 AND $2 <> (SELECT currency FROM vehicles WHERE id = $1)
+             AND (sv.visit_total_cost IS NOT NULL OR EXISTS (SELECT 1 FROM service_items si WHERE si.visit_id = sv.id AND si.cost IS NOT NULL)) LIMIT 1`, [v.id, patch.currency]);
+        if (costs.rowCount || svc.rowCount) throw conflict('currency_locked', 'The reporting currency cannot change once costs are recorded.');
       }
       if (sets.length) {
         await c.query(`UPDATE vehicles SET ${sets.join(', ')}, updated_at = now() WHERE id = $1`, [v.id, ...vals]);

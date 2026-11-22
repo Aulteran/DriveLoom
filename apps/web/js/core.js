@@ -44,3 +44,9 @@ export function defaultVehicle() {
   const active = state.vehicles.filter((v) => !v.archived);
   return active.find((v) => v.id === recalledVehicle()) ?? active[0] ?? null;
 }
+
+/** Whether the vehicle's Service page belongs in menus: the instance module is on and this member has not hidden it. */
+export async function serviceVisible(vehicleId) {
+  if (!state.modules?.service || !vehicleId) return false;
+  try { return (await get(`/v1/vehicles/${vehicleId}/service-visibility`, { quiet: true })).visible === true; } catch { return false; }
+}

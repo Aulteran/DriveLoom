@@ -43,3 +43,9 @@ export const vehicleDescription = (v) => [v.year, v.make, v.model].filter(Boolea
 export const vehiclePlate = (v) => [v.plateRegion, v.plateNumber].filter(Boolean).join(' ');
 export const vehicleTitle = (v) => v.name || vehiclePlate(v) || vehicleDescription(v) || 'Unnamed vehicle';
 export const vehicleLabel = (v) => [v.name || vehiclePlate(v), vehicleDescription(v)].filter(Boolean).join(' \u00b7 ') || 'Unnamed vehicle';
+
+// Service history (module). Mirrors canWriteService / canChangeVisit in permissions.ts.
+/** Recording new service visits. */
+export const canAddService = (v) => canEditVehicle(v) || v.role === 'driver';
+/** Editing or deleting one visit: drivers only their own. */
+export const canChangeVisit = (v, visit, userId) => canEditVehicle(v) || (v.role === 'driver' && !!visit.createdBy && visit.createdBy === userId);

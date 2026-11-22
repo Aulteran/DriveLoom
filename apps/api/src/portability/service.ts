@@ -1,6 +1,9 @@
 // Vehicle-level export and import (milestone 1.6). Formats:
 //   CSV  "driveloom fill-ups v1": one row per purchase, entered values and units.
-//   JSON "driveloom.vehicle" v1: vehicle description plus the same purchases.
+//   JSON "driveloom.vehicle" v1: vehicle description plus the same purchases and,
+//   optionally, `serviceVisits` (added later without a version bump: older files
+//   simply lack it and older readers ignore it). Service visits are exported
+//   even when the Service module is off, so nothing is stranded.
 // Neither carries ids, members or users, so a file moves between instances and
 // lands under the importing user's own permissions. Import validates every row
 // with the same rules as manual entry, runs inside one transaction, skips
@@ -14,6 +17,7 @@ import { uuidv7 } from '../ids.ts';
 import type { Principal } from '../identity.ts';
 import type { Id } from '../types.ts';
 import { parseFillUp, rowToBody, type FillUpRow, type FuelService, type ParsedFillUp } from '../fuel/service.ts';
+import { parseVisit, VISIT_FIELDS, type ParsedVisit, type ServiceService } from '../service/service.ts';
 import type { VehicleService } from '../vehicles/service.ts';
 import type { Vehicle, VehicleAccess } from '../vehicles/types.ts';
 import { canEditVehicle } from '../vehicles/permissions.ts';
@@ -37,8 +41,11 @@ export interface ImportReport {
   /** `row` counts data rows from 1 (CSV line number minus the header). At most 100 are listed. */
   errors: { row: number; code: string; message: string }[];
   vehicle?: Vehicle;
+  /** Present when the JSON file carried `serviceVisits`. Their failures are also counted in `summary.invalid` and listed in `errors` with a "Service visit" prefix. */
+  serviceVisits?: { total: number; created: number; duplicates: number; invalid: number };
 }
 
+interface Document { vehicle: Record<string, unknown>; candidates: Candidate[]; visits: Record<string, unknown>[] }
 interface Candidate { row: number; body: Record<string, unknown>; reportingCurrency: string | null }
 
 const csvRow = (r: FillUpRow, currency: string): string[] => [
@@ -79,7 +86,7 @@ function csvCandidates(text: unknown): Candidate[] {
   });
 }
 
-function jsonDocument(data: unknown): { vehicle: Record<string, unknown>; candidates: Candidate[] } {
+function jsonDocument(data: unknown): Document {
   if (typeof data !== 'object' || data === null || Array.isArray(data)) throw new HttpProblem(422, 'import_malformed', 'Validation failed', 'data must be a DriveLoom vehicle export.');
   const d = data as Record<string, unknown>;
   if (d['format'] !== EXPORT_FORMAT) throw new HttpProblem(422, 'import_malformed', 'Validation failed', `This is not a ${EXPORT_FORMAT} export.`);
@@ -87,17 +94,21 @@ function jsonDocument(data: unknown): { vehicle: Record<string, unknown>; candid
   const vehicle = obj(d['vehicle'], ['name', 'make', 'model', 'year', 'plateRegion', 'plateNumber', 'vin', 'odometerUnit', 'currency'], 'vehicle');
   if (!Array.isArray(d['fillUps'])) throw new HttpProblem(422, 'import_malformed', 'Validation failed', 'fillUps must be a list.');
   if (d['fillUps'].length > MAX_IMPORT_ROWS) throw new HttpProblem(422, 'import_malformed', 'Validation failed', `too many rows (limit ${MAX_IMPORT_ROWS}).`);
+  const visits = d['serviceVisits'] === undefined ? [] : d['serviceVisits'];
+  if (!Array.isArray(visits)) throw new HttpProblem(422, 'import_malformed', 'Validation failed', 'serviceVisits must be a list.');
+  if (visits.length > MAX_IMPORT_ROWS) throw new HttpProblem(422, 'import_malformed', 'Validation failed', `too many service visits (limit ${MAX_IMPORT_ROWS}).`);
   const currency = typeof vehicle['currency'] === 'string' ? vehicle['currency'] : null;
-  return { vehicle, candidates: d['fillUps'].map((body, i) => ({ row: i + 1, body: body as Record<string, unknown>, reportingCurrency: currency })) };
+  return { vehicle, visits: visits as Record<string, unknown>[], candidates: d['fillUps'].map((body, i) => ({ row: i + 1, body: body as Record<string, unknown>, reportingCurrency: currency })) };
 }
 
 export class PortabilityService {
   readonly #pool: pg.Pool;
   readonly #vehicles: VehicleService;
   readonly #fuel: FuelService;
+  readonly #service: ServiceService;
   readonly #now: () => Date;
-  constructor(pool: pg.Pool, vehicles: VehicleService, fuel: FuelService, now: () => Date = () => new Date()) {
-    this.#pool = pool; this.#vehicles = vehicles; this.#fuel = fuel; this.#now = now;
+  constructor(pool: pg.Pool, vehicles: VehicleService, fuel: FuelService, service: ServiceService, now: () => Date = () => new Date()) {
+    this.#pool = pool; this.#vehicles = vehicles; this.#fuel = fuel; this.#service = service; this.#now = now;
   }
 
   /** Any member may export: it contains nothing a viewer cannot already read. */
@@ -105,8 +116,10 @@ export class PortabilityService {
     if (format !== 'csv' && format !== 'json') throw invalid("format must be 'csv' or 'json'.");
     const v = await this.#vehicles.get(p, vehicleId);
     const rows = await this.#fuel.exportRows(this.#pool, v.id);
+    // Deliberately not behind the module switch: recorded service data is always exportable.
+    const visits = format === 'json' ? await this.#service.exportBodies(this.#pool, v.id) : [];
     await this.#pool.query("INSERT INTO audit_events (id, actor_id, action, subject_type, subject_id, details) VALUES ($1,$2,'vehicle.export','vehicle',$3,$4)",
-      [uuidv7(), p.userId, v.id, JSON.stringify({ format, rows: rows.length })]);
+      [uuidv7(), p.userId, v.id, JSON.stringify({ format, rows: rows.length, ...(format === 'json' ? { serviceVisits: visits.length } : {}) })]);
     // Never derive the filename from plate or VIN.
     const label = v.name ?? [v.year, v.make, v.model].filter(Boolean).join(' ');
     const stem = `driveloom-${label.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'vehicle'}-${this.#now().toISOString().slice(0, 10)}`;
@@ -118,11 +131,12 @@ export class PortabilityService {
         ...(v.plateRegion ? { plateRegion: v.plateRegion } : {}), ...(v.plateNumber ? { plateNumber: v.plateNumber } : {}), ...(v.vin ? { vin: v.vin } : {}),
         odometerUnit: v.odometerUnit, currency: v.currency },
       fillUps: rows.map(rowToBody),
+      serviceVisits: visits,
     };
     return { filename: `${stem}.json`, contentType: 'application/json', data: JSON.stringify(doc, null, 2) };
   }
 
-  async #run(c: pg.PoolClient, p: Principal, v: Pick<VehicleAccess, 'id' | 'currency'>, candidates: Candidate[], dryRun: boolean): Promise<ImportReport> {
+  async #run(c: pg.PoolClient, p: Principal, v: Pick<VehicleAccess, 'id' | 'currency'>, candidates: Candidate[], visits: Record<string, unknown>[], dryRun: boolean): Promise<ImportReport> {
     const errors: ImportReport['errors'] = [];
     const fail = (row: number, e: unknown) => {
       if (!(e instanceof HttpProblem)) throw e;
@@ -147,12 +161,28 @@ export class PortabilityService {
       if (dup.rowCount) { duplicates++; continue; }
       try { await this.#fuel.insertParsed(c, v.id, f, p.userId); created++; } catch (e) { fail(row, e); }
     }
+    let svc: ImportReport['serviceVisits'];
+    if (visits.length) {
+      svc = { total: visits.length, created: 0, duplicates: 0, invalid: 0 };
+      const ok: ParsedVisit[] = [];
+      visits.forEach((raw, i) => {
+        try { ok.push(parseVisit(obj(raw, VISIT_FIELDS, 'Service visit'), v.currency, this.#now())); } catch (e) {
+          if (!(e instanceof HttpProblem)) throw e;
+          if (errors.length < 100) errors.push({ row: i + 1, code: e.code, message: `Service visit: ${e.message}` });
+          invalidCount++; svc!.invalid++;
+        }
+      });
+      for (const f of ok) {
+        if (await this.#service.exists(c, v.id, f)) { svc.duplicates++; continue; }
+        await this.#service.insertParsed(c, v.id, v.currency, f, p.userId); svc.created++;
+      }
+    }
     const committed = !dryRun && invalidCount === 0;
     if (committed) {
       await c.query("INSERT INTO audit_events (id, actor_id, action, subject_type, subject_id, details) VALUES ($1,$2,'vehicle.import','vehicle',$3,$4)",
-        [uuidv7(), p.userId, v.id, JSON.stringify({ created, duplicates })]);
+        [uuidv7(), p.userId, v.id, JSON.stringify({ created, duplicates, ...(svc ? { serviceVisits: svc.created } : {}) })]);
     }
-    return { dryRun, committed, summary: { total: candidates.length, created, duplicates, invalid: invalidCount }, errors };
+    return { dryRun, committed, summary: { total: candidates.length, created, duplicates, invalid: invalidCount }, errors, ...(svc ? { serviceVisits: svc } : {}) };
   }
 
   async #transaction(dryRun: boolean, fn: (c: pg.PoolClient) => Promise<ImportReport>): Promise<ImportReport> {
@@ -175,12 +205,12 @@ export class PortabilityService {
   /** Import purchases into a vehicle the caller can edit. */
   async importInto(p: Principal, vehicleId: unknown, body: unknown): Promise<ImportReport> {
     const { b, dryRun } = this.#request(body, ['format', 'data', 'dryRun']);
-    const candidates = b['format'] === 'csv' ? csvCandidates(b['data']) : b['format'] === 'json' ? jsonDocument(b['data']).candidates : (() => { throw invalid("format must be 'csv' or 'json'."); })();
+    const doc: Pick<Document, 'candidates' | 'visits'> = b['format'] === 'csv' ? { candidates: csvCandidates(b['data']), visits: [] } : b['format'] === 'json' ? jsonDocument(b['data']) : (() => { throw invalid("format must be 'csv' or 'json'."); })();
     return this.#transaction(dryRun, async (c) => {
       const v = await this.#vehicles.access(c, p, vehicleId, true);
       if (!canEditVehicle(v.role)) throw new HttpProblem(403, 'forbidden', 'Forbidden', 'Your role does not allow importing into this vehicle.');
       if (v.archived) throw new HttpProblem(409, 'vehicle_archived', 'Conflict', 'This vehicle is archived.');
-      return this.#run(c, p, v, candidates, dryRun);
+      return this.#run(c, p, v, doc.candidates, doc.visits, dryRun);
     });
   }
 
@@ -190,7 +220,7 @@ export class PortabilityService {
     const doc = jsonDocument(b['data']);
     return this.#transaction(dryRun, async (c) => {
       const vehicle = await this.#vehicles.create(p, doc.vehicle as never, c);
-      const report = await this.#run(c, p, { id: vehicle.id as Id, currency: vehicle.currency }, doc.candidates, dryRun);
+      const report = await this.#run(c, p, { id: vehicle.id as Id, currency: vehicle.currency }, doc.candidates, doc.visits, dryRun);
       return { ...report, ...(report.committed ? { vehicle } : {}) };
     });
   }

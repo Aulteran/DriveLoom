@@ -64,7 +64,7 @@ export interface ParsedFillUp {
   cost: { amount: string; currency: string; exchangeRate: string | null; reportingAmount: string } | null;
 }
 
-function quantity<U>(v: unknown, field: string, isUnit: (u: unknown) => u is U, units: string, o: { maxScale: number; max: string; positive?: boolean }): { value: string; unit: U; dec: Dec } {
+export function quantity<U>(v: unknown, field: string, isUnit: (u: unknown) => u is U, units: string, o: { maxScale: number; max: string; positive?: boolean }): { value: string; unit: U; dec: Dec } {
   const q = obj(v, ['value', 'unit'], field);
   if (!isUnit(q['unit'])) throw invalid(`${field}.unit must be one of ${units}. Choose the unit explicitly.`);
   return { value: q['value'] as string, unit: q['unit'], dec: decimal(q['value'], `${field}.value`, o) };

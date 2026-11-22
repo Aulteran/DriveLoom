@@ -893,6 +893,110 @@ paths:
         '403': { $ref: '#/components/responses/Problem' }
         '404': { $ref: '#/components/responses/Problem' }
         '409': { $ref: '#/components/responses/Problem' }
+  /v1/vehicles/{vehicleId}/service-visits:
+    parameters:
+      - { $ref: '#/components/parameters/VehicleId' }
+    get:
+      operationId: listServiceVisits
+      summary: Service visits, newest first (service date, then record creation)
+      description: >
+        Every service endpoint answers 404 `module_disabled` while the Service
+        module is off on this instance, and 404 to non-members. Any member may read.
+        Page with `cursor` (the `nextCursor` of the previous page).
+      tags: [service]
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: cursor, in: query, schema: { type: string } }
+        - { name: from, in: query, description: 'Service date, inclusive.', schema: { type: string, format: date } }
+        - { name: to, in: query, description: 'Service date, inclusive.', schema: { type: string, format: date } }
+        - { name: q, in: query, description: 'Case-insensitive text search over provider, notes and item names and notes.', schema: { type: string, maxLength: 100 } }
+        - { name: category, in: query, description: 'Visits having at least one item of this category.', schema: { $ref: '#/components/schemas/ServiceCategory' } }
+      responses:
+        '200':
+          description: A page of visits.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextCursor]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ServiceVisit' } }
+                  nextCursor: { type: [string, 'null'] }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: createServiceVisit
+      summary: Record a service visit (owner, editor or driver)
+      description: >
+        At least one item is required. `totalCost` and item `cost` are optional:
+        omitted or null means unknown, "0" means known to be free. The odometer
+        is optional, is never compared with fuel records and never changes them.
+        Costs are in the vehicle's currency.
+      tags: [service]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ServiceVisitInput' }
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ServiceVisit' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/vehicles/{vehicleId}/service-visits/{visitId}:
+    parameters:
+      - { $ref: '#/components/parameters/VehicleId' }
+      - { name: visitId, in: path, required: true, schema: { $ref: '#/components/schemas/Id' } }
+    get:
+      operationId: getServiceVisit
+      summary: One service visit
+      tags: [service]
+      responses:
+        '200':
+          description: The visit.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ServiceVisit' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+    patch:
+      operationId: updateServiceVisit
+      summary: Correct a visit (owner or editor; a driver only their own); the merged record is validated again as a whole
+      description: When `items` is sent it replaces the whole item list.
+      tags: [service]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ServiceVisitPatch' }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ServiceVisit' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+    delete:
+      operationId: deleteServiceVisit
+      summary: Delete a visit and its items (owner or editor; a driver only their own)
+      tags: [service]
+      responses:
+        '204': { description: Deleted. }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
   /v1/vehicles/{vehicleId}/stats:
     parameters:
       - { $ref: '#/components/parameters/VehicleId' }
@@ -1116,7 +1220,7 @@ paths:
     get:
       operationId: exportVehicle
       summary: Download the vehicle's purchases as CSV or as a versioned JSON document
-      description: Contains no ids, members or users. Text cells that a spreadsheet could read as a formula are prefixed with an apostrophe.
+      description: Contains no ids, members or users. The JSON document also carries the vehicle's service visits (`serviceVisits`) even while the Service module is off; CSV carries purchases only. Text cells that a spreadsheet could read as a formula are prefixed with an apostrophe.
       tags: [portability]
       parameters:
         - { name: format, in: query, required: true, schema: { type: string, enum: [csv, json] } }
@@ -1584,7 +1688,7 @@ components:
       description: >
         The caller's or a member's role on a vehicle. `editor` is presented as
         "Authorized Manager": edits details, photo, imports and every fill-up.
-        `driver` reads everything and adds fill-ups, changing or deleting only
+        `driver` reads everything and adds fill-ups and service visits, changing or deleting only
         the ones they recorded. `viewer` only reads. Only the `owner` manages
         members, transfers ownership, archives and opts into comparisons.
       enum: [owner, editor, driver, viewer]
@@ -2057,6 +2161,73 @@ components:
             odometer: { $ref: '#/components/schemas/Distance' }
             volume: { $ref: '#/components/schemas/Volume' }
         interval: { oneOf: [{ $ref: '#/components/schemas/FillUpInterval' }, { type: 'null' }] }
+    ServiceCategory:
+      type: string
+      enum: [scheduled, repair, inspection, other]
+    ServiceItemInput:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120, description: Free text. Clients may offer presets such as "Oil change" but any text is accepted. }
+        category: { $ref: '#/components/schemas/ServiceCategory', description: Defaults to `other`. }
+        cost: { oneOf: [{ $ref: '#/components/schemas/Decimal' }, { type: 'null' }], description: In the vehicle's currency. Null or absent is unknown; "0" is a known zero. }
+        notes: { type: [string, 'null'], maxLength: 500 }
+    ServiceItem:
+      type: object
+      required: [id, name, category, cost, notes]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        name: { type: string }
+        category: { $ref: '#/components/schemas/ServiceCategory' }
+        cost: { oneOf: [{ $ref: '#/components/schemas/Decimal' }, { type: 'null' }] }
+        notes: { type: [string, 'null'] }
+    ServiceVisitInput:
+      type: object
+      required: [servicedOn, items]
+      additionalProperties: false
+      properties:
+        servicedOn: { type: string, format: date, description: The day the work was done. }
+        odometer: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }], description: Optional; not required to fit between fuel readings. }
+        provider: { type: [string, 'null'], maxLength: 120 }
+        diy: { type: boolean, default: false, description: Done by the owner rather than a workshop. }
+        totalCost: { oneOf: [{ $ref: '#/components/schemas/Decimal' }, { type: 'null' }], description: Whole-visit cost in the vehicle's currency. Null or absent is unknown; "0" is a known zero. It is not checked against item costs. }
+        notes: { type: [string, 'null'], maxLength: 2000 }
+        items: { type: array, minItems: 1, maxItems: 50, items: { $ref: '#/components/schemas/ServiceItemInput' } }
+    ServiceVisitPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        servicedOn: { type: string, format: date }
+        odometer: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }] }
+        provider: { type: [string, 'null'], maxLength: 120 }
+        diy: { type: boolean }
+        totalCost: { oneOf: [{ $ref: '#/components/schemas/Decimal' }, { type: 'null' }] }
+        notes: { type: [string, 'null'], maxLength: 2000 }
+        items: { type: array, minItems: 1, maxItems: 50, items: { $ref: '#/components/schemas/ServiceItemInput' } }
+    ServiceVisit:
+      type: object
+      required: [id, vehicleId, servicedOn, odometer, display, provider, diy, totalCost, currency, notes, items, createdBy, createdAt, updatedAt]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        vehicleId: { $ref: '#/components/schemas/Id' }
+        servicedOn: { type: string, format: date }
+        odometer: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }], description: Exactly as entered. }
+        display:
+          type: object
+          required: [odometer]
+          properties:
+            odometer: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }], description: Converted to the vehicle's odometer unit. }
+        provider: { type: [string, 'null'] }
+        diy: { type: boolean }
+        totalCost: { oneOf: [{ $ref: '#/components/schemas/Decimal' }, { type: 'null' }] }
+        currency: { $ref: '#/components/schemas/CurrencyCode' }
+        notes: { type: [string, 'null'] }
+        items: { type: array, items: { $ref: '#/components/schemas/ServiceItem' } }
+        createdBy: { oneOf: [{ $ref: '#/components/schemas/Id' }, { type: 'null' }] }
+        createdAt: { $ref: '#/components/schemas/Timestamp' }
+        updatedAt: { $ref: '#/components/schemas/Timestamp' }
     VehicleStats:
       type: object
       required: [vehicleId, window, fillCount, intervalCount, unavailableIntervalCount, distance, volume, economy, spend, costPerDistance, series]
@@ -2193,6 +2364,7 @@ components:
             odometerUnit: { $ref: '#/components/schemas/DistanceUnit' }
             currency: { $ref: '#/components/schemas/CurrencyCode' }
         fillUps: { type: array, maxItems: 5000, items: { $ref: '#/components/schemas/FillUpInput' } }
+        serviceVisits: { type: array, maxItems: 5000, items: { $ref: '#/components/schemas/ServiceVisitInput' }, description: Optional, added without a version bump; older files lack it. Always exported, and imported when present, regardless of the Service module switch. }
     ImportReport:
       type: object
       required: [dryRun, committed, summary, errors]
@@ -2218,6 +2390,15 @@ components:
               code: { type: string }
               message: { type: string }
         vehicle: { $ref: '#/components/schemas/Vehicle' }
+        serviceVisits:
+          type: object
+          description: Present when the JSON file carried `serviceVisits`; failures are also counted in `summary.invalid`.
+          required: [total, created, duplicates, invalid]
+          properties:
+            total: { type: integer }
+            created: { type: integer }
+            duplicates: { type: integer }
+            invalid: { type: integer }
     AdminUser:
       type: object
       required: [id, email, displayName, instanceRole, status, createdAt, ownedVehicleCount]

@@ -15,6 +15,11 @@ export const canWriteFuel = (role: Role): boolean => role === 'owner' || role ==
 /** Changing or deleting an existing fill-up: managers any record, drivers only those they recorded. */
 export const canChangeFill = (role: Role, createdBy: Id | null, userId: Id): boolean =>
   canEditVehicle(role) || (role === 'driver' && createdBy !== null && createdBy === userId);
+/** Recording service visits (same roles as fuel). */
+export const canWriteService = (role: Role): boolean => role === 'owner' || role === 'editor' || role === 'driver';
+/** Changing or deleting a service visit: managers any, drivers only the ones they recorded. */
+export const canChangeVisit = (role: Role, createdBy: Id | null, userId: Id): boolean =>
+  canEditVehicle(role) || (role === 'driver' && createdBy !== null && createdBy === userId);
 /** Granting, changing and revoking other members' roles. */
 export const canManageMembers = (role: Role): boolean => role === 'owner';
 /** Archive and unarchive. */

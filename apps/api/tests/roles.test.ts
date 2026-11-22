@@ -12,6 +12,7 @@ import { uuidv7 } from '../src/ids.ts';
 import { VehicleService } from '../src/vehicles/service.ts';
 import { vehicleRoutes } from '../src/vehicles/routes.ts';
 import { imageRoutes } from '../src/vehicles/images.ts';
+import { ServiceService } from '../src/service/service.ts';
 import { FuelService } from '../src/fuel/service.ts';
 import { fuelRoutes } from '../src/fuel/routes.ts';
 import { PortabilityService } from '../src/portability/service.ts';
@@ -19,7 +20,7 @@ import { portabilityRoutes } from '../src/portability/routes.ts';
 import { FriendService } from '../src/friends/service.ts';
 import { friendRoutes } from '../src/friends/routes.ts';
 import {
-  GRANTABLE_ROLES, canArchive, canChangeFill, canEditVehicle, canManageComparison, canManageMembers, canTransferOwnership, canWriteFuel, isGrantableRole,
+  GRANTABLE_ROLES, canArchive, canChangeFill, canEditVehicle, canManageComparison, canManageMembers, canTransferOwnership, canWriteFuel, canWriteService, isGrantableRole,
 } from '../src/vehicles/permissions.ts';
 import type { Role } from '../src/vehicles/types.ts';
 import { createTestDb, createTestUser, type TestDb, type TestUser } from './helpers/index.ts';
@@ -37,7 +38,7 @@ before(async () => {
   const vehicles = new VehicleService(db.pool), fuel = new FuelService(db.pool, vehicles);
   app = await startApp([owner, editor, driver, viewer, stranger, extra], [
     ...vehicleRoutes(vehicles), ...imageRoutes(db.pool, vehicles), ...fuelRoutes(fuel),
-    ...portabilityRoutes(new PortabilityService(db.pool, vehicles, fuel)), ...friendRoutes(new FriendService(db.pool, vehicles, fuel)),
+    ...portabilityRoutes(new PortabilityService(db.pool, vehicles, fuel, new ServiceService(db.pool, vehicles))), ...friendRoutes(new FriendService(db.pool, vehicles, fuel)),
   ]);
 });
 after(async () => { app?.close(); await db?.drop(); });
@@ -65,6 +66,7 @@ test('permission helpers: allowlists per role', () => {
   const row = (f: (r: Role) => boolean) => roles.map(f);
   assert.deepEqual(row(canEditVehicle), [true, true, false, false]);
   assert.deepEqual(row(canWriteFuel), [true, true, true, false]);
+  assert.deepEqual(row(canWriteService), [true, true, true, false]);
   assert.deepEqual(row(canManageMembers), [true, false, false, false]);
   assert.deepEqual(row(canArchive), [true, false, false, false]);
   assert.deepEqual(row(canTransferOwnership), [true, false, false, false]);

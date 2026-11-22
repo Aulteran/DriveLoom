@@ -10,6 +10,7 @@ import { BackupError, EPHEMERAL_TABLES, createBackup, restoreBackup, verifyBacku
 import { MIGRATIONS_DIR, migrate } from '../src/migrate.ts';
 import { uuidv7 } from '../src/ids.ts';
 import { VehicleService } from '../src/vehicles/service.ts';
+import { ServiceService } from '../src/service/service.ts';
 import { FuelService } from '../src/fuel/service.ts';
 import { harness, signUp, principalFor } from './helpers/auth.ts';
 import * as acct from '../src/auth/accounts.ts';
@@ -54,6 +55,9 @@ async function seed(h: NonNullable<Awaited<ReturnType<typeof harness>>>) {
   await fuel.create(pb, v.id, { occurredAt: '2026-05-09T08:00:00Z', odometer: { value: '1300', unit: 'mi' }, volume: { value: '9', unit: 'gal_us' } });
   await h.ctx.db.query('INSERT INTO vehicle_images (vehicle_id, content_type, data, uploaded_by) VALUES ($1,$2,$3,$4)', [v.id, 'image/png', PNG, pb.userId]);
   await h.ctx.db.query("INSERT INTO instance_modules (module, enabled) VALUES ('service', true)");
+  const service = new ServiceService(h.ctx.db, vehicles, h.ctx.now);
+  await service.create(pb, v.id, { servicedOn: '2026-04-02', odometer: { value: '950.25', unit: 'mi' }, provider: 'Näïve Garage', totalCost: '0', notes: 'free ☃',
+    items: [{ name: 'Oil change', category: 'scheduled', cost: '0.00' }, { name: 'Wipers', cost: null }] });
   await h.ctx.db.query('INSERT INTO vehicle_user_prefs (vehicle_id, user_id, show_service) VALUES ($1,$2,false)', [v.id, pa.userId]);
   return { a, b, pb, v, totp };
 }
@@ -73,6 +77,8 @@ test('full restore into an isolated instance preserves users, vehicles, records 
     assert.equal(info.tables['users'], 2);
     assert.equal(info.tables['vehicle_images'], 1);
     assert.equal(info.tables['instance_modules'], 1);
+    assert.equal(info.tables['service_visits'], 1);
+    assert.equal(info.tables['service_items'], 2);
     assert.equal(info.tables['vehicle_user_prefs'], 1);
     for (const t of EPHEMERAL_TABLES) assert.ok(!(t in info.tables), `${t} is not archived`);
     assert.deepEqual(await verifyBackup(file), info);
@@ -82,6 +88,11 @@ test('full restore into an isolated instance preserves users, vehicles, records 
     const img = await target.client.query('SELECT data FROM vehicle_images WHERE vehicle_id = $1', [v.id]);
     assert.ok((img.rows[0].data as Buffer).equals(PNG), 'image bytes are identical');
     assert.deepEqual((await target.client.query('SELECT module, enabled FROM instance_modules')).rows, [{ module: 'service', enabled: true }]);
+    const sv = await target.client.query("SELECT v.serviced_on::text, v.odometer_input::text, v.visit_total_cost::text, v.provider, i.name, i.cost::text FROM service_visits v JOIN service_items i ON i.visit_id = v.id ORDER BY i.position");
+    assert.deepEqual(sv.rows, [
+      { serviced_on: '2026-04-02', odometer_input: '950.25', visit_total_cost: '0', provider: 'Näïve Garage', name: 'Oil change', cost: '0.00' },
+      { serviced_on: '2026-04-02', odometer_input: '950.25', visit_total_cost: '0', provider: 'Näïve Garage', name: 'Wipers', cost: null },
+    ], 'service visits and items round-trip, unknown stays null and zero stays zero');
     assert.deepEqual((await target.client.query('SELECT show_service FROM vehicle_user_prefs')).rows, [{ show_service: false }]);
     // Sessions do not survive: the old cookie is dead on the restored instance, but the password works.
     assert.equal((await target.client.query('SELECT count(*)::int AS n FROM sessions')).rows[0].n, 0);

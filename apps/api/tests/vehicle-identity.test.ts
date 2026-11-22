@@ -3,6 +3,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { VehicleService } from '../src/vehicles/service.ts';
 import { vehicleRoutes } from '../src/vehicles/routes.ts';
+import { ServiceService } from '../src/service/service.ts';
 import { FuelService } from '../src/fuel/service.ts';
 import { fuelRoutes } from '../src/fuel/routes.ts';
 import { FriendService } from '../src/friends/service.ts';
@@ -26,7 +27,7 @@ before(async () => {
   app = await startApp([owner, driver, friend, stranger], [
     ...vehicleRoutes(vehicles), ...fuelRoutes(fuel), ...preferenceRoutes(db.pool),
     ...friendRoutes(new FriendService(db.pool, vehicles, fuel, () => NOW)),
-    ...portabilityRoutes(new PortabilityService(db.pool, vehicles, fuel, () => NOW)),
+    ...portabilityRoutes(new PortabilityService(db.pool, vehicles, fuel, new ServiceService(db.pool, vehicles), () => NOW)),
   ]);
 });
 after(async () => { app?.close(); await db?.drop(); });

@@ -491,3 +491,27 @@ button.icon-only .icon { width: 22px; height: 22px; }
   *, *::before, *::after { animation: none !important; transition: none !important; }
   .card:hover, button:hover, .button:hover { transform: none; }
 }
+
+/* ---------- service history ---------- */
+.svc-list { display: grid; gap: 12px; margin: 0 0 16px; padding: 0; list-style: none; }
+.svc-visit { margin: 0; }
+.svc-head { display: flex; gap: 12px; justify-content: space-between; align-items: flex-start; }
+.svc-head h2 { margin: 0; font-size: 1.05rem; }
+.svc-total { text-align: right; }
+.svc-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; padding: 0; list-style: none; }
+.svc-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--text); border: 1px solid var(--line); font-size: .85rem; }
+.svc-chip-cat, .svc-chip-cost { color: var(--muted); font-size: .75rem; }
+.svc-notes { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.svc-filters { margin-bottom: 16px; align-items: flex-end; }
+.svc-fieldset { border: 1px solid var(--line); border-radius: var(--radius-sm); margin: 0 0 16px; padding: 12px; }
+.svc-fieldset legend { padding: 0 6px; font-weight: 600; }
+.svc-item { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) auto; gap: 8px; align-items: end; }
+.svc-item .field { margin-bottom: 8px; }
+.svc-remove { margin-bottom: 8px; }
+.m-list-plain { list-style: none; padding: 0; }
+@media (max-width: 700px) {
+  .svc-item { grid-template-columns: minmax(0, 1fr) auto; }
+  .svc-item .field:nth-child(1) { grid-column: 1 / -1; }
+  .svc-head { flex-direction: column; }
+  .svc-total { text-align: left; }
+}
