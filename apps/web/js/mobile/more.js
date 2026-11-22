@@ -1,11 +1,11 @@
 // More (phone shell only, route #/more): everything used weekly or less.
-// Install (#/more/install) is a placeholder until the install guide lands.
+// Install (#/more/install) lives in install.js; theme and units in Settings.
 import { get } from '../api.js';
 import { h } from '../ui.js';
 import { icon } from '../icons.js';
 import { state } from '../core.js';
 import { UNIT } from '../format.js';
-import { themeControl } from '../theme.js';
+import { installStatus } from './install.js';
 
 const row = (href, ic, label, extra, sub) => h('li', {},
   h('a', { class: 'm-row', href }, icon(ic),
@@ -36,21 +36,11 @@ export async function moreView({ requests = 0, onSignOut }) {
         : null),
       row('#/settings/preferences', 'sliders', 'Settings', units ? h('span', { class: 'm-row-meta' }, units) : null),
       row('#/settings/security', 'key', 'Account and security'),
-      row('#/more/install', 'install', 'Install the app'),
+      row('#/more/install', 'install', 'Install the app', h('span', { class: 'm-row-meta' }, installStatus())),
     ]),
     admin ? group('Administration', [row('#/admin/users', 'shield', 'Administration', null, 'Accounts, invitations, units, email, sign-on, audit')]) : null,
-    h('section', { class: 'm-group m-pad', 'aria-labelledby': 'm-theme-h' }, h('h2', { id: 'm-theme-h', class: 'm-label' }, 'Appearance'), themeControl()),
     h('dl', { class: 'm-group m-facts' },
       h('div', {}, h('dt', {}, 'Server'), h('dd', {}, location.host)),
       version ? h('div', {}, h('dt', {}, 'Version'), h('dd', {}, version)) : null),
     h('button', { type: 'button', class: 'danger m-wide', id: 'signout', onclick: onSignOut }, icon('logout'), 'Sign out'));
-}
-
-export function installView() {
-  return h('div', { class: 'm-screen' },
-    h('a', { class: 'm-back', href: '#/more' }, icon('back'), 'More'),
-    h('h1', {}, 'Install the app'),
-    h('div', { class: 'panel' },
-      h('p', {}, 'DriveLoom can live on your home screen and open full screen, like an app.'),
-      h('p', { class: 'muted' }, 'Step-by-step instructions for your phone will appear here soon. Meanwhile, use your browser’s menu: “Add to Home Screen” in Safari’s share menu, or “Install app” in Chrome.')));
 }
