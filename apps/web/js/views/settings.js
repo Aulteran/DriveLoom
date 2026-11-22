@@ -11,12 +11,13 @@ const SECTIONS = [['preferences', 'Preferences', 'sliders'], ['profile', 'Profil
 
 /**
  * Run `fn`; when the server answers reauth_required, ask for the password or
- * an authenticator code, confirm it, and run `fn` once more.
+ * an authenticator code, confirm it, and run `fn` once more. `ask` shows the
+ * prompt and resolves true once /v1/auth/reauth succeeded (the phone passes a sheet).
  */
-export async function withFreshSignIn(fn) {
+export async function withFreshSignIn(fn, ask = reauthDialog) {
   try { return await fn(); } catch (err) {
     if (err.code !== 'reauth_required') throw err;
-    if (!(await reauthDialog())) throw new Error('Confirmation cancelled.');
+    if (!(await ask())) throw new Error('Confirmation cancelled.');
     return fn();
   }
 }
@@ -221,7 +222,8 @@ async function sessionsPanel() {
       s.current ? null : act('Sign out', async () => { await del(`/v1/auth/sessions/${s.id}`); return 'Session signed out.'; })))));
 }
 
-function shortAgent(ua) {
+/** A readable device name from a session's user agent: "Safari on iOS". */
+export function shortAgent(ua) {
   const browser = /Edg\//.test(ua) ? 'Edge' : /Firefox\//.test(ua) ? 'Firefox' : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : 'Browser';
   const os = /Android/.test(ua) ? 'Android' : /iPhone|iPad/.test(ua) ? 'iOS' : /Mac OS X/.test(ua) ? 'macOS' : /Windows/.test(ua) ? 'Windows' : /Linux/.test(ua) ? 'Linux' : '';
   return os ? `${browser} on ${os}` : browser;
