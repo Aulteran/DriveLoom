@@ -583,6 +583,20 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       return { ctx, p, phoneAxe, open };
     };
     const toastSays = (p: Page, text: string | RegExp) => p.locator('#toast').getByText(text).waitFor();
+    /** Every segmented-control button is a full 44px touch target. */
+    const segTargets = async (p: Page) => {
+      for (const b of await p.locator('.m-seg button').all()) assert.ok(((await b.boundingBox())?.height ?? 0) >= 44, 'segmented button under 44px');
+    };
+    /** axe in both themes on what is on screen now, waiting for colour transitions to settle. */
+    const bothThemes = async (p: Page, phoneAxe: (label: string) => Promise<string[]>, label: string) => {
+      const out: string[] = [];
+      for (const colorScheme of ['dark', 'light'] as const) {
+        await p.emulateMedia({ colorScheme });
+        await p.waitForTimeout(1000);
+        out.push(...await phoneAxe(`${label} ${colorScheme}`));
+      }
+      return out;
+    };
 
     await t.test('on a phone, More, Settings, Account and Administration are phone screens', async () => {
       const { ctx, p, phoneAxe, open } = await phonePage();
@@ -636,8 +650,10 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
         await user.waitFor();
         await user.getByLabel('Role').waitFor();
         await user.getByRole('button', { name: 'Disable account' }).click();
+        const sheetFindings = await bothThemes(p, phoneAxe, 'user actions sheet');
         const confirmDisable = p.getByRole('dialog', { name: `Disable ${FRIEND.email}?` });
         await confirmDisable.waitFor();
+        sheetFindings.push(...await bothThemes(p, phoneAxe, 'confirm sheet'));
         await confirmDisable.getByRole('button', { name: 'Cancel' }).click();
         await confirmDisable.waitFor({ state: 'detached' });
         await p.keyboard.press('Escape');
@@ -654,6 +670,8 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
         await linkField.waitFor();
         assert.match(await linkField.inputValue(), /#\/register\?invite=/);
         assert.equal(await overflows(p), false, 'the invitation sheet overflows');
+        sheetFindings.push(...await bothThemes(p, phoneAxe, 'invitation link sheet'));
+        assert.deepEqual(sheetFindings, []);
         await invite.getByRole('button', { name: 'Done' }).click();
         await invite.waitFor({ state: 'detached' });
         await p.getByRole('button', { name: 'Revoke' }).nth(before).waitFor();
@@ -688,9 +706,10 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
     });
 
     await t.test('on a phone, Friends shows requests first, stacked comparison rows and an add sheet', async () => {
-      const { ctx, p, open } = await phonePage();
+      const { ctx, p, phoneAxe, open } = await phonePage();
       try {
         await open('friends');
+        await segTargets(p);
         const requests = p.getByRole('region', { name: /Requests for you/ });
         await requests.getByText(FRIEND.email).waitFor();
         await requests.getByRole('button', { name: 'Accept' }).waitFor();
@@ -707,6 +726,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
         assert.equal(await email.getAttribute('inputmode'), 'email');
         assert.equal(await email.getAttribute('autocapitalize'), 'none');
         assert.equal(await p.evaluate('document.activeElement?.name'), 'email', 'the email field has focus');
+        assert.deepEqual(await bothThemes(p, phoneAxe, 'add friend sheet'), []);
         await p.keyboard.press('Escape');
         await add.waitFor({ state: 'detached' });
         assert.equal(await overflows(p), false);
@@ -727,6 +747,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
           await p.getByRole('heading', { name: 'Install DriveLoom', level: 1 }).waitFor();
           const device = p.getByRole('group', { name: 'Device' });
           assert.equal(await device.getByRole('button', { name: 'iPhone, iPad' }).getAttribute('aria-pressed'), 'true');
+          await segTargets(p);
           await p.getByText('Tap Share').waitFor();
           await p.getByText('Choose Add to Home Screen').waitFor();
           await p.getByText(/It must be Safari/).waitFor();
@@ -787,7 +808,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
     });
 
     await t.test('on a phone, loading shows a skeleton and a failed load offers Try again', async () => {
-      const { ctx, p } = await phonePage({ lenient: true });
+      const { ctx, p, phoneAxe } = await phonePage({ lenient: true });
       try {
         let release: () => void = () => undefined;
         const held = new Promise<void>((r) => { release = r; });
@@ -809,6 +830,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
         await alert.getByText('Details for your admin').click();
         await alert.getByText(/HTTP 502/).waitFor();
         assert.equal(await overflows(p), false);
+        assert.deepEqual(await bothThemes(p, phoneAxe, 'error state'), []);
         await p.unroute('**/v1/admin/users');
         await alert.getByRole('button', { name: 'Try again' }).click();
         await p.getByText(FRIEND.email).waitFor();
@@ -859,7 +881,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
     });
 
     await t.test('on a phone, an update waits for the fill-up sheet and reloads only when asked', async () => {
-      const { ctx, p } = await phonePage();
+      const { ctx, p, phoneAxe } = await phonePage();
       // A second build of the client: one changed byte gives the service worker a new build id.
       const dir = mkdtempSync(path.join(tmpdir(), 'driveloom-web-'));
       cpSync(WEB, dir, { recursive: true });
@@ -890,6 +912,8 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
         await banner.waitFor();
         assert.equal(await p.evaluate('window.__sameDocument === true'), true, 'no reload by itself');
         assert.equal(await overflows(p), false);
+        assert.deepEqual(await bothThemes(p, phoneAxe, 'update banner'), []);
+        assert.equal(await p.evaluate('window.__sameDocument === true'), true, 'still no reload by itself');
         // Reload is the only way in: the new worker takes over and the page reloads once.
         await p.getByRole('button', { name: 'Reload' }).click();
         const until = Date.now() + 8000;
@@ -933,6 +957,16 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
           findings.push(...await phoneAxe(`sign-in ${colorScheme}`));
           assert.equal(await overflows(p), false);
         }
+        // The second step: a numeric one-time code, switchable to a recovery code.
+        await p.goto(`${base}/#/mfa`);
+        await p.getByRole('heading', { name: 'Two-step verification' }).waitFor();
+        const code = p.getByLabel('Authenticator code');
+        assert.equal(await code.getAttribute('inputmode'), 'numeric');
+        assert.equal(await code.getAttribute('autocomplete'), 'one-time-code');
+        await p.getByRole('button', { name: 'Use a recovery code instead' }).click();
+        assert.equal(await p.getByLabel('Recovery code').getAttribute('inputmode'), 'text');
+        assert.equal(await overflows(p), false, '#/mfa overflows');
+        findings.push(...await bothThemes(p, phoneAxe, '#/mfa'));
         for (const hash of ['register', 'recover']) {
           await p.goto(`${base}/#/${hash}`);
           await p.locator('main h1').waitFor();

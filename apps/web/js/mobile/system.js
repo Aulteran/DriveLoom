@@ -29,7 +29,12 @@ const pill = h('div', { class: 'm-conn', hidden: true }, h('span', { class: 'm-c
 const updateBanner = h('div', { class: 'm-banner m-banner-update', hidden: true },
   h('span', { class: 'm-banner-icon' }, icon('refresh')),
   h('p', { class: 'm-banner-text' }, h('strong', {}, 'Update available'), h('span', {}, 'Reload to use the new version.')),
-  h('button', { type: 'button', class: 'm-banner-go', onclick: () => { updateBanner.querySelector('.m-banner-go').disabled = true; applyUpdate(); } }, 'Reload'),
+  h('button', { type: 'button', class: 'm-banner-go', onclick: () => {
+    updateBanner.querySelector('.m-banner-go').disabled = true;
+    applyUpdate();
+    // Another tab may already have activated the new version: then nothing takes over here, so reload anyway.
+    setTimeout(() => location.reload(), 4000);
+  } }, 'Reload'),
   h('button', { type: 'button', class: 'm-icon-btn m-banner-x', 'aria-label': 'Later', onclick: () => { updateDismissed = true; sync(); } }, icon('close')));
 
 const offlineBanner = h('div', { class: 'm-banner m-banner-offline', hidden: true },
@@ -79,7 +84,7 @@ export function startSystem({ head }) {
   navigator.connection?.addEventListener?.('change', sync);
   onUpdateAvailable(() => { updateWaiting = true; sync(); });
 
-  // Unsaved input: any typing in a form marks it until it is submitted, reset or replaced.
+  // Unsaved input: any typing in a form marks it until it is reset or replaced (a save re-renders it).
   const mark = (e) => { const f = e.target?.form ?? e.target?.closest?.('form'); if (f) touched.add(f); };
   document.addEventListener('input', mark, true);
   document.addEventListener('change', mark, true);
@@ -93,7 +98,7 @@ export function startSystem({ head }) {
       toast(OFFLINE_SAVE);
       return;
     }
-    touched.delete(f);
+    // Still unsaved until the screen replaces the form (a failed save keeps the hold).
     setTimeout(sync, 0);
   }, true);
   // `close` does not bubble, so listen in the capture phase for every dialog.
