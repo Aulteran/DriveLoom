@@ -83,7 +83,8 @@ body.m-shell::before { animation: none; }
 .m-tab:active .icon, .m-tab:active .m-fab { transform: scale(.94); }
 .m-tab-label { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The raised centre action rises above the bar; its label lines up with the others. */
-.m-tab-fill { justify-content: flex-end; padding-bottom: 11px; color: var(--text); }
+.m-tab-fill { justify-content: flex-start; color: var(--text); }
+.m-tab-fill .m-fab { margin-top: -20px; }
 .m-tab-fill:hover { color: var(--text); }
 .m-fab {
   flex: none; width: 56px; height: 56px; display: grid; place-items: center; border-radius: 20px;
