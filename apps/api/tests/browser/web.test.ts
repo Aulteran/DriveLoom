@@ -334,7 +334,7 @@ test('web client journeys', { skip, timeout: 180_000 }, async (t: TestContext) =
         await p.getByRole('heading', { name: 'Clio', level: 1 }).waitFor();
         await p.getByRole('button', { name: 'Vehicle: Clio', exact: true }).waitFor();
         await tab('History').click();
-        await p.getByRole('heading', { name: 'Fuel log', level: 1 }).waitFor();
+        await p.getByRole('heading', { name: 'History', level: 1 }).waitFor();
         assert.match(p.url(), /#\/vehicles\/[0-9a-f-]{36}\/log$/);
         assert.notEqual(p.url().split('#/')[1], `${vehicle}/log`, 'History follows the active vehicle');
 
@@ -345,7 +345,7 @@ test('web client journeys', { skip, timeout: 180_000 }, async (t: TestContext) =
         await p.keyboard.press('Escape');
         await fill.waitFor({ state: 'detached' });
         await p.waitForURL(/\/log$/);
-        await p.getByRole('heading', { name: 'Fuel log', level: 1 }).waitFor();
+        await p.getByRole('heading', { name: 'History', level: 1 }).waitFor();
 
         // More leads to Friends, with a way back.
         await tab('More').click();
@@ -454,9 +454,9 @@ test('web client journeys', { skip, timeout: 180_000 }, async (t: TestContext) =
         assert.equal(await drafts(), 0, 'the draft is gone after saving');
         await p.getByRole('heading', { name: 'Golf', level: 1 }).waitFor();
         await p.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'History' }).click();
-        await p.getByRole('heading', { name: 'Fuel log', level: 1 }).waitFor();
-        await p.locator('main tbody tr').first().getByText('11650 km').waitFor();
-        await p.locator('main tbody tr').first().getByText(expected).waitFor();
+        await p.getByRole('heading', { name: 'History', level: 1 }).waitFor();
+        await p.locator('main .m-fill-row').first().getByText('11650 km').waitFor();
+        assert.match(await p.locator('main .m-fill-row').first().innerText(), new RegExp(expected.split(' ')[0]!.replace('.', '\\.')));
 
         // Reopened, it starts from the new reading; untouched, Escape closes it at once.
         await p.getByRole('navigation', { name: 'Main' }).getByRole('link', { name: 'Fill up' }).click();
@@ -495,7 +495,176 @@ test('web client journeys', { skip, timeout: 180_000 }, async (t: TestContext) =
         assert.match(p.url(), /\/log$/);
         await p.keyboard.press('Escape');
         await sheet.waitFor({ state: 'detached' });
-        await p.getByRole('heading', { name: 'Fuel log', level: 1 }).waitFor();
+        await p.getByRole('heading', { name: 'History', level: 1 }).waitFor();
+      } finally { await ctx.close(); }
+    });
+
+    await t.test('on a phone, Home, History and Vehicles are phone-native screens', async () => {
+      const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, storageState: await page.context().storageState() });
+      const p = watch(await ctx.newPage());
+      p.setDefaultTimeout(8000);
+      const phoneAxe = async (label: string) => (await new AxeBuilder({ page: p }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']).analyze())
+        .violations.map((v) => `${label}: ${v.id} (${v.impact}) ${v.nodes.slice(0, 3).map((n) => n.target.join(' ')).join(' | ')}`);
+      const open = async (hash: string) => {
+        await p.goto('about:blank');
+        await p.goto(`${base}/#/${hash}`);
+        await p.waitForLoadState('networkidle');
+        await p.locator('main h1').first().waitFor();
+      };
+      const rows = p.locator('main .m-fill-row');
+      const findings: string[] = [];
+      try {
+        // Home: the latest tank, the trend, the figures and the last fill-ups.
+        await open(vehicle);
+        await p.getByRole('heading', { name: 'Golf', level: 1 }).waitFor();
+        for (const name of ['Latest tank', 'Economy trend', 'Recent fill-ups']) await p.getByRole('heading', { name, exact: false }).first().waitFor();
+        await p.locator('main .m-big').getByText(/^\d+\.\d\d$/).waitFor();
+        for (const k of ['Spent', 'Distance', 'Fuel', 'Cost per distance', 'Fill-ups']) await p.locator('main dt', { hasText: k }).first().waitFor();
+        assert.equal(await rows.count(), 3, 'three recent fill-ups');
+        assert.equal(await overflows(p), false, 'Home overflows');
+        // The period selector is a row of links.
+        await p.getByRole('navigation', { name: 'Period' }).getByRole('link', { name: 'All time' }).click();
+        await p.waitForURL(/window=all/);
+        await p.locator('main .m-seg-opt[aria-current="true"]', { hasText: 'All' }).waitFor();
+        await p.waitForLoadState('networkidle');
+
+        // The chart: tap a point or step with buttons; the readout says the value; a table is the text alternative.
+        const readout = p.locator('main .m-chart-readout').first();
+        const last = await readout.innerText();
+        assert.match(last, /mpg \(US\)/);
+        await p.getByRole('button', { name: 'Previous interval' }).first().click();
+        assert.notEqual(await readout.innerText(), last);
+        const box = (await p.locator('main .m-chart-plot').first().boundingBox())!;
+        await p.mouse.click(box.x + box.width - 16, box.y + box.height / 2);
+        assert.equal(await readout.innerText(), last, 'a tap near the last point picks it');
+        assert.equal(await p.getByRole('button', { name: 'Next interval' }).first().isDisabled(), true);
+        assert.match(await p.locator('main svg[role="img"]').first().getAttribute('aria-label') ?? '', /^Economy in mpg \(US\) for 3 intervals/);
+        await p.locator('main .chart-data summary').first().click();
+        assert.equal(await p.locator('main .chart-data tbody tr').first().locator('td').count(), 2);
+
+        // History: compact rows, filter chips, an empty filter result.
+        await p.getByRole('link', { name: 'See all' }).click();
+        await p.getByRole('heading', { name: 'History', level: 1 }).waitFor();
+        await rows.nth(3).waitFor();
+        assert.equal(await rows.count(), 4);
+        assert.equal(await overflows(p), false, 'History overflows');
+        await p.getByRole('button', { name: 'Partial' }).click();
+        await p.waitForURL(/type=partial/);
+        await p.getByRole('heading', { name: 'No fill-ups match' }).waitFor();
+        assert.equal(await p.getByRole('button', { name: 'Partial' }).getAttribute('aria-pressed'), 'true');
+        await p.getByRole('link', { name: 'Show all fill-ups' }).click();
+        await p.waitForURL(/\/log$/);
+        await rows.nth(3).waitFor();
+        await p.getByRole('button', { name: /^Period: / }).click();
+        await p.getByRole('dialog', { name: 'Period' }).getByRole('button', { name: 'Last 30 days' }).click();
+        await p.waitForURL(/period=30/);
+        await p.getByRole('button', { name: 'Period: Last 30 days' }).waitFor();
+        await rows.first().waitFor();
+        assert.equal(await rows.count(), 3, 'the fill-up 40 days ago is outside the last 30 days');
+
+        // The detail sheet; Edit reopens the fill-up sheet prefilled and saves with explicit buttons.
+        await open(`${vehicle}/log`);
+        await rows.first().click();
+        const detail = p.getByRole('dialog').filter({ hasText: 'Odometer' });
+        await detail.getByText('11650 km').waitFor();
+        await detail.getByText('Interval').waitFor();
+        assert.equal(await overflows(p), false, 'the detail sheet overflows');
+        for (const colorScheme of ['dark', 'light'] as const) {
+          await p.emulateMedia({ colorScheme });
+          await p.waitForTimeout(300);
+          findings.push(...await phoneAxe(`detail sheet ${colorScheme}`));
+        }
+        assert.deepEqual(findings, []);
+        await detail.getByRole('button', { name: 'Edit' }).click();
+        const edit = p.getByRole('dialog', { name: 'Edit fill-up' });
+        await edit.waitFor();
+        assert.equal(await edit.getByLabel('Odometer', { exact: true }).inputValue(), '11650');
+        assert.equal(await edit.getByLabel('Fuel', { exact: true }).inputValue(), '35.5');
+        await edit.getByLabel('Fuel', { exact: true }).fill('36');
+        await edit.getByRole('button', { name: 'Save changes' }).click();
+        await edit.waitFor({ state: 'detached' });
+        await p.locator('#toast').getByText('Fill-up updated', { exact: false }).waitFor();
+        await rows.first().getByText(/^36(\.0+)? L/).waitFor();
+        assert.equal(await rows.count(), 4, 'an edit adds no record');
+
+        // Delete asks in a second sheet that names the date; Cancel keeps it, Delete removes it.
+        await rows.first().click();
+        await detail.getByRole('button', { name: 'Delete' }).click();
+        const confirm = p.getByRole('dialog', { name: 'Delete this fill-up?' });
+        await confirm.getByText('will be removed').waitFor();
+        await confirm.getByRole('button', { name: 'Cancel' }).click();
+        await confirm.waitFor({ state: 'detached' });
+        await detail.getByRole('button', { name: 'Delete' }).click();
+        await confirm.getByRole('button', { name: 'Delete fill-up' }).click();
+        await p.locator('#toast').getByText('Fill-up deleted.').waitFor();
+        await rows.nth(3).waitFor({ state: 'detached' });
+        assert.equal(await rows.count(), 3);
+        assert.equal(await p.locator('dialog[open]').count(), 0, 'every sheet closed');
+
+        // Vehicles: the active vehicle is marked; a row opens the detail hub with chart, monthly cost and sections.
+        await open('garage');
+        await p.getByRole('heading', { name: 'Vehicles', level: 1 }).waitFor();
+        const golfRow = p.locator('main a.m-vrow', { hasText: 'Golf' });
+        assert.equal(await golfRow.getAttribute('aria-current'), 'true');
+        await golfRow.getByText('Active').waitFor();
+        const clio = (await p.locator('main a.m-vrow', { hasText: 'Clio' }).getAttribute('href'))!.split('/')[2]!;
+        await p.getByRole('button', { name: 'Add a vehicle' }).first().click();
+        const add = p.getByRole('dialog', { name: 'Add a vehicle' });
+        await add.getByLabel('Nickname (optional)').waitFor();
+        assert.equal(await overflows(p), false, 'the add sheet overflows');
+        await p.keyboard.press('Escape');
+        await add.waitFor({ state: 'detached' });
+        await golfRow.click();
+        await p.waitForURL(/\/overview$/);
+        await p.getByRole('heading', { name: 'Golf', level: 1 }).waitFor();
+        for (const name of ['Economy', 'Monthly cost', 'This vehicle']) await p.getByRole('heading', { name, exact: true }).waitFor();
+        await p.getByText('Active vehicle for Home, History and Fill up').waitFor();
+        assert.equal(await overflows(p), false, 'the detail hub overflows');
+        await p.getByRole('link', { name: /^Members/ }).click();
+        await p.getByRole('heading', { name: 'Members', level: 1 }).waitFor();
+        await p.locator('main').getByText(ADMIN.email).first().waitFor();
+        await p.getByRole('button', { name: 'Add a member' }).click();
+        await p.getByRole('dialog', { name: 'Share this vehicle' }).getByLabel('Email').waitFor();
+        await p.keyboard.press('Escape');
+        await p.locator('main a.m-back').click();
+        await p.getByRole('link', { name: /^Import & export/ }).click();
+        await p.getByRole('button', { name: /^Download CSV/ }).waitFor();
+        await p.getByRole('button', { name: /^Import fill-ups/ }).click();
+        await p.getByRole('dialog', { name: 'Import fill-ups' }).getByLabel('File').waitFor();
+        await p.keyboard.press('Escape');
+        await open(`${vehicle}/settings`);
+        await p.getByRole('heading', { name: 'Vehicle settings', level: 1 }).waitFor();
+        assert.equal(await p.getByRole('switch', { name: 'Share this vehicle’s economy with my friends' }).isChecked(), true, 'the desktop opt-in shows here');
+        await p.getByRole('button', { name: /^Details/ }).click();
+        assert.equal(await p.getByRole('dialog', { name: 'Vehicle details' }).getByLabel('Nickname (optional)').inputValue(), 'Golf');
+        await p.keyboard.press('Escape');
+
+        // Empty states: the second vehicle has no fill-ups.
+        await open(`vehicles/${clio}`);
+        await p.getByRole('heading', { name: 'No fill-ups yet' }).waitFor();
+        await p.getByRole('link', { name: 'Log a fill-up' }).waitFor();
+        await open(`vehicles/${clio}/log`);
+        await p.getByRole('heading', { name: 'No fill-ups yet' }).waitFor();
+
+        // Every screen fits and passes axe in both themes.
+        const screenFindings: string[] = [];
+        const screens = [vehicle, `${vehicle}/log`, `vehicles/${clio}`, `vehicles/${clio}/log`, 'garage', `${vehicle}/overview`, `${vehicle}/members`, `${vehicle}/data`, `${vehicle}/settings`];
+        for (const colorScheme of ['light', 'dark'] as const) {
+          await p.emulateMedia({ colorScheme });
+          for (const hash of screens) {
+            await open(hash);
+            assert.equal(await overflows(p), false, `#/${hash} overflows (${colorScheme})`);
+            await p.waitForTimeout(200);
+            screenFindings.push(...await phoneAxe(`phone ${colorScheme} #/${hash}`));
+          }
+        }
+        assert.deepEqual(screenFindings, []);
+
+        // A vehicle becomes the active one from its detail hub.
+        await open(`vehicles/${clio}/overview`);
+        await p.getByRole('button', { name: 'Set as active vehicle' }).click();
+        await p.waitForURL(new RegExp(`#/vehicles/${clio}$`));
+        await p.getByRole('button', { name: 'Vehicle: Clio', exact: true }).waitFor();
       } finally { await ctx.close(); }
     });
 
