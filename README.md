@@ -15,7 +15,7 @@ Copy `deploy/.env.example` to `deploy/.env`, fill it in, then:
 docker compose -f deploy/compose.yml --env-file deploy/.env up -d --build
 ```
 
-On Windows, `dev-up.cmd` wraps the same steps in a menu.
+On Windows, `dev-up.cmd` wraps the same steps in a menu. When Tailscale is installed and connected, it also publishes the app on this PC's Tailscale address (`deploy/compose.tailscale.yml`) and prints that URL. Sign-in checks the request origin, so set `DRIVELOOM_PUBLIC_ORIGIN` to the exact address you browse to (for example `http://100.x.y.z:8080`); passkeys need HTTPS.
 
 Work happens on `dev`; merging `dev` into `main` publishes the image to `ghcr.io/aulteran/driveloom`.
 

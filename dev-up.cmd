@@ -13,6 +13,7 @@ set "BASEFILE=deploy\compose.yml"
 set "OVERRIDE=deploy\compose.override.yml"
 set "OVERRIDE_ALT=deploy\compose.override.yaml"
 set "ENVFILE=deploy\.env"
+set "TSFILE=deploy\compose.tailscale.yml"
 set "LOG=%TEMP%\driveloom-dev-up.log"
 
 rem ---- ANSI escape character, for the green banner ---------------------------
@@ -46,6 +47,23 @@ rem Build the compose arguments: base file, optional local override, optional .e
 set "DCARGS=-f %BASEFILE%"
 if exist "%OVERRIDE%" set "DCARGS=%DCARGS% -f %OVERRIDE%"
 if exist "%OVERRIDE_ALT%" set "DCARGS=%DCARGS% -f %OVERRIDE_ALT%"
+
+rem Tailscale: if this PC has a Tailscale IPv4 address, also publish the app on it
+rem (in addition to 127.0.0.1). Skipped quietly when Tailscale is absent or signed out.
+set "TSIP="
+set "TSCLI="
+where tailscale >nul 2>&1
+if not errorlevel 1 set "TSCLI=tailscale"
+if not defined TSCLI if exist "%ProgramFiles%\Tailscale\tailscale.exe" set "TSCLI=%ProgramFiles%\Tailscale\tailscale.exe"
+if defined TSCLI if exist "%TSFILE%" for /f "delims=" %%I in ('"%TSCLI%" ip -4 2^>nul') do if not defined TSIP set "TSIP=%%I"
+if defined TSIP (
+  echo %TSIP%| findstr /r "^[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*$" >nul 2>&1
+  if errorlevel 1 set "TSIP="
+)
+if defined TSIP (
+  set "DRIVELOOM_TAILSCALE_IP=%TSIP%"
+  set "DCARGS=%DCARGS% -f %TSFILE%"
+)
 if exist "%ENVFILE%" (
   set "DCARGS=%DCARGS% --env-file %ENVFILE%"
 ) else (
@@ -186,7 +204,13 @@ if exist "%ENVFILE%" (
 )
 echo.
 echo   On this PC:  http://127.0.0.1:%PORT%
+if defined TSIP echo   Tailscale:   http://%TSIP%:%PORT%
 if defined ORIGIN echo   Public URL:  %ORIGIN%  (through your reverse proxy)
+if not defined TSIP goto :print_url_setup
+if /i "%ORIGIN%"=="http://%TSIP%:%PORT%" goto :print_url_setup
+echo   Note: sign-in only works at the address set as DRIVELOOM_PUBLIC_ORIGIN in %ENVFILE%.
+echo         To sign in over Tailscale, set it to the exact address you browse to.
+:print_url_setup
 echo.
 rem First-run setup: ask the app whether any account exists yet. Prints the token
 rem only while setup is still needed. It is read from deploy\.env and shown on
