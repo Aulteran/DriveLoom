@@ -1362,10 +1362,17 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
 
       // Attachments: the staged receipt arrived; add a PDF to the saved visit, preview, rename, remove.
       await card.getByRole('list', { name: 'Attachments' }).getByText('receipt.png').waitFor();
-      await card.locator('input[type=file]').setInputFiles({ name: 'invoice.pdf', mimeType: 'application/pdf', buffer: TINY_PDF });
+      // The history card never offers adding; files are added from the edit form only.
+      assert.equal(await card.locator('input[type=file]').count(), 0, 'no file picker on the history card');
+      assert.equal(await card.getByRole('button', { name: /^Choose files/ }).count(), 0);
+      await card.getByRole('button', { name: /^Edit service visit/ }).click();
+      await page.getByRole('button', { name: 'Choose files to attach to this service visit' }).waitFor();
+      await page.locator('.svc-form input[type=file]').setInputFiles({ name: 'invoice.pdf', mimeType: 'application/pdf', buffer: TINY_PDF });
+      await page.locator('.svc-form').getByText('invoice.pdf').waitFor();
+      await page.locator('.svc-form input[type=file]').setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('hello') });
+      await page.getByText('"notes.txt" is not a PDF, JPEG or PNG file.').waitFor();
+      await page.getByRole('button', { name: 'Save changes' }).click();
       await card.getByText('invoice.pdf').waitFor();
-      await card.locator('input[type=file]').setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('hello') });
-      await card.getByText('"notes.txt" is not a PDF, JPEG or PNG file.').waitFor();
       assert.deepEqual(await axe('service list with attachments'), []);
       await card.getByRole('button', { name: 'Preview receipt.png' }).click();
       const preview = page.getByRole('dialog', { name: 'Preview of receipt.png' });
