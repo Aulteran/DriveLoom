@@ -64,9 +64,11 @@ async function open(v, visitId, a) {
 
 /**
  * Attachments of a saved visit: list with preview, download, rename and remove,
- * and (when `mayChange`) adding. Changes go to the server at once.
+ * and (when `mayChange`) renaming and removing. Adding files is offered only when
+ * `canAdd` is set, which is the edit form; the history view passes false. Changes
+ * go to the server at once.
  */
-export function attachmentsPanel(v, visit, { mayChange, phone = false, heading = true } = {}) {
+export function attachmentsPanel(v, visit, { mayChange, canAdd = false, phone = false, heading = true } = {}) {
   const label = 'this service visit';
   const list = h('ul', { class: 'att-list', 'aria-label': 'Attachments' });
   const status = h('ul', { class: 'att-status small', 'aria-live': 'polite' });
@@ -77,7 +79,7 @@ export function attachmentsPanel(v, visit, { mayChange, phone = false, heading =
   const draw = () => {
     list.replaceChildren(...visit.attachments.map(row));
     list.hidden = !visit.attachments.length;
-    note.textContent = mayChange ? `PDF, JPEG or PNG, up to ${fileSize(ATTACH_MAX_BYTES)} each, ${visit.attachments.length} of ${ATTACH_MAX_FILES} used.` : '';
+    note.textContent = canAdd ? `PDF, JPEG or PNG, up to ${fileSize(ATTACH_MAX_BYTES)} each, ${visit.attachments.length} of ${ATTACH_MAX_FILES} used.` : '';
   };
   const row = (a) => {
     const name = h('span', { class: 'att-name' }, a.fileName);
@@ -123,7 +125,7 @@ export function attachmentsPanel(v, visit, { mayChange, phone = false, heading =
     setTimeout(() => { for (const li of [...status.children]) if (!li.classList.contains('att-bad')) li.remove(); }, 4000);
   };
   const note = h('p', { class: 'small muted' });
-  root.append(heading ? h('h3', { class: 'att-h' }, 'Attachments') : null, list, mayChange ? picker(label, phone, add) : null, mayChange ? note : null, status, errors);
+  root.append(heading ? h('h3', { class: 'att-h' }, 'Attachments') : null, list, canAdd ? picker(label, phone, add) : null, canAdd ? note : null, status, errors);
   visit.attachments ??= [];
   draw();
   return root;

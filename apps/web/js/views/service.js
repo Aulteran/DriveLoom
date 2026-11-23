@@ -73,7 +73,7 @@ export function visitForm(v, existing, done, { phone = false, tasks = [], prefil
   diy.addEventListener('change', () => { provider.placeholder = diy.checked ? 'Optional: where parts came from' : ''; });
   // A saved visit manages its files right away; a new one stages them until it exists.
   const staged = existing ? null : stagedAttachments({ phone });
-  const attach = existing ? attachmentsPanel(v, existing, { mayChange: true, phone }) : staged.el;
+  const attach = existing ? attachmentsPanel(v, existing, { mayChange: true, canAdd: true, phone }) : staged.el;
   const el = form({ class: 'panel svc-form' }, [
     h('h2', {}, existing ? 'Edit service visit' : 'Add a service visit'),
     h('datalist', { id: listId }, PRESETS.map((p) => h('option', { value: p }))),
@@ -137,7 +137,7 @@ export function visitCard(v, visit, { onEdit, onDelete, mayChange, phone = false
       i.category !== 'other' ? h('span', { class: 'svc-chip-cat' }, CATEGORY_LABEL[i.category]) : null,
       i.cost !== null ? h('span', { class: 'svc-chip-cost' }, money(i.cost, visit.currency)) : null))),
     visit.notes ? h('p', { class: 'small muted svc-notes' }, visit.notes) : null,
-    visit.attachments?.length || mayChange ? attachmentsPanel(v, visit, { mayChange, phone }) : null,
+    visit.attachments?.length ? attachmentsPanel(v, visit, { mayChange, phone }) : null,
     mayChange ? h('div', { class: 'row' },
       h('button', { class: 'ghost', 'aria-label': `Edit service visit of ${title}`, onclick: () => onEdit(visit) }, 'Edit'),
       h('button', { class: 'ghost', 'aria-label': `Delete service visit of ${title}`, onclick: () => onDelete(visit) }, 'Delete')) : null);
