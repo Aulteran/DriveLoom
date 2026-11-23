@@ -7,6 +7,7 @@ import type { MaintenanceService } from './maintenance.ts';
 export function maintenanceRoutes(svc: MaintenanceService): Route[] {
   const who = (r: HttpRequest) => requirePrincipal(r.ctx);
   const base = '/v1/vehicles/:vehicleId/maintenance-tasks';
+  const presets = '/v1/vehicles/:vehicleId/maintenance/presets';
   const scope = (r: HttpRequest) => r.query.get('scope') ?? undefined;
   return [
     { method: 'GET', path: '/v1/maintenance-catalog', async handler(r) { return { status: 200, body: await svc.catalog(who(r)) }; } },
@@ -22,5 +23,11 @@ export function maintenanceRoutes(svc: MaintenanceService): Route[] {
     { method: 'DELETE', path: `${base}/:taskId`, async handler(r) { await svc.remove(who(r), r.params['vehicleId'], r.params['taskId']); return { status: 204 }; } },
     { method: 'PUT', path: `${base}/:taskId/snooze`, async handler(r) { return { status: 200, body: await svc.setSnooze(who(r), r.params['vehicleId'], r.params['taskId'], scope(r), r.body) }; } },
     { method: 'DELETE', path: `${base}/:taskId/snooze`, async handler(r) { return { status: 200, body: await svc.clearSnooze(who(r), r.params['vehicleId'], r.params['taskId'], scope(r)) }; } },
+    { method: 'GET', path: presets, async handler(r) { return { status: 200, body: await svc.presets(who(r), r.params['vehicleId'], r.query.get('market') ?? undefined) }; } },
+    { method: 'POST', path: `${presets}/:presetId/apply`, async handler(r) {
+      const pv = r.query.get('preview');
+      if (pv !== null && pv !== 'true' && pv !== 'false') throw invalid('preview must be true or false.');
+      return { status: 200, body: await svc.applyPreset(who(r), r.params['vehicleId'], r.params['presetId'], r.body, pv === 'true') };
+    } },
   ];
 }

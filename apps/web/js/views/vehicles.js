@@ -1,5 +1,6 @@
 // The garage (every vehicle the user is a member of, plus create and import)
 // and the first-run welcome screen shown before any vehicle exists.
+import { makeModelFields } from '../identity.js';
 import { post } from '../api.js';
 import { h, form, field, select } from '../ui.js';
 import { go, state } from '../core.js';
@@ -23,8 +24,7 @@ export function createForm(hidden) {
     h('h2', {}, 'Add a vehicle'),
     h('div', { class: 'grid' },
       field('Nickname (optional)', h('input', { name: 'name', maxlength: 80, placeholder: 'Daily driver' }), 'Without one, the plate, year and model identify the vehicle.'),
-      field('Make', h('input', { name: 'make', maxlength: 80 })),
-      field('Model', h('input', { name: 'model', maxlength: 80 })),
+      makeModelFields(),
       field('Year', h('input', { name: 'year', type: 'number', min: 1886, max: new Date().getFullYear() + 2 })),
       field('State or province (optional)', h('input', { name: 'plateRegion', maxlength: 10, placeholder: 'ON', autocomplete: 'off' })),
       field('Licence plate (optional)', h('input', { name: 'plateNumber', maxlength: 12, placeholder: 'CXPZ101', autocomplete: 'off' })),

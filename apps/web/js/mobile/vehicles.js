@@ -3,6 +3,7 @@
 // as list rows and sheets: members, import and export, vehicle settings
 // (#/vehicles/:id/members|data|settings). Forms reuse the desktop's create
 // and import logic; every change goes through the same API calls.
+import { makeModelFields } from '../identity.js';
 import { api, get, post, put, patch, del } from '../api.js';
 import { h, form, field, select, toast, download } from '../ui.js';
 import { icon } from '../icons.js';
@@ -272,8 +273,7 @@ async function settingsBody(v) {
 
   const openDetails = () => formSheet('Vehicle details', form({ class: 'm-form' }, [
     field('Nickname (optional)', h('input', { name: 'name', maxlength: 80, value: v.name ?? '' })),
-    field('Make', h('input', { name: 'make', maxlength: 80, value: v.make ?? '' })),
-    field('Model', h('input', { name: 'model', maxlength: 80, value: v.model ?? '' })),
+    makeModelFields(v),
     field('Year', h('input', { name: 'year', type: 'number', inputmode: 'numeric', value: v.year ?? '' })),
     field('State or province (optional)', h('input', { name: 'plateRegion', maxlength: 10, value: v.plateRegion ?? '', autocomplete: 'off' })),
     field('Licence plate (optional)', h('input', { name: 'plateNumber', maxlength: 12, value: v.plateNumber ?? '', autocomplete: 'off' })),

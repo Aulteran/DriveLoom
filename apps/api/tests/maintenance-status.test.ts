@@ -3,7 +3,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Dec } from '../src/decimal.ts';
-import { addDays, computeStatus, effectiveSnoozes, needsAttention, snoozeActive, LEAD_DAYS, type TaskSchedule } from '../src/service/maintenance-status.ts';
+import { addDays, addInterval, addMonths, computeStatus, effectiveSnoozes, needsAttention, snoozeActive, LEAD_DAYS, type TaskSchedule } from '../src/service/maintenance-status.ts';
+import { KM_PER, fromKm } from '../src/units.ts';
 
 const TODAY = '2026-06-15';
 const km = (n: number | string) => Dec.parse(String(n));
@@ -127,4 +128,99 @@ test('snoozes end by date or by odometer, whichever comes first, and never alter
   // The status itself is computed without any snooze input.
   const t = sched({ intervalDays: 30 });
   assert.equal(st(t, { servicedOn: '2026-01-01', odometerKm: null }, null).state, 'overdue');
+});
+
+// ---------- calendar months and task baselines (presets, Phase A) ----------
+test('calendar months: whole months with end-of-month clamping, in UTC', () => {
+  assert.equal(addMonths('2024-05-10', 36), '2027-05-10');
+  assert.equal(addMonths('2024-01-31', 1), '2024-02-29', 'leap year February');
+  assert.equal(addMonths('2023-01-31', 1), '2023-02-28');
+  assert.equal(addMonths('2024-02-29', 12), '2025-02-28', 'leap day to a common year');
+  assert.equal(addMonths('2024-02-29', 48), '2028-02-29', 'leap day to a leap year');
+  assert.equal(addMonths('2024-03-31', 1), '2024-04-30');
+  assert.equal(addMonths('2024-12-15', 1), '2025-01-15', 'across the year end');
+  assert.equal(addMonths('2024-08-31', 6), '2025-02-28');
+  assert.equal(addMonths('2024-01-01', 1200), '2124-01-01');
+});
+
+test('acceptance 2: brake fluid every 36 months from a reported 2024-05-10 is next due 2027-05-10', () => {
+  const t = sched({ intervalMonths: 36, baseline: { kind: 'reported', on: '2024-05-10', odometerKm: null } });
+  const s = st(t, null, null);
+  assert.equal(s.baseline, 'reported'); assert.equal(s.dueOn, '2027-05-10'); assert.equal(s.state, 'ok', 'a reported service counts like a completion');
+  assert.equal(s.readingStale, false, 'time-only needs no reading');
+  // Month-end and leap cases through the status, not only the helper.
+  assert.equal(st(sched({ intervalMonths: 1, baseline: { kind: 'reported', on: '2024-01-31', odometerKm: null } }), null, null).dueOn, '2024-02-29');
+  assert.equal(st(sched({ intervalMonths: 12, baseline: { kind: 'reported', on: '2024-02-29', odometerKm: null } }), null, null).dueOn, '2025-02-28');
+  // Months work from a linked completion too.
+  assert.equal(st(sched({ intervalMonths: 6 }), { servicedOn: '2026-01-31', odometerKm: null }, null).dueOn, '2026-07-31');
+  assert.equal(st(sched({ intervalMonths: 6 }), { servicedOn: '2025-08-31', odometerKm: null }, null).dueOn, '2026-02-28');
+});
+
+test('baseline priority: linked completion > reported > tracking > first due > none', () => {
+  const reported = { kind: 'reported' as const, on: '2026-01-01', odometerKm: km(10000) };
+  const tracking = { kind: 'tracking' as const, on: '2026-03-01', odometerKm: km(12000) };
+  const base = { intervalMonths: 12, intervalDistanceKm: km(8000), firstDueOn: '2026-07-01', firstDueOdometerKm: km(20000) };
+  const r = reading(13000);
+  const withLast = st(sched({ ...base, baseline: reported }), { servicedOn: '2026-02-01', odometerKm: km(11000) }, r);
+  assert.equal(withLast.baseline, 'completion'); assert.equal(withLast.dueOn, '2027-02-01'); assert.equal(withLast.dueOdometerKm?.toFixed(0), '19000');
+  const rep = st(sched({ ...base, baseline: reported }), null, r);
+  assert.equal(rep.baseline, 'reported'); assert.equal(rep.dueOn, '2027-01-01'); assert.equal(rep.dueOdometerKm?.toFixed(0), '18000'); assert.equal(rep.state, 'ok');
+  const tr = st(sched({ ...base, baseline: tracking }), null, r);
+  assert.equal(tr.baseline, 'tracking'); assert.equal(tr.dueOn, '2027-03-01'); assert.equal(tr.dueOdometerKm?.toFixed(0), '20000');
+  const fd = st(sched(base), null, r);
+  assert.equal(fd.baseline, 'first_due'); assert.equal(fd.dueOn, '2026-07-01');
+  assert.equal(st(sched({ intervalMonths: 12 }), null, r).baseline, 'none');
+  // Priority is by kind, never by date: an older linked completion still wins over a newer reported date.
+  const older = st(sched({ intervalMonths: 12, baseline: { kind: 'reported', on: '2026-05-01', odometerKm: null } }), { servicedOn: '2025-01-01', odometerKm: null }, null);
+  assert.equal(older.baseline, 'completion'); assert.equal(older.state, 'overdue');
+});
+
+test('a tracking baseline is never ok, but can still show due soon or overdue', () => {
+  const fresh = st(sched({ intervalMonths: 6, baseline: { kind: 'tracking', on: TODAY, odometerKm: null } }), null, null);
+  assert.equal(fresh.state, 'no_baseline', 'just started tracking: not up to date');
+  assert.equal(fresh.baseline, 'tracking'); assert.equal(fresh.dueOn, '2026-12-15', 'the provisional due point is still shown');
+  assert.equal(needsAttention(fresh.state), false);
+  const distOnly = st(sched({ intervalDistanceKm: km(8000), baseline: { kind: 'tracking', on: null, odometerKm: km(50000) } }), null, reading(51000));
+  assert.equal(distOnly.state, 'no_baseline'); assert.equal(distOnly.dueOdometerKm?.toFixed(0), '58000');
+  const late = st(sched({ intervalMonths: 6, baseline: { kind: 'tracking', on: '2025-11-01', odometerKm: null } }), null, null);
+  assert.equal(late.state, 'overdue', 'the real last service can only have been earlier, so overdue is certain');
+  const soon = st(sched({ intervalMonths: 6, baseline: { kind: 'tracking', on: '2026-01-01', odometerKm: null } }), null, null);
+  assert.equal(soon.state, 'due_soon');
+  const unknown = st(sched({ intervalDistanceKm: km(8000), baseline: { kind: 'tracking', on: null, odometerKm: km(50000) } }), null, null);
+  assert.equal(unknown.state, 'unknown_reading', 'no reading: unknown, not ok');
+});
+
+test('a reported baseline without the odometer a distance interval needs leaves that side unknown (as a completion would)', () => {
+  const s = st(sched({ intervalMonths: 6, intervalDistanceKm: km(8000), baseline: { kind: 'reported', on: '2026-03-01', odometerKm: null } }), null, reading(50000));
+  assert.equal(s.dueOn, '2026-09-01'); assert.equal(s.dueOdometerKm, null); assert.equal(s.distanceBaselineMissing, true); assert.equal(s.state, 'ok', 'the known time side decides');
+  const none = st(sched({ intervalDistanceKm: km(8000), baseline: { kind: 'reported', on: '2026-03-01', odometerKm: null } }), null, reading(50000));
+  assert.equal(none.state, 'no_baseline'); assert.equal(none.baseline, 'reported'); assert.equal(none.distanceBaselineMissing, true);
+  const odoOnly = st(sched({ intervalMonths: 6, baseline: { kind: 'reported', on: null, odometerKm: km(40000) } }), null, null);
+  assert.equal(odoOnly.state, 'no_baseline', 'a time interval with no reported date has nothing to count from');
+});
+
+test('acceptance 3: oil every 5000 mi or 6 months resets from the ACTUAL completion, not the planned point', () => {
+  const mi = (n: number) => km(n).mul(KM_PER.mi);
+  const t = sched({ intervalMonths: 6, intervalDistanceKm: mi(5000), baseline: { kind: 'reported', on: '2026-01-10', odometerKm: mi(60000) } });
+  // Planned: 65000 mi or 2026-07-10. Done early, at 64200 mi on 2026-05-20 (4200 mi after the previous one).
+  const s = st(t, { servicedOn: '2026-05-20', odometerKm: mi(64200) }, { km: mi(64300), on: TODAY }, 'mi');
+  assert.equal(s.baseline, 'completion'); assert.equal(s.dueOn, '2026-11-20');
+  assert.equal(fromKm(s.dueOdometerKm!, 'mi').toFixed(0), '69200', 'next threshold from the actual completion odometer');
+  assert.equal(s.state, 'ok');
+});
+
+test('acceptance 5: a completion without an odometer leaves the distance side unknown; a stale reading is flagged', () => {
+  const t = sched({ intervalMonths: 6, intervalDistanceKm: km(8000) });
+  const s = st(t, { servicedOn: '2026-05-01', odometerKm: null }, reading(50000, '2026-01-01'));
+  assert.equal(s.distanceBaselineMissing, true); assert.equal(s.dueOdometerKm, null); assert.equal(s.dueOn, '2026-11-01');
+  const stale = st(sched({ intervalDistanceKm: km(8000) }), { servicedOn: '2026-05-01', odometerKm: km(45000) }, reading(46000, '2026-01-01'));
+  assert.equal(stale.readingStale, true); assert.equal(stale.state, 'unknown_reading', 'an old reading never shows a distance as ok');
+});
+
+test('one-time tasks ignore a baseline; days and months are interchangeable time intervals', () => {
+  const once = st(sched({ recurring: false, firstDueOn: '2026-07-01', baseline: { kind: 'reported', on: '2026-01-01', odometerKm: null } }), null, null);
+  assert.equal(once.baseline, 'first_due');
+  assert.equal(addInterval('2026-01-31', { intervalDays: null, intervalMonths: 1 }), '2026-02-28');
+  assert.equal(addInterval('2026-01-31', { intervalDays: 30, intervalMonths: null }), '2026-03-02');
+  assert.equal(addInterval('2026-01-31', { intervalDays: null, intervalMonths: null }), null);
 });
