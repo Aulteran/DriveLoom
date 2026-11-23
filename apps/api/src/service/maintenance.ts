@@ -30,6 +30,9 @@ import {
   type BaselineKind, type Completion, type TaskState, type TaskStatus,
 } from './maintenance-status.ts';
 import { latestKnownOdometer, type KnownOdometer } from './odometer.ts';
+import {
+  DEFAULT_MARKET, bundledPresets, importedTask, matchPresets, missingIdentity, presetTaskBody, similarTask, suggestedItems, type ExistingTask, type Preset,
+} from './presets.ts';
 
 type Q = Pick<pg.Pool, 'query'>;
 export const TASK_FIELDS = ['name', 'catalogKey', 'recurring', 'intervalDays', 'intervalMonths', 'intervalDistance', 'firstDueOn', 'firstDueOdometer', 'notes',
@@ -386,7 +389,10 @@ export class MaintenanceService {
   readonly #pool: pg.Pool;
   readonly #vehicles: VehicleService;
   readonly #now: () => Date;
-  constructor(pool: pg.Pool, vehicles: VehicleService, now: () => Date = () => new Date()) { this.#pool = pool; this.#vehicles = vehicles; this.#now = now; }
+  readonly #presets: readonly Preset[];
+  constructor(pool: pg.Pool, vehicles: VehicleService, now: () => Date = () => new Date(), presets: readonly Preset[] = bundledPresets()) {
+    this.#pool = pool; this.#vehicles = vehicles; this.#now = now; this.#presets = presets;
+  }
 
   /** Names only: DriveLoom ships no manufacturer intervals. The lead thresholds are illustrative defaults, not safety guidance. */
   async catalog(p: Principal): Promise<{ items: { key: string; name: string }[]; defaults: { leadDays: number; leadDistance: Distance; staleReadingDays: number } }> {
@@ -432,7 +438,8 @@ export class MaintenanceService {
     };
   }
 
-  async #write<T>(p: Principal, vehicleId: unknown, fn: (c: pg.PoolClient, v: VehicleAccess) => Promise<T>, allow: (role: VehicleAccess['role']) => string | null): Promise<T> {
+  /** One transaction with the vehicle row locked. `rollback` runs everything (validation included) and then discards it: a preview. */
+  async #write<T>(p: Principal, vehicleId: unknown, fn: (c: pg.PoolClient, v: VehicleAccess) => Promise<T>, allow: (role: VehicleAccess['role']) => string | null, o: { rollback?: boolean } = {}): Promise<T> {
     await requireModule(this.#pool, 'service');
     const c = await this.#pool.connect();
     try {
@@ -442,7 +449,7 @@ export class MaintenanceService {
       if (denied) throw forbidden(denied);
       if (v.archived) throw new HttpProblem(409, 'vehicle_archived', 'Conflict', 'This vehicle is archived. Unarchive it to change its records.');
       const out = await fn(c, v);
-      await c.query('COMMIT');
+      await c.query(o.rollback ? 'ROLLBACK' : 'COMMIT');
       return out;
     } catch (e) { await c.query('ROLLBACK').catch(() => undefined); throw e; } finally { c.release(); }
   }
@@ -551,6 +558,235 @@ export class MaintenanceService {
       return this.#one(c, v, p, cur.id);
     }, (role) => (sc === 'vehicle' && !canManageSchedules(role) ? 'Only owners and managers can clear a snooze for everyone.' : null));
   }
+
+  // ---------- presets ----------
+
+  /**
+   * Presets matching this vehicle (normalised make and model, year, market), each
+   * task annotated with what the vehicle already has: the task made from it
+   * (`alreadyImported`), a similar typed-in task (`existingTaskMatch`) and
+   * unlinked service items that might be its last completion. Read-only; any member.
+   */
+  async presets(p: Principal, vehicleId: unknown, market: unknown): Promise<PresetList> {
+    await requireModule(this.#pool, 'service');
+    const mk = parseMarket(market);
+    const v = await this.#vehicles.access(this.#pool, p, vehicleId);
+    const veh = (await this.#pool.query<{ make: string | null; model: string | null; model_year: number | null }>('SELECT make, model, model_year FROM vehicles WHERE id = $1', [v.id])).rows[0]!;
+    const ident = { make: veh.make, model: veh.model, year: veh.model_year };
+    const missing = missingIdentity(ident);
+    const matches = matchPresets(this.#presets, ident, mk);
+    const out: PresetList = { market: mk, vehicle: ident, missing, canApply: canManageSchedules(v.role) && !v.archived, items: [] };
+    if (!matches.length) return out;
+    const [tasks, items] = await Promise.all([existingTasks(this.#pool, v.id), this.#pool.query<{ id: Id; name: string; visit_id: Id; serviced_on: string; odometer_input: string | null; odometer_unit: DistanceUnit | null }>(
+      `SELECT i.id, i.name, v.id AS visit_id, v.serviced_on::text, v.odometer_input::text, v.odometer_unit
+         FROM service_items i JOIN service_visits v ON v.id = i.visit_id
+        WHERE v.vehicle_id = $1 AND i.task_id IS NULL ORDER BY v.serviced_on DESC, v.created_at DESC, i.position LIMIT 1000`, [v.id])]);
+    out.items = matches.map((pr) => ({
+      id: pr.id, version: pr.version, market: pr.market, make: pr.make, model: pr.model, year: pr.year ?? null, yearRange: pr.yearRange ?? null,
+      reviewedOn: pr.reviewedOn, sources: pr.sources.map((s) => ({ title: s.title, url: s.url, kind: s.kind, note: s.note ?? null })),
+      needsQualifier: pr.variants ?? [],
+      tasks: pr.tasks.map((t) => {
+        const done = importedTask(tasks, pr.id, t.id), similar = done ? null : similarTask(tasks, t);
+        return {
+          id: t.id, name: t.name, catalogKey: t.catalogKey ?? null, description: t.description,
+          rule: { months: t.rule.months ?? null, distance: t.rule.distance ?? null }, trust: t.trust, sourceNote: t.sourceNote, severity: t.severity ?? null,
+          alreadyImported: done ? { taskId: done.id, name: done.name, presetVersion: done.preset_version!, archived: done.archived } : null,
+          existingTaskMatch: similar ? { taskId: similar.task.id, name: similar.task.name, matchedBy: similar.matchedBy } : null,
+          suggestedServiceItems: done ? [] : suggestedItems(items.rows, t).map((i) => ({ id: i.id, name: i.name, visitId: i.visit_id, servicedOn: i.serviced_on, odometer: dist(i.odometer_input, i.odometer_unit) })),
+        };
+      }),
+    }));
+    return out;
+  }
+
+  /**
+   * Turns the selected preset tasks into ordinary tasks of this vehicle, in one
+   * transaction: all or nothing. Each new task carries the preset provenance and
+   * trust label, starts with email reminders off, and gets the interval from the
+   * preset or the owner's override and the baseline the owner chose. Nothing
+   * touches odometer or fuel data and nothing is sent. A task this vehicle already
+   * made from the same preset task is skipped (never duplicated or overwritten);
+   * a similar typed-in task is skipped, or with onDuplicate `link` gets only the
+   * provenance attached. `preview` does all of it, reports the resulting status,
+   * and rolls back.
+   */
+  async applyPreset(p: Principal, vehicleId: unknown, presetId: unknown, body: unknown, preview: boolean): Promise<PresetApplyResult> {
+    const b = obj(body, ['variant', 'tasks']);
+    return this.#write(p, vehicleId, async (c, v) => {
+      const pr = this.#presets.find((x) => x.id === presetId);
+      if (!pr) throw new HttpProblem(404, 'maintenance_preset_not_found', 'Maintenance preset not found');
+      const veh = (await c.query<{ make: string | null; model: string | null; model_year: number | null; odometer_unit: DistanceUnit }>(
+        'SELECT make, model, model_year, odometer_unit FROM vehicles WHERE id = $1', [v.id])).rows[0]!;
+      if (!matchPresets([pr], { make: veh.make, model: veh.model, year: veh.model_year }, pr.market).length) {
+        throw new HttpProblem(422, 'maintenance_preset_not_applicable', 'Validation failed', "This preset does not match the vehicle's make, model and year.");
+      }
+      const variant = parseVariant(pr, b['variant']);
+      const sel = parseSelection(pr, b['tasks']);
+      const now = this.#now(), today = utcDate(now);
+      const reading = await latestKnownOdometer(c, v.id);
+      const rows = await existingTasks(c, v.id);
+      let count = Number((await c.query<{ n: string }>('SELECT count(*) AS n FROM maintenance_tasks WHERE vehicle_id = $1', [v.id])).rows[0]!.n);
+      const linkedTasks = new Set<Id>(), linkedItems = new Set<Id>();
+      const results: { presetTaskId: string; result: 'created' | 'linked' | 'skipped'; reason: string | null; taskId: Id; created: boolean }[] = [];
+      for (const [i, s] of sel.entries()) {
+        const t = pr.tasks.find((x) => x.id === s.presetTaskId)!;
+        const done = importedTask(rows, pr.id, t.id);
+        if (done) { results.push({ presetTaskId: t.id, result: 'skipped', reason: 'already_imported', taskId: done.id, created: false }); continue; }
+        const similar = similarTask(rows.filter((r) => !linkedTasks.has(r.id)), t);
+        if (similar) {
+          if (s.onDuplicate === 'link') {
+            // Provenance only: the owner's interval, baseline, reminders, notes and snoozes stay exactly as they were.
+            await presetConflict(() => c.query('UPDATE maintenance_tasks SET preset_id = $2, preset_version = $3, preset_task_id = $4, updated_at = now() WHERE id = $1',
+              [similar.task.id, pr.id, pr.version, t.id]));
+            linkedTasks.add(similar.task.id);
+            results.push({ presetTaskId: t.id, result: 'linked', reason: 'existing_task', taskId: similar.task.id, created: false });
+          } else results.push({ presetTaskId: t.id, result: 'skipped', reason: 'existing_task', taskId: similar.task.id, created: false });
+          continue;
+        }
+        const at = `tasks[${i}]`;
+        const draft: Record<string, unknown> = presetTaskBody(pr, t);
+        if (s.overrides) {
+          for (const k of ['intervalMonths', 'intervalDistance'] as const) if (k in s.overrides) draft[k] = s.overrides[k];
+          // An interval the owner changed is theirs, not the preset's: it loses the trust label.
+          if (JSON.stringify([draft['intervalMonths'], draft['intervalDistance']]) !== JSON.stringify([t.rule.months ?? null, t.rule.distance ?? null])) draft['sourceTrust'] = null;
+        }
+        if (s.baseline.kind === 'tracking') {
+          // "Start tracking now": today, plus the latest known odometer when it is recent. Copied, never written back.
+          draft['baselineKind'] = 'tracking'; draft['baselineOn'] = today;
+          if (reading && daysBetween(reading.on, today) <= STALE_READING_DAYS) draft['baselineOdometer'] = { value: fromKm(reading.km, veh.odometer_unit).toFixed(0), unit: veh.odometer_unit };
+        } else if (s.baseline.kind === 'reported' && (s.baseline.on !== undefined || s.baseline.odometer !== undefined)) {
+          draft['baselineKind'] = 'reported'; draft['baselineOn'] = s.baseline.on ?? null; draft['baselineOdometer'] = s.baseline.odometer ?? null;
+        }
+        let f: ParsedTask;
+        try { f = parseTask(draft, now); } catch (e) { throw e instanceof HttpProblem ? invalid(`${at}: ${e.message}`) : e; }
+        if (count >= MAX_TASKS) throw invalid(`A vehicle allows at most ${MAX_TASKS} maintenance tasks.`);
+        const id = await insertTask(c, v.id, f, p.userId);
+        count++;
+        if (s.baseline.kind === 'reported' && s.baseline.linkServiceItemId !== undefined) {
+          const item = s.baseline.linkServiceItemId;
+          if (linkedItems.has(item)) throw invalid(`${at}.baseline.linkServiceItemId is already linked to another task in this request.`);
+          const n = (await c.query(`UPDATE service_items i SET task_id = $1 FROM service_visits sv
+            WHERE i.id = $2 AND sv.id = i.visit_id AND sv.vehicle_id = $3 AND i.task_id IS NULL`, [id, item, v.id])).rowCount;
+          if (!n) throw invalid(`${at}.baseline.linkServiceItemId must be a service item of this vehicle that is not linked to a task yet.`);
+          linkedItems.add(item);
+        }
+        results.push({ presetTaskId: t.id, result: 'created', reason: null, taskId: id, created: true });
+      }
+      if (!preview) {
+        await this.#audit(c, p, 'maintenance_preset.apply', v.id, {
+          presetId: pr.id, presetVersion: pr.version, ...(variant ? { variant } : {}), results: results.map((r) => ({ presetTaskId: r.presetTaskId, result: r.result, taskId: r.taskId })),
+        });
+      }
+      const e = await evaluateTasks(c, v.id, p.userId, now, { includeArchived: true });
+      const byId = new Map(e.tasks.map((t) => [t.id, t]));
+      return {
+        presetId: pr.id, presetVersion: pr.version, variant, preview,
+        reading: readingView(e),
+        results: results.map((r) => {
+          const t = byId.get(r.taskId)!;
+          return {
+            presetTaskId: r.presetTaskId, result: r.result, reason: r.reason, taskId: preview && r.created ? null : r.taskId, name: t.name,
+            intervalMonths: t.intervalMonths, intervalDays: t.intervalDays, intervalDistance: t.intervalDistance, remindersEnabled: t.remindersEnabled, sourceTrust: t.sourceTrust,
+            baselineKind: t.baselineKind, status: t.status, dueOn: t.dueOn, dueOdometer: t.dueOdometer, daysUntilDue: t.daysUntilDue, distanceUntilDue: t.distanceUntilDue,
+            baseline: t.baseline, distanceBaselineMissing: t.distanceBaselineMissing, readingStale: t.readingStale, lastCompleted: t.lastCompleted,
+          };
+        }),
+      };
+    }, this.#manage, { rollback: preview });
+  }
+}
+
+const readingView = (e: Evaluation) => (e.reading
+  ? { odometer: asView(e.reading.km, e.odometerUnit), on: e.reading.on, source: e.reading.source, stale: daysBetween(e.reading.on, e.today) > STALE_READING_DAYS } : null);
+
+export interface PresetList {
+  market: string; vehicle: { make: string | null; model: string | null; year: number | null }; missing: ('make' | 'model' | 'year')[]; canApply: boolean;
+  items: {
+    id: string; version: number; market: string; make: string; model: string; year: number | null; yearRange: [number, number] | null; reviewedOn: string;
+    sources: { title: string; url: string; kind: SourceTrust; note: string | null }[]; needsQualifier: string[];
+    tasks: {
+      id: string; name: string; catalogKey: string | null; description: string; rule: { months: number | null; distance: { value: string; unit: DistanceUnit } | null };
+      trust: SourceTrust; sourceNote: string; severity: 'info' | 'caution' | null;
+      alreadyImported: { taskId: Id; name: string; presetVersion: number; archived: boolean } | null;
+      existingTaskMatch: { taskId: Id; name: string; matchedBy: 'catalogKey' | 'name' } | null;
+      suggestedServiceItems: { id: Id; name: string; visitId: Id; servicedOn: string; odometer: Distance | null }[];
+    }[];
+  }[];
+}
+export interface PresetApplyResult {
+  presetId: string; presetVersion: number; variant: string | null; preview: boolean; reading: ReturnType<typeof readingView>;
+  results: Record<string, unknown>[];
+}
+
+async function existingTasks(q: Q, vehicleId: Id): Promise<(ExistingTask & { preset_version: number | null })[]> {
+  return (await q.query<ExistingTask & { preset_version: number | null }>(
+    'SELECT id, name, catalog_key, preset_id, preset_version, preset_task_id, archived_at IS NOT NULL AS archived FROM maintenance_tasks WHERE vehicle_id = $1 ORDER BY created_at, id', [vehicleId])).rows;
+}
+
+function parseMarket(v: unknown): string {
+  if (v === undefined || v === null) return DEFAULT_MARKET;
+  if (typeof v !== 'string' || !/^[a-z]{2,10}$/.test(v)) throw invalid('market must be a short lowercase market code such as us.');
+  return v;
+}
+
+function parseVariant(pr: Preset, v: unknown): string | null {
+  const variants = pr.variants ?? [];
+  if (!variants.length) {
+    if (v !== undefined && v !== null) throw invalid('This preset has no variants; leave variant out.');
+    return null;
+  }
+  if (v === undefined || v === null) {
+    throw new HttpProblem(422, 'maintenance_preset_variant_required', 'Validation failed', `This preset differs by variant; choose one of: ${variants.join(', ')}.`, { variants });
+  }
+  if (typeof v !== 'string' || !variants.includes(v)) throw invalid(`variant must be one of: ${variants.join(', ')}.`);
+  return v;
+}
+
+interface Selection {
+  presetTaskId: string;
+  overrides: { intervalMonths?: unknown; intervalDistance?: unknown } | null;
+  baseline: { kind: 'none' } | { kind: 'tracking' } | { kind: 'reported'; on?: unknown; odometer?: unknown; linkServiceItemId?: Id };
+  onDuplicate: 'skip' | 'link';
+}
+
+/** The tasks the owner selected, shape only; values are validated by parseTask as the task is built. */
+function parseSelection(pr: Preset, raw: unknown): Selection[] {
+  if (!Array.isArray(raw) || raw.length < 1 || raw.length > pr.tasks.length) throw invalid('tasks must list 1 or more of the preset\'s tasks.');
+  const seen = new Set<string>();
+  return raw.map((r, i): Selection => {
+    const at = `tasks[${i}]`;
+    const s = obj(r, ['presetTaskId', 'overrides', 'baseline', 'onDuplicate'], at);
+    const id = s['presetTaskId'];
+    if (typeof id !== 'string' || !pr.tasks.some((t) => t.id === id)) throw invalid(`${at}.presetTaskId must be one of: ${pr.tasks.map((t) => t.id).join(', ')}.`);
+    if (seen.has(id)) throw invalid(`${at}.presetTaskId ${id} is listed twice.`);
+    seen.add(id);
+    let overrides: Selection['overrides'] = null;
+    if (s['overrides'] !== undefined && s['overrides'] !== null) overrides = obj(s['overrides'], ['intervalMonths', 'intervalDistance'], `${at}.overrides`);
+    let baseline: Selection['baseline'] = { kind: 'none' };
+    if (s['baseline'] !== undefined && s['baseline'] !== null) {
+      const bl = obj(s['baseline'], ['kind', 'on', 'odometer', 'linkServiceItemId'], `${at}.baseline`);
+      const kind = bl['kind'];
+      if (kind === 'none' || kind === 'tracking') {
+        if (Object.keys(bl).length > 1) throw invalid(`${at}.baseline of kind ${kind} takes no other fields.`);
+        baseline = { kind };
+      } else if (kind === 'reported') {
+        const out: Extract<Selection['baseline'], { kind: 'reported' }> = { kind };
+        if (bl['on'] !== undefined && bl['on'] !== null) out.on = bl['on'];
+        if (bl['odometer'] !== undefined && bl['odometer'] !== null) out.odometer = bl['odometer'];
+        if (bl['linkServiceItemId'] !== undefined && bl['linkServiceItemId'] !== null) {
+          if (!isUuid(bl['linkServiceItemId'])) throw invalid(`${at}.baseline.linkServiceItemId must be a service item id.`);
+          out.linkServiceItemId = bl['linkServiceItemId'] as Id;
+        }
+        if (out.on === undefined && out.odometer === undefined && out.linkServiceItemId === undefined) {
+          throw invalid(`${at}.baseline of kind reported needs on, odometer or linkServiceItemId.`);
+        }
+        baseline = out;
+      } else throw invalid(`${at}.baseline.kind must be 'reported', 'tracking' or 'none'.`);
+    }
+    const od = s['onDuplicate'] ?? 'skip';
+    if (od !== 'skip' && od !== 'link') throw invalid(`${at}.onDuplicate must be 'skip' or 'link'.`);
+    return { presetTaskId: id, overrides, baseline, onDuplicate: od };
+  });
 }
 
 function parseScope(v: unknown): 'personal' | 'vehicle' {

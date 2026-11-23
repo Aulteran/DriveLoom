@@ -1411,6 +1411,69 @@ paths:
         '404': { $ref: '#/components/responses/Problem' }
         '409': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
+  /v1/vehicles/{vehicleId}/maintenance/presets:
+    parameters:
+      - { $ref: '#/components/parameters/VehicleId' }
+      - { name: market, in: query, description: "Market of the presets to offer (vehicles have no market of their own). Defaults to `us`.", schema: { type: string, pattern: '^[a-z]{2,10}$', default: us } }
+    get:
+      operationId: listMaintenancePresets
+      summary: Community maintenance presets that match this vehicle (any member)
+      description: >
+        Advisory templates bundled with the server, never fetched. A preset matches on the vehicle's year (or a
+        year range), its make and model compared after normalisation (case, spacing and punctuation ignored) and the
+        market. With make, model or year unknown nothing matches and `missing` names what to ask the owner for. No
+        match means an empty `items`; the manual workflow is unchanged. A preset with `needsQualifier` entries
+        differs by variant and is applied only with an explicit `variant`. Each task says whether this vehicle already
+        has the task made from it (`alreadyImported`), has a similar typed-in task (`existingTaskMatch`: same catalog
+        key, or same name ignoring case) and which unlinked service items look like it (`suggestedServiceItems`;
+        never linked unless the owner picks one).
+      tags: [service]
+      responses:
+        '200':
+          description: Matching presets.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MaintenancePresetList' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/vehicles/{vehicleId}/maintenance/presets/{presetId}/apply:
+    parameters:
+      - { $ref: '#/components/parameters/VehicleId' }
+      - { name: presetId, in: path, required: true, schema: { type: string } }
+      - { name: preview, in: query, description: "`true` validates and works out every result and status exactly as an apply would, then discards it: nothing is stored. Returned `taskId` is null for tasks that would be created.", schema: { type: string, enum: ['true', 'false'], default: 'false' } }
+    post:
+      operationId: applyMaintenancePreset
+      summary: Import selected preset tasks as maintenance tasks (owner or editor)
+      description: >
+        All or nothing, in one transaction. Each selected task becomes an ordinary maintenance task with the preset's
+        provenance (`presetId`, `presetVersion`, `presetTaskId`), its trust label and note, the preset interval or the
+        owner's `overrides`, and email reminders off (`remindersEnabled: false`) until the owner turns them on. An
+        overridden interval keeps the provenance but loses the trust label. Baseline: `reported` (the owner's word
+        for when / at what odometer it was last done, or `linkServiceItemId` to link an unlinked service item of this
+        vehicle as its last completion), `tracking` (start tracking from today and the latest odometer reading when it is
+        recent; never a completion) or `none` (the default; status stays `no_baseline`). Nothing is written to
+        odometer or fuel records and nothing is sent. A task this vehicle already made from the same preset task is
+        `skipped` (`already_imported`), whatever was customised since; a similar typed-in task is `skipped`
+        (`existing_task`), or with `onDuplicate: link` gets only the preset provenance attached, keeping its own
+        interval, baseline, reminders and snoozes. Archived vehicles answer 409.
+      tags: [service]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MaintenancePresetApplyInput' }
+      responses:
+        '200':
+          description: What happened to each selected task (or would, for a preview).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MaintenancePresetApplyResult' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
   /v1/vehicles/{vehicleId}/notification-settings:
     parameters:
       - { $ref: '#/components/parameters/VehicleId' }
@@ -2833,6 +2896,180 @@ components:
         snoozes: { type: array, items: { $ref: '#/components/schemas/MaintenanceSnoozeView' }, description: All active snoozes that apply to the caller. }
         reminderSuppressed: { type: boolean, description: True while any snooze is active. Muting reminders does not make delaying safe. }
         needsAttention: { type: boolean, description: Status is `due_soon` or `overdue`. }
+    MaintenancePresetList:
+      type: object
+      required: [market, vehicle, missing, canApply, items]
+      properties:
+        market: { type: string }
+        vehicle:
+          type: object
+          required: [make, model, year]
+          properties:
+            make: { type: [string, 'null'] }
+            model: { type: [string, 'null'] }
+            year: { type: [integer, 'null'] }
+        missing: { type: array, items: { type: string, enum: [make, model, year] }, description: Vehicle details needed for matching that are not set. }
+        canApply: { type: boolean, description: The caller may apply presets to this vehicle (owner or editor, vehicle not archived). }
+        items: { type: array, items: { $ref: '#/components/schemas/MaintenancePreset' } }
+    MaintenancePreset:
+      type: object
+      required: [id, version, market, make, model, year, yearRange, reviewedOn, sources, needsQualifier, tasks]
+      properties:
+        id: { type: string }
+        version: { type: integer }
+        market: { type: string }
+        make: { type: string }
+        model: { type: string }
+        year: { type: [integer, 'null'] }
+        yearRange: { oneOf: [{ type: array, items: { type: integer }, minItems: 2, maxItems: 2 }, { type: 'null' }] }
+        reviewedOn: { type: string, format: date }
+        sources:
+          type: array
+          items:
+            type: object
+            required: [title, url, kind, note]
+            properties:
+              title: { type: string }
+              url: { type: string }
+              kind: { type: string, enum: [manufacturer, community] }
+              note: { type: [string, 'null'] }
+        needsQualifier: { type: array, items: { type: string }, description: "Variants the preset differs by; non-empty means apply needs `variant`." }
+        tasks: { type: array, items: { $ref: '#/components/schemas/MaintenancePresetTask' } }
+    MaintenancePresetTask:
+      type: object
+      required: [id, name, catalogKey, description, rule, trust, sourceNote, severity, alreadyImported, existingTaskMatch, suggestedServiceItems]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        catalogKey: { type: [string, 'null'] }
+        description: { type: string }
+        rule:
+          type: object
+          required: [months, distance]
+          description: Calendar months, distance, or both (whichever comes first).
+          properties:
+            months: { type: [integer, 'null'] }
+            distance: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }] }
+        trust: { type: string, enum: [manufacturer, community], description: "`community` intervals are suggestions for the owner to check and edit, not official requirements." }
+        sourceNote: { type: string }
+        severity: { oneOf: [{ type: string, enum: [info, caution] }, { type: 'null' }] }
+        alreadyImported:
+          oneOf:
+            - type: 'null'
+            - type: object
+              required: [taskId, name, presetVersion, archived]
+              properties:
+                taskId: { $ref: '#/components/schemas/Id' }
+                name: { type: string }
+                presetVersion: { type: integer }
+                archived: { type: boolean }
+        existingTaskMatch:
+          oneOf:
+            - type: 'null'
+            - type: object
+              required: [taskId, name, matchedBy]
+              properties:
+                taskId: { $ref: '#/components/schemas/Id' }
+                name: { type: string }
+                matchedBy: { type: string, enum: [catalogKey, name] }
+        suggestedServiceItems:
+          type: array
+          items:
+            type: object
+            required: [id, name, visitId, servicedOn, odometer]
+            properties:
+              id: { $ref: '#/components/schemas/Id' }
+              name: { type: string }
+              visitId: { $ref: '#/components/schemas/Id' }
+              servicedOn: { type: string, format: date }
+              odometer: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }] }
+    MaintenancePresetApplyInput:
+      type: object
+      required: [tasks]
+      additionalProperties: false
+      properties:
+        variant: { type: [string, 'null'], description: "Required when the preset lists `needsQualifier` variants; one of them." }
+        tasks:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [presetTaskId]
+            additionalProperties: false
+            properties:
+              presetTaskId: { type: string }
+              overrides:
+                type: [object, 'null']
+                additionalProperties: false
+                description: The owner's interval edits; a field given replaces the preset's (null removes that side). At least one interval must remain.
+                properties:
+                  intervalMonths: { type: [integer, 'null'], minimum: 1, maximum: 1200 }
+                  intervalDistance: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }] }
+              baseline:
+                oneOf:
+                  - type: 'null'
+                  - type: object
+                    required: [kind]
+                    additionalProperties: false
+                    properties:
+                      kind: { type: string, enum: [reported, tracking, none] }
+                      on: { type: [string, 'null'], format: date, description: "`reported` only: when it was last done (today or earlier)." }
+                      odometer: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }], description: "`reported` only: the odometer then." }
+                      linkServiceItemId: { oneOf: [{ $ref: '#/components/schemas/Id' }, { type: 'null' }], description: "`reported` only: an unlinked service item of this vehicle that completed it; it is linked to the new task." }
+              onDuplicate: { type: string, enum: [skip, link], default: skip }
+    MaintenancePresetApplyResult:
+      type: object
+      required: [presetId, presetVersion, variant, preview, reading, results]
+      properties:
+        presetId: { type: string }
+        presetVersion: { type: integer }
+        variant: { type: [string, 'null'] }
+        preview: { type: boolean }
+        reading:
+          oneOf:
+            - type: 'null'
+            - type: object
+              required: [odometer, on, source, stale]
+              description: The latest known odometer the statuses were worked out with, and when it was recorded.
+              properties:
+                odometer: { $ref: '#/components/schemas/Distance' }
+                on: { type: string, format: date }
+                source: { type: string, enum: [fuel, service] }
+                stale: { type: boolean }
+        results:
+          type: array
+          items:
+            type: object
+            required: [presetTaskId, result, reason, taskId, name, status, dueOn, dueOdometer, baseline, remindersEnabled]
+            properties:
+              presetTaskId: { type: string }
+              result: { type: string, enum: [created, linked, skipped] }
+              reason: { oneOf: [{ type: string, enum: [already_imported, existing_task] }, { type: 'null' }] }
+              taskId: { oneOf: [{ $ref: '#/components/schemas/Id' }, { type: 'null' }], description: Null in a preview for a task that would be created. }
+              name: { type: string }
+              intervalMonths: { type: [integer, 'null'] }
+              intervalDays: { type: [integer, 'null'] }
+              intervalDistance: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }] }
+              remindersEnabled: { type: boolean }
+              sourceTrust: { oneOf: [{ type: string, enum: [manufacturer, community] }, { type: 'null' }] }
+              baselineKind: { oneOf: [{ type: string, enum: [reported, tracking] }, { type: 'null' }] }
+              status: { $ref: '#/components/schemas/MaintenanceTaskState' }
+              dueOn: { oneOf: [{ type: string, format: date }, { type: 'null' }] }
+              dueOdometer: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }] }
+              daysUntilDue: { type: [integer, 'null'] }
+              distanceUntilDue: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }] }
+              baseline: { type: string, enum: [completion, reported, tracking, first_due, none] }
+              distanceBaselineMissing: { type: boolean }
+              readingStale: { type: boolean }
+              lastCompleted:
+                oneOf:
+                  - type: 'null'
+                  - type: object
+                    required: [visitId, servicedOn, odometer]
+                    properties:
+                      visitId: { $ref: '#/components/schemas/Id' }
+                      servicedOn: { type: string, format: date }
+                      odometer: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }] }
     MaintenanceSnoozeView:
       allOf: [{ $ref: '#/components/schemas/MaintenanceSnooze' }]
     MaintenanceSummary:
