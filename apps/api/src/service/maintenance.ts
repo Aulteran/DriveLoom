@@ -7,7 +7,9 @@
 // may snooze for themselves only, which is personal reminder state.
 // Snoozes never change a task's due point or status. Personal snoozes are never
 // exported; vehicle-wide ones are. No email or push here: see tasksNeedingAttention
-// for the helper a notifier reuses.
+// for the helper a notifier reuses (it leaves out tasks whose reminders are off).
+// Preset provenance (presetId/presetVersion/presetTaskId, sourceTrust/sourceNote)
+// is a label only: it never changes how status is computed.
 import type pg from 'pg';
 import { Dec } from '../decimal.ts';
 import { HttpProblem } from '../http/problem.ts';
@@ -19,18 +21,19 @@ import { requireModule } from '../modules.ts';
 import { getPreferences } from '../preferences.ts';
 import type { Decimal, DistanceUnit, Id } from '../types.ts';
 import { fromKm, isDistanceUnit, toKm } from '../units.ts';
-import { canManageSchedules } from '../vehicles/permissions.ts';
+import { EMAIL_RECIPIENT_ROLES, canManageSchedules } from '../vehicles/permissions.ts';
 import type { VehicleService } from '../vehicles/service.ts';
 import type { VehicleAccess } from '../vehicles/types.ts';
 import { dateOnly, text } from './fields.ts';
 import {
-  CATALOG, LEAD_DAYS, LEAD_DISTANCE, STALE_READING_DAYS, catalogName, computeStatus, daysBetween, effectiveSnoozes, needsAttention, snoozeActive, utcDate,
-  type Completion, type TaskState,
+  CATALOG, LEAD_DAYS, LEAD_DISTANCE, STALE_READING_DAYS, catalogName, computeStatus, daysBetween, effectiveSnoozes, needsAttention, occurrenceKey, snoozeActive, utcDate,
+  type BaselineKind, type Completion, type TaskState, type TaskStatus,
 } from './maintenance-status.ts';
 import { latestKnownOdometer, type KnownOdometer } from './odometer.ts';
 
 type Q = Pick<pg.Pool, 'query'>;
-export const TASK_FIELDS = ['name', 'catalogKey', 'recurring', 'intervalDays', 'intervalDistance', 'firstDueOn', 'firstDueOdometer', 'notes'] as const;
+export const TASK_FIELDS = ['name', 'catalogKey', 'recurring', 'intervalDays', 'intervalMonths', 'intervalDistance', 'firstDueOn', 'firstDueOdometer', 'notes',
+  'presetId', 'presetVersion', 'presetTaskId', 'baselineKind', 'baselineOn', 'baselineOdometer', 'remindersEnabled', 'sourceTrust', 'sourceNote'] as const;
 const PATCH_FIELDS = [...TASK_FIELDS, 'archived'] as const;
 const SNOOZE_FIELDS = ['until', 'untilOdometer', 'additionalDistance', 'reason'] as const;
 export const MAX_TASKS = 200;
@@ -41,15 +44,24 @@ interface TaskRow {
   interval_distance_input: string | null; interval_distance_unit: DistanceUnit | null; interval_distance_km: string | null;
   first_due_on: string | null; first_due_odometer_input: string | null; first_due_odometer_unit: DistanceUnit | null; first_due_odometer_km: string | null;
   notes: string | null; archived_at: Date | null; created_by: Id | null; created_at: Date; updated_at: Date;
+  interval_months: number | null; preset_id: string | null; preset_version: number | null; preset_task_id: string | null;
+  baseline_kind: BaselineKind | null; baseline_on: string | null; baseline_odometer_input: string | null; baseline_odometer_unit: DistanceUnit | null; baseline_odometer_km: string | null;
+  reminders_enabled: boolean; source_trust: SourceTrust | null; source_note: string | null;
 }
 const COLS = `id, vehicle_id, name, catalog_key, recurring, interval_days, interval_distance_input::text, interval_distance_unit, interval_distance_km::text,
-  first_due_on::text, first_due_odometer_input::text, first_due_odometer_unit, first_due_odometer_km::text, notes, archived_at, created_by, created_at, updated_at`;
+  first_due_on::text, first_due_odometer_input::text, first_due_odometer_unit, first_due_odometer_km::text, notes, archived_at, created_by, created_at, updated_at,
+  interval_months, preset_id, preset_version, preset_task_id, baseline_kind, baseline_on::text, baseline_odometer_input::text, baseline_odometer_unit, baseline_odometer_km::text,
+  reminders_enabled, source_trust, source_note`;
 interface SnoozeDbRow { task_id: Id; scope: 'personal' | 'vehicle'; user_id: Id | null; until_date: string | null; until_km: string | null; reason: string | null; created_by: Id | null; created_at: Date }
 
 interface Qty { value: string; unit: DistanceUnit; km: Dec }
+export type SourceTrust = 'manufacturer' | 'community';
 export interface ParsedTask {
-  name: string; catalogKey: string | null; recurring: boolean; intervalDays: number | null;
+  name: string; catalogKey: string | null; recurring: boolean; intervalDays: number | null; intervalMonths: number | null;
   intervalDistance: Qty | null; firstDueOn: string | null; firstDueOdometer: Qty | null; notes: string | null;
+  preset: { id: string; version: number; taskId: string } | null;
+  baseline: { kind: BaselineKind; on: string | null; odometer: Qty | null } | null;
+  remindersEnabled: boolean; sourceTrust: SourceTrust | null; sourceNote: string | null;
 }
 export interface Distance { value: Decimal; unit: DistanceUnit }
 export interface SnoozeView { scope: 'personal' | 'vehicle'; until: string | null; untilOdometer: Distance | null; reason: string | null; createdBy: Id | null; createdAt: string }
@@ -57,9 +69,12 @@ export interface TaskView {
   id: Id; vehicleId: Id; name: string; catalogKey: string | null; recurring: boolean; intervalDays: number | null;
   intervalDistance: Distance | null; firstDueOn: string | null; firstDueOdometer: Distance | null; notes: string | null; archived: boolean;
   createdBy: Id | null; createdAt: string; updatedAt: string;
+  intervalMonths: number | null; presetId: string | null; presetVersion: number | null; presetTaskId: string | null;
+  baselineKind: BaselineKind | null; baselineOn: string | null; baselineOdometer: Distance | null;
+  remindersEnabled: boolean; sourceTrust: SourceTrust | null; sourceNote: string | null;
   /** Computed, never stored. See maintenance-status.ts for the rules. */
   status: TaskState; dueOn: string | null; dueOdometer: Distance | null; daysUntilDue: number | null; distanceUntilDue: Distance | null;
-  baseline: 'completion' | 'first_due' | 'none'; distanceBaselineMissing: boolean; readingStale: boolean;
+  baseline: TaskStatus['baseline']; distanceBaselineMissing: boolean; readingStale: boolean;
   lastCompleted: { visitId: Id; servicedOn: string; odometer: Distance | null } | null;
   /** The active snooze that applies to the caller (their personal one, else the vehicle-wide one); the original status stays visible. */
   snoozed: SnoozeView | null; snoozes: SnoozeView[]; reminderSuppressed: boolean; needsAttention: boolean;
@@ -81,6 +96,13 @@ export function parseTask(body: Record<string, unknown>, now: Date): ParsedTask 
     if (typeof n !== 'number' || !Number.isInteger(n) || n < 1 || n > 36500) throw invalid('intervalDays must be a whole number of days from 1 to 36500.');
     intervalDays = n;
   }
+  let intervalMonths: number | null = null;
+  if (body['intervalMonths'] !== undefined && body['intervalMonths'] !== null) {
+    const n = body['intervalMonths'];
+    if (typeof n !== 'number' || !Number.isInteger(n) || n < 1 || n > 1200) throw invalid('intervalMonths must be a whole number of months from 1 to 1200.');
+    intervalMonths = n;
+  }
+  if (intervalDays !== null && intervalMonths !== null) throw invalid('Give the time interval in intervalDays or in intervalMonths, not both.');
   const qty = (v: unknown, field: string, positive: boolean): Qty | null => {
     if (v === undefined || v === null) return null;
     const q = quantity(v, field, isDistanceUnit, 'km, mi', { maxScale: 3, max: '9999999', positive });
@@ -94,15 +116,64 @@ export function parseTask(body: Record<string, unknown>, now: Date): ParsedTask 
     if (Number(firstDueOn.slice(0, 4)) < 1900) throw invalid('firstDueOn is too far in the past.');
     if (daysBetween(utcDate(now), firstDueOn) > 36500) throw invalid('firstDueOn is too far in the future.');
   }
-  if (recurring && intervalDays === null && intervalDistance === null) throw invalid('A repeating task needs an interval in days, in distance, or both.');
+  const baseline = parseBaseline(body, now, qty);
+  if (recurring && intervalDays === null && intervalMonths === null && intervalDistance === null) throw invalid('A repeating task needs an interval in days or months, in distance, or both.');
   if (!recurring) {
-    if (intervalDays !== null || intervalDistance !== null) throw invalid('A one-time task has no interval; set a due date or odometer instead.');
+    if (intervalDays !== null || intervalMonths !== null || intervalDistance !== null) throw invalid('A one-time task has no interval; set a due date or odometer instead.');
     if (firstDueOn === null && firstDueOdometer === null) throw invalid('A one-time task needs a due date or a due odometer.');
+    if (baseline !== null) throw invalid('A one-time task has no baseline; record a visit that completes it instead.');
   }
-  return { name, catalogKey: catalogKey as string | null, recurring, intervalDays, intervalDistance, firstDueOn, firstDueOdometer, notes: text(body['notes'], 'notes', 500) };
+  const remindersEnabled = body['remindersEnabled'] === undefined || body['remindersEnabled'] === null ? true : bool(body['remindersEnabled'], 'remindersEnabled');
+  const st = body['sourceTrust'];
+  if (st !== undefined && st !== null && st !== 'manufacturer' && st !== 'community') throw invalid("sourceTrust must be 'manufacturer' or 'community'.");
+  return {
+    name, catalogKey: catalogKey as string | null, recurring, intervalDays, intervalMonths, intervalDistance, firstDueOn, firstDueOdometer, notes: text(body['notes'], 'notes', 500),
+    preset: parsePreset(body), baseline, remindersEnabled, sourceTrust: (st ?? null) as SourceTrust | null, sourceNote: text(body['sourceNote'], 'sourceNote', 300),
+  };
+}
+
+const PRESET_ID = /^[a-z0-9][a-z0-9-]{0,99}$/, PRESET_TASK_ID = /^[a-z0-9][a-z0-9_-]{0,99}$/;
+/** Preset provenance: presetId, presetVersion and presetTaskId together, or none of them. */
+function parsePreset(body: Record<string, unknown>): ParsedTask['preset'] {
+  const id = body['presetId'] ?? null, version = body['presetVersion'] ?? null, taskId = body['presetTaskId'] ?? null;
+  if (id === null && version === null && taskId === null) return null;
+  if (id === null || version === null || taskId === null) throw invalid('presetId, presetVersion and presetTaskId go together: give all three or none.');
+  if (typeof id !== 'string' || !PRESET_ID.test(id)) throw invalid('presetId must be a short lowercase id such as us-honda-odyssey-2015.');
+  if (typeof taskId !== 'string' || !PRESET_TASK_ID.test(taskId)) throw invalid('presetTaskId must be a short lowercase id such as engine-oil.');
+  if (typeof version !== 'number' || !Number.isInteger(version) || version < 1 || version > 1_000_000) throw invalid('presetVersion must be a whole number from 1.');
+  return { id, version, taskId };
+}
+
+/**
+ * The task's own starting point. `reported`: when / at what odometer it was last
+ * done, by the owner's word (scheduled like a completion). `tracking`: "start
+ * tracking now", never a completion. Either needs a date, an odometer or both; neither may be in the future.
+ */
+function parseBaseline(body: Record<string, unknown>, now: Date, qty: (v: unknown, field: string, positive: boolean) => Qty | null): ParsedTask['baseline'] {
+  const kind = body['baselineKind'] ?? null;
+  let on: string | null = null;
+  if (body['baselineOn'] !== undefined && body['baselineOn'] !== null) {
+    on = dateOnly(body['baselineOn'], 'baselineOn');
+    if (Number(on.slice(0, 4)) < 1900) throw invalid('baselineOn is too far in the past.');
+    if (on > utcDate(now)) throw invalid('baselineOn must be today or earlier.');
+  }
+  const odometer = qty(body['baselineOdometer'], 'baselineOdometer', false);
+  if (kind === null) {
+    if (on !== null || odometer !== null) throw invalid("baselineOn and baselineOdometer need a baselineKind ('reported' or 'tracking').");
+    return null;
+  }
+  if (kind !== 'reported' && kind !== 'tracking') throw invalid("baselineKind must be 'reported' or 'tracking'.");
+  if (on === null && odometer === null) throw invalid('A baseline needs baselineOn, baselineOdometer, or both.');
+  return { kind, on, odometer };
 }
 
 const dist = (input: string | null, unit: DistanceUnit | null): Distance | null => (input === null ? null : { value: input as Decimal, unit: unit! });
+/** The columns added for presets, as they appear in views and exports. */
+const provenance = (r: TaskRow) => ({
+  intervalMonths: r.interval_months, presetId: r.preset_id, presetVersion: r.preset_version, presetTaskId: r.preset_task_id,
+  baselineKind: r.baseline_kind, baselineOn: r.baseline_on, baselineOdometer: dist(r.baseline_odometer_input, r.baseline_odometer_unit),
+  remindersEnabled: r.reminders_enabled, sourceTrust: r.source_trust, sourceNote: r.source_note,
+});
 const asView = (km: Dec, unit: DistanceUnit): Distance => ({ value: fromKm(km, unit).toFixed(0), unit });
 
 /** Reject items that link to a task that does not belong to this vehicle (links are explicit and same-vehicle only). */
@@ -124,8 +195,9 @@ export async function taskRefs(q: Q, vehicleId: Id): Promise<Map<Id, string>> {
 function viewOf(r: TaskRow, odometerUnit: DistanceUnit, distanceUnit: DistanceUnit, last: Completion & { visitId: Id; odometer: Distance | null } | null,
   snoozeRows: SnoozeDbRow[], reading: KnownOdometer | null, today: string): TaskView {
   const st = computeStatus({
-    recurring: r.recurring, intervalDays: r.interval_days, intervalDistanceKm: r.interval_distance_km === null ? null : Dec.parse(r.interval_distance_km),
+    recurring: r.recurring, intervalDays: r.interval_days, intervalMonths: r.interval_months, intervalDistanceKm: r.interval_distance_km === null ? null : Dec.parse(r.interval_distance_km),
     firstDueOn: r.first_due_on, firstDueOdometerKm: r.first_due_odometer_km === null ? null : Dec.parse(r.first_due_odometer_km),
+    baseline: r.baseline_kind === null ? null : { kind: r.baseline_kind, on: r.baseline_on, odometerKm: r.baseline_odometer_km === null ? null : Dec.parse(r.baseline_odometer_km) },
   }, last, reading, today, distanceUnit);
   const rows = snoozeRows.map((s) => ({ scope: s.scope, untilDate: s.until_date, untilOdometerKm: s.until_km === null ? null : Dec.parse(s.until_km), src: s }));
   const snoozes: SnoozeView[] = effectiveSnoozes(rows, today, reading).map(({ scope, untilDate, untilOdometerKm, src }) => ({
@@ -135,6 +207,7 @@ function viewOf(r: TaskRow, odometerUnit: DistanceUnit, distanceUnit: DistanceUn
     id: r.id, vehicleId: r.vehicle_id, name: r.name, catalogKey: r.catalog_key, recurring: r.recurring, intervalDays: r.interval_days,
     intervalDistance: dist(r.interval_distance_input, r.interval_distance_unit), firstDueOn: r.first_due_on, firstDueOdometer: dist(r.first_due_odometer_input, r.first_due_odometer_unit),
     notes: r.notes, archived: r.archived_at !== null, createdBy: r.created_by, createdAt: r.created_at.toISOString(), updatedAt: r.updated_at.toISOString(),
+    ...provenance(r),
     status: st.state, dueOn: st.dueOn, dueOdometer: st.dueOdometerKm === null ? null : asView(st.dueOdometerKm, odometerUnit), daysUntilDue: st.daysUntilDue,
     distanceUntilDue: st.distanceUntilDueKm === null ? null : asView(st.distanceUntilDueKm, odometerUnit),
     baseline: st.baseline, distanceBaselineMissing: st.distanceBaselineMissing, readingStale: st.readingStale,
@@ -173,19 +246,41 @@ export async function evaluateTasks(q: Q, vehicleId: Id, userId: Id, now: Date, 
 }
 
 /**
- * For notifications: the vehicle's unarchived tasks that are due soon or
- * overdue, each with the person's effective snooze (`reminderSuppressed`). The
+ * For notifications: the vehicle's unarchived tasks with reminders enabled that
+ * are due soon or overdue, each with the person's effective snooze (`reminderSuppressed`). The
  * caller decides what to do with suppressed ones; they are included so a
  * digest can still list them as muted. Does not check the module switch or membership.
  */
 export async function tasksNeedingAttention(q: Q, vehicleId: Id, userId: Id, now: Date = new Date()): Promise<TaskView[]> {
-  return (await evaluateTasks(q, vehicleId, userId, now)).tasks.filter((t) => t.needsAttention);
+  return (await evaluateTasks(q, vehicleId, userId, now)).tasks.filter((t) => t.needsAttention && t.remindersEnabled);
+}
+
+/**
+ * When a task's reminders are turned on: record its current due state as
+ * already announced for every member who could receive reminders (whatever the
+ * vehicle's email switch), each evaluated as they see it (lead distance and
+ * snoozes are per person). So opting in never sends a backlog or catch-up email;
+ * a later level (due soon to overdue), a new due point or a follow-up still does.
+ */
+export async function seedReminderLedger(q: Q, vehicleId: Id, taskId: Id, now: Date): Promise<void> {
+  const { rows } = await q.query<{ user_id: Id }>('SELECT user_id FROM vehicle_members WHERE vehicle_id = $1 AND role = ANY($2::text[])', [vehicleId, EMAIL_RECIPIENT_ROLES]);
+  for (const { user_id } of rows) {
+    const t = (await evaluateTasks(q, vehicleId, user_id, now, { taskId })).tasks[0];
+    if (!t || !t.needsAttention) continue;
+    await q.query(
+      `INSERT INTO notification_task_log (user_id, task_id, vehicle_id, occurrence_key, level, first_notified_at, last_bucket, sends, muted)
+       VALUES ($1,$2,$3,$4,$5,$6,0,1,false) ON CONFLICT (user_id, task_id, occurrence_key, level) DO NOTHING`,
+      [user_id, taskId, vehicleId, occurrenceKey(t), t.status, now]);
+  }
 }
 
 // ---------- import / export (no module check: data stays portable while the module is off) ----------
 export interface TaskExport {
   ref: string; name: string; catalogKey: string | null; recurring: boolean; intervalDays: number | null; intervalDistance: Distance | null;
   firstDueOn: string | null; firstDueOdometer: Distance | null; notes: string | null; archived: boolean;
+  intervalMonths: number | null; presetId: string | null; presetVersion: number | null; presetTaskId: string | null;
+  baselineKind: BaselineKind | null; baselineOn: string | null; baselineOdometer: Distance | null;
+  remindersEnabled: boolean; sourceTrust: SourceTrust | null; sourceNote: string | null;
   /** Vehicle-wide snooze only, and only while active. Personal snoozes are never exported. */
   snooze?: { until: string | null; untilOdometer: Distance | null; reason: string | null };
 }
@@ -204,7 +299,7 @@ export async function exportTasks(q: Q, vehicleId: Id, now: Date): Promise<TaskE
     return {
       ref: `t${i + 1}`, name: r.name, catalogKey: r.catalog_key, recurring: r.recurring, intervalDays: r.interval_days,
       intervalDistance: dist(r.interval_distance_input, r.interval_distance_unit), firstDueOn: r.first_due_on, firstDueOdometer: dist(r.first_due_odometer_input, r.first_due_odometer_unit),
-      notes: r.notes, archived: r.archived_at !== null,
+      notes: r.notes, archived: r.archived_at !== null, ...provenance(r),
       ...(s && active ? { snooze: { until: s.until_date, untilOdometer: s.until_km === null ? null : { value: Dec.parse(s.until_km).toFixed(3), unit: 'km' as const }, reason: s.reason } } : {}),
     };
   });
@@ -230,24 +325,53 @@ export function parseImportTask(raw: unknown, now: Date): ParsedImportTask {
   return { ref: (ref as string | undefined) ?? null, f: parseTask(rest, now), archived: archived === true, snooze: sn };
 }
 
+/** Values of the preset-era columns, in the order of EXTRA_COLS. */
+const EXTRA_COLS = ['interval_months', 'preset_id', 'preset_version', 'preset_task_id', 'baseline_kind', 'baseline_on', 'baseline_odometer_input', 'baseline_odometer_unit',
+  'baseline_odometer_km', 'reminders_enabled', 'source_trust', 'source_note'] as const;
+const extraValues = (f: ParsedTask): unknown[] => [
+  f.intervalMonths, f.preset?.id ?? null, f.preset?.version ?? null, f.preset?.taskId ?? null, f.baseline?.kind ?? null, f.baseline?.on ?? null,
+  f.baseline?.odometer?.value ?? null, f.baseline?.odometer?.unit ?? null, f.baseline?.odometer?.km.toFixed(6) ?? null, f.remindersEnabled, f.sourceTrust, f.sourceNote,
+];
+
+/** A second task from the same preset task on one vehicle (unique index): a conflict, not a server error. */
+async function presetConflict<T>(fn: () => Promise<T>): Promise<T> {
+  try { return await fn(); } catch (e) {
+    const err = e as { code?: string; constraint?: string };
+    if (err.code === '23505' && err.constraint === 'maintenance_tasks_preset_idx') {
+      throw new HttpProblem(409, 'maintenance_task_preset_exists', 'Conflict', 'This vehicle already has a task made from that preset task.');
+    }
+    throw e;
+  }
+}
+
 export async function insertTask(c: Q, vehicleId: Id, f: ParsedTask, createdBy: Id, archived = false): Promise<Id> {
   const id = uuidv7();
-  await c.query(
+  await presetConflict(() => c.query(
     `INSERT INTO maintenance_tasks (id, vehicle_id, name, catalog_key, recurring, interval_days, interval_distance_input, interval_distance_unit, interval_distance_km,
-       first_due_on, first_due_odometer_input, first_due_odometer_unit, first_due_odometer_km, notes, archived_at, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+       first_due_on, first_due_odometer_input, first_due_odometer_unit, first_due_odometer_km, notes, archived_at, created_by, ${EXTRA_COLS.join(', ')})
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,${EXTRA_COLS.map((_, i) => `$${17 + i}`).join(',')})`,
     [id, vehicleId, f.name, f.catalogKey, f.recurring, f.intervalDays, f.intervalDistance?.value ?? null, f.intervalDistance?.unit ?? null, f.intervalDistance?.km.toFixed(6) ?? null,
-      f.firstDueOn, f.firstDueOdometer?.value ?? null, f.firstDueOdometer?.unit ?? null, f.firstDueOdometer?.km.toFixed(6) ?? null, f.notes, archived ? new Date() : null, createdBy]);
+      f.firstDueOn, f.firstDueOdometer?.value ?? null, f.firstDueOdometer?.unit ?? null, f.firstDueOdometer?.km.toFixed(6) ?? null, f.notes, archived ? new Date() : null, createdBy,
+      ...extraValues(f)]));
   return id;
 }
 
-/** The id of an identical task already on the vehicle (same name, schedule and first-due point), used to skip duplicates on import. */
+/**
+ * The id of the task already on the vehicle that this one duplicates, used to
+ * skip duplicates on import: for a preset task, the task made from the same
+ * preset task (whatever was customised since); otherwise an identical task
+ * (same name, schedule and first-due point).
+ */
 export async function findDuplicateTask(c: Q, vehicleId: Id, f: ParsedTask): Promise<Id | null> {
+  if (f.preset) {
+    const { rows } = await c.query<{ id: Id }>('SELECT id FROM maintenance_tasks WHERE vehicle_id = $1 AND preset_id = $2 AND preset_task_id = $3', [vehicleId, f.preset.id, f.preset.taskId]);
+    if (rows[0]) return rows[0].id;
+  }
   const { rows } = await c.query<{ id: Id }>(
     `SELECT id FROM maintenance_tasks WHERE vehicle_id = $1 AND lower(name) = lower($2) AND catalog_key IS NOT DISTINCT FROM $3 AND recurring = $4
-        AND interval_days IS NOT DISTINCT FROM $5 AND interval_distance_km IS NOT DISTINCT FROM $6::numeric
+        AND interval_days IS NOT DISTINCT FROM $5 AND interval_months IS NOT DISTINCT FROM $9 AND interval_distance_km IS NOT DISTINCT FROM $6::numeric
         AND first_due_on IS NOT DISTINCT FROM $7::date AND first_due_odometer_km IS NOT DISTINCT FROM $8::numeric ORDER BY created_at LIMIT 1`,
-    [vehicleId, f.name, f.catalogKey, f.recurring, f.intervalDays, f.intervalDistance?.km.toFixed(6) ?? null, f.firstDueOn, f.firstDueOdometer?.km.toFixed(6) ?? null]);
+    [vehicleId, f.name, f.catalogKey, f.recurring, f.intervalDays, f.intervalDistance?.km.toFixed(6) ?? null, f.firstDueOn, f.firstDueOdometer?.km.toFixed(6) ?? null, f.intervalMonths]);
   return rows[0]?.id ?? null;
 }
 
@@ -298,7 +422,7 @@ export class MaintenanceService {
     for (const t of e.tasks) {
       counts[t.status]++;
       if (t.snoozed) counts.snoozed++;
-      if (t.needsAttention) { counts.needsAttention++; if (!t.reminderSuppressed) counts.remindersActive++; }
+      if (t.needsAttention) { counts.needsAttention++; if (!t.reminderSuppressed && t.remindersEnabled) counts.remindersActive++; }
     }
     return {
       counts,
@@ -347,18 +471,19 @@ export class MaintenanceService {
     return this.#write(p, vehicleId, async (c, v) => {
       const cur = await this.#one(c, v, p, taskId);
       const { archived, ...fields } = patch;
-      const merged = {
-        name: cur.name, catalogKey: cur.catalogKey, recurring: cur.recurring, intervalDays: cur.intervalDays, intervalDistance: cur.intervalDistance,
-        firstDueOn: cur.firstDueOn, firstDueOdometer: cur.firstDueOdometer, notes: cur.notes, ...fields,
-      };
+      const merged = Object.fromEntries(TASK_FIELDS.map((k) => [k, k in fields ? fields[k] : cur[k]]));
       const f = parseTask(merged, this.#now());
-      await c.query(
+      await presetConflict(() => c.query(
         `UPDATE maintenance_tasks SET name = $2, catalog_key = $3, recurring = $4, interval_days = $5, interval_distance_input = $6, interval_distance_unit = $7, interval_distance_km = $8,
            first_due_on = $9, first_due_odometer_input = $10, first_due_odometer_unit = $11, first_due_odometer_km = $12, notes = $13,
-           archived_at = CASE WHEN $14::boolean IS NULL THEN archived_at WHEN $14 THEN COALESCE(archived_at, now()) ELSE NULL END, updated_at = now() WHERE id = $1`,
+           archived_at = CASE WHEN $14::boolean IS NULL THEN archived_at WHEN $14 THEN COALESCE(archived_at, now()) ELSE NULL END, updated_at = now(),
+           ${EXTRA_COLS.map((col, i) => `${col} = $${15 + i}`).join(', ')} WHERE id = $1`,
         [cur.id, f.name, f.catalogKey, f.recurring, f.intervalDays, f.intervalDistance?.value ?? null, f.intervalDistance?.unit ?? null, f.intervalDistance?.km.toFixed(6) ?? null,
-          f.firstDueOn, f.firstDueOdometer?.value ?? null, f.firstDueOdometer?.unit ?? null, f.firstDueOdometer?.km.toFixed(6) ?? null, f.notes, archived === undefined ? null : archived]);
-      await this.#audit(c, p, 'maintenance_task.update', v.id, { taskId: cur.id });
+          f.firstDueOn, f.firstDueOdometer?.value ?? null, f.firstDueOdometer?.unit ?? null, f.firstDueOdometer?.km.toFixed(6) ?? null, f.notes, archived === undefined ? null : archived,
+          ...extraValues(f)]));
+      // Opting in to reminders starts from now: what is already due counts as announced.
+      if (!cur.remindersEnabled && f.remindersEnabled) await seedReminderLedger(c, v.id, cur.id, this.#now());
+      await this.#audit(c, p, 'maintenance_task.update', v.id, { taskId: cur.id, ...(cur.remindersEnabled !== f.remindersEnabled ? { remindersEnabled: f.remindersEnabled } : {}) });
       return this.#one(c, v, p, cur.id);
     }, this.#manage);
   }

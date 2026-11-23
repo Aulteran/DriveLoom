@@ -509,3 +509,53 @@ test('API: permissions, 404 for non-members and with the module off, 409 when ar
     assert.equal(r.status, 404); assert.equal(r.json.code, 'module_disabled');
   }
 });
+
+// ---------- per-task reminders switch (presets, Phase A) ----------
+test('acceptance 7: a task with reminders off is never emailed; other tasks are unaffected', { skip }, async () => {
+  const v = await vehicle({}, { recipients: [driver], followUpDays: 0 });
+  await task(v, { name: 'Wipers', intervalMonths: 1, baselineKind: 'reported', baselineOn: day(-60) });
+  await task(v, { name: 'Brake fluid', intervalMonths: 36, baselineKind: 'reported', baselineOn: day(-1200), remindersEnabled: false });
+  await notifier.evaluateVehicle(v, new Date()); await notifier.dispatchOutbox(new Date());
+  assert.equal(to(owner).length, 1); assert.equal(to(driver).length, 1);
+  assert.match(to(owner)[0]!.text, /Wipers: overdue/);
+  assert.ok(!to(owner)[0]!.text.includes('Brake fluid'), 'reminders are off for this task');
+  // Imported-style tasks with every reminder off: nothing at all is queued.
+  const v2 = await vehicle({}, { followUpDays: 0 });
+  await task(v2, { name: 'Timing belt', intervalMonths: 1, baselineKind: 'tracking', baselineOn: day(-90), remindersEnabled: false });
+  assert.equal((await notifier.evaluateVehicle(v2, new Date())).enqueued, 0);
+  assert.deepEqual(await outbox(v2), []);
+});
+
+test('acceptance 7: turning reminders on later sends no backlog or catch-up, only what changes from then on', { skip }, async () => {
+  const v = await vehicle({}, { recipients: [driver], followUpDays: 0 });
+  const other = await task(v, { name: 'Wipers', intervalMonths: 1, baselineKind: 'reported', baselineOn: day(-60) });
+  const brake = await task(v, { name: 'Brake fluid', intervalMonths: 36, baselineKind: 'reported', baselineOn: day(-1200), remindersEnabled: false });
+  const soon = await task(v, { name: 'Coolant', recurring: true, intervalDays: 100, baselineKind: 'reported', baselineOn: day(-90), remindersEnabled: false });
+  for (const n of [0, 1, 2]) { await notifier.evaluateVehicle(v, at(n)); await notifier.dispatchOutbox(at(n)); }
+  assert.equal(to(owner).length, 1, 'only the task with reminders on'); mailer.sent.length = 0;
+  // A queued reminder for a task is cancelled if its reminders are turned off before sending.
+  const r1 = await app.call(owner, 'PATCH', `/v1/vehicles/${v}/maintenance-tasks/${other.id}`, { intervalMonths: 2, baselineOn: day(-70) });
+  assert.equal(r1.status, 200, r1.text);
+  await notifier.evaluateVehicle(v, at(2));
+  assert.equal((await pending(v)).length, 2, 'a new due point for Wipers is queued for both recipients');
+  await app.call(owner, 'PATCH', `/v1/vehicles/${v}/maintenance-tasks/${other.id}`, { remindersEnabled: false });
+  assert.equal((await notifier.dispatchOutbox(at(2))).cancelled, 2); assert.equal(mailer.sent.length, 0);
+
+  // Opt in on the overdue and due-soon tasks: their current state counts as announced, for every possible recipient.
+  for (const t of [brake, soon]) {
+    const r = await app.call(owner, 'PATCH', `/v1/vehicles/${v}/maintenance-tasks/${t.id}`, { remindersEnabled: true });
+    assert.equal(r.status, 200, r.text); assert.equal(r.json.remindersEnabled, true);
+  }
+  const ledger = (await db!.pool.query('SELECT user_id, task_id, level FROM notification_task_log WHERE vehicle_id = $1 AND task_id = ANY($2::uuid[])', [v, [brake.id, soon.id]])).rows;
+  assert.equal(ledger.filter((l) => l.task_id === brake.id && l.level === 'overdue').length, 3, 'owner, editor and driver; never the viewer');
+  assert.ok(!ledger.some((l) => l.user_id === viewer.id));
+  for (const n of [2, 3, 4]) { await notifier.evaluateVehicle(v, at(n)); await notifier.dispatchOutbox(at(n)); }
+  assert.equal(mailer.sent.length, 0, 'no catch-up storm after opting in');
+  // What changes afterwards is announced as usual: Coolant moves from due soon to overdue.
+  await notifier.evaluateVehicle(v, at(12)); await notifier.dispatchOutbox(at(12));
+  assert.equal(to(owner).length, 1); assert.match(to(owner)[0]!.text, /Coolant: overdue/);
+  assert.ok(!to(owner)[0]!.text.includes('Brake fluid'), 'still the same overdue point, already counted as announced');
+  // Turning reminders on for one task does not change the others' switches.
+  const all = (await app.call(owner, 'GET', `/v1/vehicles/${v}/maintenance-tasks`)).json.items;
+  assert.deepEqual(all.map((t: any) => [t.name, t.remindersEnabled]), [['Wipers', false], ['Brake fluid', true], ['Coolant', true]]);
+});

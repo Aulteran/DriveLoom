@@ -404,3 +404,132 @@ test('deleting a vehicle removes its tasks and snoozes', { skip }, async () => {
   assert.equal((await db!.pool.query('SELECT 1 FROM maintenance_tasks WHERE vehicle_id = $1', [v])).rowCount, 0);
   assert.equal((await db!.pool.query('SELECT 1 FROM task_snoozes WHERE task_id = $1', [t.id])).rowCount, 0);
 });
+
+// ---------- months, task baselines, reminders switch and preset provenance (presets, Phase A) ----------
+const PRESET = { presetId: 'us-honda-odyssey-2015', presetVersion: 1, presetTaskId: 'brake-fluid' };
+
+test('months, baselines, reminders and provenance: create, read, patch, validate', { skip }, async () => {
+  const v = await vehicle({ odometerUnit: 'mi' });
+  const brake = await task(v, {
+    catalogKey: 'brake_fluid', intervalMonths: 36, baselineKind: 'reported', baselineOn: '2024-05-10', remindersEnabled: false,
+    sourceTrust: 'manufacturer', sourceNote: 'Owner\'s manual maintenance section', ...PRESET,
+  });
+  assert.equal(brake.intervalMonths, 36); assert.equal(brake.intervalDays, null);
+  assert.equal(brake.baselineKind, 'reported'); assert.equal(brake.baselineOn, '2024-05-10'); assert.equal(brake.baselineOdometer, null);
+  assert.equal(brake.baseline, 'reported'); assert.equal(brake.dueOn, '2027-05-10', 'acceptance 2 end to end');
+  assert.equal(brake.lastCompleted, null, 'a reported baseline is not a service record');
+  assert.equal(brake.remindersEnabled, false); assert.equal(brake.sourceTrust, 'manufacturer');
+  assert.deepEqual([brake.presetId, brake.presetVersion, brake.presetTaskId], ['us-honda-odyssey-2015', 1, 'brake-fluid']);
+  // Typed-in tasks keep the defaults: reminders on, no provenance, no baseline.
+  const manual = await task(v, { name: 'Wipers', intervalDays: 365 });
+  assert.equal(manual.remindersEnabled, true); assert.equal(manual.presetId, null); assert.equal(manual.baselineKind, null); assert.equal(manual.intervalMonths, null);
+
+  // Start tracking now: provisional due point, never "ok".
+  const oil = await task(v, { catalogKey: 'oil_change', intervalMonths: 6, intervalDistance: { value: '5000', unit: 'mi' }, baselineKind: 'tracking', baselineOn: day(0), baselineOdometer: { value: '80000', unit: 'mi' } });
+  assert.equal(oil.baseline, 'tracking'); assert.equal(oil.status, 'unknown_reading', 'no odometer reading yet'); assert.deepEqual(oil.dueOdometer, { value: '85000', unit: 'mi' }); assert.ok(oil.dueOn);
+  await app.call(owner, 'POST', `/v1/vehicles/${v}/fill-ups`, { occurredAt: `${day(0)}T08:00:00Z`, odometer: { value: '80100', unit: 'mi' }, volume: { value: '10', unit: 'l' } });
+  assert.equal((await get(v, oil.id)).status, 'no_baseline', 'with a fresh reading far from due: still not "ok", because tracking is not a completion');
+  assert.deepEqual(oil.baselineOdometer, { value: '80000', unit: 'mi' });
+
+  // Switching from days to months needs the days cleared; both at once is refused.
+  assert.equal((await app.call(owner, 'PATCH', T(v, manual.id), { intervalMonths: 12 })).status, 422);
+  const sw = await app.call(owner, 'PATCH', T(v, manual.id), { intervalDays: null, intervalMonths: 12 });
+  assert.equal(sw.status, 200, sw.text); assert.equal(sw.json.intervalMonths, 12); assert.equal(sw.json.intervalDays, null);
+  // Clearing a baseline.
+  const cleared = await app.call(owner, 'PATCH', T(v, oil.id), { baselineKind: null, baselineOn: null, baselineOdometer: null });
+  assert.equal(cleared.json.baseline, 'none'); assert.equal(cleared.json.status, 'no_baseline'); assert.equal(cleared.json.dueOn, null);
+  // Untouched new fields survive an unrelated patch.
+  const renamed = await app.call(owner, 'PATCH', T(v, brake.id), { name: 'Brake fluid (DOT 3)' });
+  assert.equal(renamed.json.presetTaskId, 'brake-fluid'); assert.equal(renamed.json.baselineOn, '2024-05-10'); assert.equal(renamed.json.remindersEnabled, false); assert.equal(renamed.json.intervalMonths, 36);
+
+  // A second task from the same preset task on the same vehicle is a conflict, not a server error.
+  const dup = await app.call(owner, 'POST', T(v), { name: 'Again', intervalMonths: 36, ...PRESET });
+  assert.equal(dup.status, 409, dup.text); assert.equal(dup.json.code, 'maintenance_task_preset_exists');
+  assert.equal((await app.call(owner, 'PATCH', T(v, manual.id), PRESET)).status, 409);
+  // ...but the same preset task on another vehicle is fine.
+  assert.equal((await app.call(owner, 'POST', T(await vehicle()), { name: 'Brake fluid', intervalMonths: 36, ...PRESET })).status, 201);
+
+  const bad: [string, unknown][] = [
+    ['days and months', { name: 'A', intervalDays: 30, intervalMonths: 1 }], ['zero months', { name: 'A', intervalMonths: 0 }], ['huge months', { name: 'A', intervalMonths: 1201 }],
+    ['fractional months', { name: 'A', intervalMonths: 1.5 }], ['one-time with months', { name: 'A', recurring: false, intervalMonths: 3, firstDueOn: day(5) }],
+    ['one-time with baseline', { name: 'A', recurring: false, firstDueOn: day(5), baselineKind: 'reported', baselineOn: day(-5) }],
+    ['baseline kind unknown', { name: 'A', intervalMonths: 6, baselineKind: 'guess', baselineOn: day(-5) }],
+    ['baseline without point', { name: 'A', intervalMonths: 6, baselineKind: 'reported' }],
+    ['baseline point without kind', { name: 'A', intervalMonths: 6, baselineOn: day(-5) }],
+    ['baseline in the future', { name: 'A', intervalMonths: 6, baselineKind: 'reported', baselineOn: day(1) }],
+    ['baseline ancient', { name: 'A', intervalMonths: 6, baselineKind: 'reported', baselineOn: '1850-01-01' }],
+    ['baseline negative odometer', { name: 'A', intervalMonths: 6, baselineKind: 'tracking', baselineOdometer: { value: '-1', unit: 'km' } }],
+    ['partial preset', { name: 'A', intervalMonths: 6, presetId: 'x', presetVersion: 1 }], ['preset id upper case', { name: 'A', intervalMonths: 6, ...PRESET, presetId: 'US' }],
+    ['preset version zero', { name: 'A', intervalMonths: 6, ...PRESET, presetVersion: 0 }], ['reminders string', { name: 'A', intervalMonths: 6, remindersEnabled: 'no' }],
+    ['trust unknown', { name: 'A', intervalMonths: 6, sourceTrust: 'official' }], ['long source note', { name: 'A', intervalMonths: 6, sourceNote: 'x'.repeat(301) }],
+  ];
+  for (const [what, b] of bad) assert.equal((await app.call(owner, 'POST', T(v), b)).status, 422, what);
+});
+
+test('acceptance 4: one visit with oil and tyre rotation; completing only oil does not reset the other', { skip }, async () => {
+  const v = await vehicle();
+  const oil = await task(v, { catalogKey: 'oil_change', intervalMonths: 6, baselineKind: 'reported', baselineOn: day(-200) });
+  const tyres = await task(v, { catalogKey: 'tyre_rotation', intervalMonths: 6, baselineKind: 'reported', baselineOn: day(-200) });
+  assert.equal(oil.status, 'overdue'); assert.equal(tyres.status, 'overdue');
+  // One visit, two items, only the oil item is linked to its task.
+  const r = await visit(v, { servicedOn: day(-1), items: [{ name: 'Oil change', taskId: oil.id }, { name: 'Tyre rotation' }] });
+  assert.equal(r.status, 201, r.text);
+  const after = await get(v, oil.id), other = await get(v, tyres.id);
+  assert.equal(after.baseline, 'completion'); assert.equal(after.status, 'ok'); assert.equal(after.lastCompleted.servicedOn, day(-1));
+  assert.equal(other.baseline, 'reported', 'the unlinked item does not complete the other task'); assert.equal(other.status, 'overdue');
+  assert.equal(other.lastCompleted, null);
+});
+
+test('acceptance 3 end to end: the next due point follows the actual completion date and odometer', { skip }, async () => {
+  const v = await vehicle({ odometerUnit: 'mi' });
+  const oil = await task(v, { catalogKey: 'oil_change', intervalMonths: 6, intervalDistance: { value: '5000', unit: 'mi' }, baselineKind: 'reported', baselineOn: day(-60), baselineOdometer: { value: '60000', unit: 'mi' } });
+  assert.deepEqual(oil.dueOdometer, { value: '65000', unit: 'mi' });
+  await visit(v, { servicedOn: day(-2), odometer: { value: '64200', unit: 'mi' }, items: [{ name: 'Oil', taskId: oil.id }] });
+  const t = await get(v, oil.id);
+  assert.deepEqual(t.dueOdometer, { value: '69200', unit: 'mi' }, '4200 mi after the previous one: the next one counts from 64200');
+  assert.equal(t.dueOn > day(170), true); assert.equal(t.baseline, 'completion');
+});
+
+test('reminders switch: tasksNeedingAttention leaves out tasks whose reminders are off; summary counts follow', { skip }, async () => {
+  const v = await vehicle();
+  await task(v, { name: 'On', intervalMonths: 1, baselineKind: 'reported', baselineOn: day(-60) });
+  const off = await task(v, { name: 'Off', intervalMonths: 1, baselineKind: 'reported', baselineOn: day(-60), remindersEnabled: false });
+  assert.equal(off.status, 'overdue', 'the in-app status is unchanged by the reminders switch');
+  assert.deepEqual((await tasksNeedingAttention(db!.pool, v as Id, owner.id as Id)).map((t) => t.name), ['On']);
+  const sum = (await app.call(owner, 'GET', `/v1/vehicles/${v}/maintenance-status`)).json.counts;
+  assert.deepEqual([sum.overdue, sum.needsAttention, sum.remindersActive], [2, 2, 1]);
+});
+
+test('export and import carry months, baselines, reminders and provenance; a customised preset task is not duplicated', { skip }, async () => {
+  const v = await vehicle();
+  const t = await task(v, {
+    catalogKey: 'brake_fluid', intervalMonths: 36, baselineKind: 'reported', baselineOn: '2024-05-10', baselineOdometer: { value: '81234.5', unit: 'mi' },
+    remindersEnabled: false, sourceTrust: 'manufacturer', sourceNote: 'manual', ...PRESET,
+  });
+  const doc = JSON.parse((await app.call(owner, 'GET', `/v1/vehicles/${v}/export?format=json`)).text);
+  const ex = doc.maintenanceTasks[0];
+  assert.deepEqual(
+    { intervalMonths: ex.intervalMonths, presetId: ex.presetId, presetVersion: ex.presetVersion, presetTaskId: ex.presetTaskId, baselineKind: ex.baselineKind, baselineOn: ex.baselineOn,
+      baselineOdometer: ex.baselineOdometer, remindersEnabled: ex.remindersEnabled, sourceTrust: ex.sourceTrust, sourceNote: ex.sourceNote },
+    { intervalMonths: 36, ...PRESET, baselineKind: 'reported', baselineOn: '2024-05-10', baselineOdometer: { value: '81234.5', unit: 'mi' }, remindersEnabled: false, sourceTrust: 'manufacturer', sourceNote: 'manual' });
+  const fresh = await app.call(stranger, 'POST', '/v1/vehicle-imports', { data: doc, dryRun: false });
+  assert.equal(fresh.status, 200, fresh.text);
+  const nv = fresh.json.vehicle.id as string;
+  const [imp] = (await app.call(stranger, 'GET', T(nv))).json.items;
+  for (const k of ['intervalMonths', 'presetId', 'presetVersion', 'presetTaskId', 'baselineKind', 'baselineOn', 'baselineOdometer', 'remindersEnabled', 'sourceTrust', 'sourceNote', 'dueOn', 'baseline']) {
+    assert.deepEqual(imp[k], t[k], k);
+  }
+  // The owner customises the imported preset task, then imports the same file again: no duplicate, no overwrite.
+  await app.call(stranger, 'PATCH', T(nv, imp.id), { intervalMonths: 24, name: 'Brake fluid flush' });
+  const again = await app.call(stranger, 'POST', `/v1/vehicles/${nv}/import`, { format: 'json', data: doc, dryRun: false });
+  assert.equal(again.status, 200, again.text);
+  assert.deepEqual(again.json.maintenanceTasks, { total: 1, created: 0, duplicates: 1, invalid: 0 });
+  const kept = (await app.call(stranger, 'GET', T(nv))).json.items;
+  assert.equal(kept.length, 1); assert.equal(kept[0].intervalMonths, 24); assert.equal(kept[0].name, 'Brake fluid flush');
+  // Files from before this version (no new fields) import with reminders on and no provenance.
+  const legacy = { ...doc, maintenanceTasks: [{ ref: 't1', name: 'Old', intervalDays: 30 }], serviceVisits: [] };
+  const old = await app.call(stranger, 'POST', '/v1/vehicle-imports', { data: legacy, dryRun: false });
+  assert.equal(old.status, 200, old.text);
+  const [o] = (await app.call(stranger, 'GET', T(old.json.vehicle.id))).json.items;
+  assert.equal(o.remindersEnabled, true); assert.equal(o.presetId, null); assert.equal(o.intervalMonths, null);
+});

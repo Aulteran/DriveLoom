@@ -38,15 +38,30 @@ const inMonth = () => { const d = new Date(); d.setMonth(d.getMonth() + 1); retu
 export function scheduleText(t) {
   if (!t.recurring) return 'One-time';
   const parts = [];
+  if (t.intervalMonths) parts.push(`${t.intervalMonths} month${t.intervalMonths === 1 ? '' : 's'}`);
   if (t.intervalDays) parts.push(`${t.intervalDays} day${t.intervalDays === 1 ? '' : 's'}`);
   if (t.intervalDistance) parts.push(dist(t.intervalDistance));
   return `Repeats every ${parts.join(' or ')}${parts.length > 1 ? ', whichever comes first' : ''}`;
+}
+
+/** The task's own starting point (reported by the owner, or "start tracking now"), as words. Never a recorded completion. */
+export function baselineText(t) {
+  if (!t.baselineKind) return null;
+  const at = [t.baselineOn ? plainDate(t.baselineOn) : null, t.baselineOdometer ? `at ${dist(t.baselineOdometer)}` : null].filter(Boolean).join(' ');
+  return t.baselineKind === 'reported'
+    ? `Last done ${at}, as you reported (no service record).`
+    : `Tracking since ${at}. This is a starting point, not a record that the work was done.`;
 }
 
 /** The lines under a task's name, each a short sentence. Never claims live mileage. */
 export function dueLines(t, summary) {
   const out = [];
   if (t.status === 'completed') { out.push(`Done${t.lastCompleted ? ` on ${plainDate(t.lastCompleted.servicedOn)}` : ''}.`); return out; }
+  if (t.status === 'no_baseline' && t.baseline === 'tracking' && (t.dueOn || t.dueOdometer)) {
+    const due = [t.dueOn ? plainDate(t.dueOn) : null, t.dueOdometer ? `at ${dist(t.dueOdometer)}` : null].filter(Boolean);
+    out.push(`Check by ${due.join(' or ')} at the latest. Without a recorded service DriveLoom cannot say it is up to date.`);
+    return out;
+  }
   if (t.status === 'no_baseline') {
     out.push(t.distanceBaselineMissing
       ? 'The last completion has no odometer reading, so the next distance cannot be worked out.'
@@ -56,7 +71,8 @@ export function dueLines(t, summary) {
   const due = [];
   if (t.dueOn) due.push(plainDate(t.dueOn));
   if (t.dueOdometer) due.push(`at ${dist(t.dueOdometer)}`);
-  out.push(`Due ${due.join(' or ')}${t.baseline === 'first_due' ? ' (first due point you set)' : ''}.`);
+  const why = { first_due: ' (first due point you set)', reported: ' (counted from the date you reported)', tracking: ' (counted from when tracking started)' }[t.baseline] ?? '';
+  out.push(`Due ${due.join(' or ')}${why}.`);
   if (t.daysUntilDue !== null) out.push(t.daysUntilDue < 0 ? `${-t.daysUntilDue} day${t.daysUntilDue === -1 ? '' : 's'} past the date.` : t.daysUntilDue === 0 ? 'Due today.' : `${t.daysUntilDue} day${t.daysUntilDue === 1 ? '' : 's'} to go.`);
   if (t.dueOdometer) {
     const r = summary?.reading;
@@ -90,12 +106,15 @@ function summaryStrip(summary, phone) {
 export function taskCard(v, t, summary, a) {
   const lines = dueLines(t, summary);
   const sn = snoozeText(t);
-  const last = t.lastCompleted ? `Last done ${plainDate(t.lastCompleted.servicedOn)}${t.lastCompleted.odometer ? ` at ${dist(t.lastCompleted.odometer)}` : ''}.` : 'Not recorded as done yet.';
+  const last = t.lastCompleted ? `Last done ${plainDate(t.lastCompleted.servicedOn)}${t.lastCompleted.odometer ? ` at ${dist(t.lastCompleted.odometer)}` : ''}.` : baselineText(t) ?? 'Not recorded as done yet.';
+  const source = t.sourceTrust ? `Interval: ${t.sourceTrust === 'manufacturer' ? 'from manufacturer information' : 'a community suggestion'}${t.sourceNote ? ` (${t.sourceNote})` : ''}. Check it against your owner's manual.` : null;
   return h('article', { class: `${a.phone ? 'm-card ' : 'panel '}mt-task`, 'aria-label': `Maintenance task ${t.name}` },
     h('div', { class: 'mt-head' }, h('h3', {}, t.name), statusBadge(t.status)),
     h('p', { class: 'small muted' }, scheduleText(t)),
     h('div', { class: 'mt-due' }, lines.map((l) => h('p', { class: 'small' }, l))),
     h('p', { class: 'small muted' }, last),
+    source ? h('p', { class: 'small muted' }, source) : null,
+    t.remindersEnabled === false ? h('p', { class: 'small muted' }, 'Email reminders are off for this task.') : null,
     sn ? h('p', { class: 'small mt-snooze' }, icon('history'), sn) : null,
     t.notes ? h('p', { class: 'small muted svc-notes' }, t.notes) : null,
     h('div', { class: 'row mt-actions' },
@@ -113,9 +132,12 @@ export function taskForm(v, existing, catalog, done) {
   catalogSel.addEventListener('change', () => { const c = catalog.items.find((i) => i.key === catalogSel.value); if (c) name.value = c.name; });
   const recurring = select('recurring', [['true', 'Repeats on a schedule'], ['false', 'One-time']], String(existing?.recurring ?? true));
   const days = h('input', { name: 'intervalDays', type: 'number', min: 1, max: 36500, step: 1, inputmode: 'numeric', value: existing?.intervalDays ?? '', placeholder: 'e.g. 365' });
+  const months = h('input', { name: 'intervalMonths', type: 'number', min: 1, max: 1200, step: 1, inputmode: 'numeric', value: existing?.intervalMonths ?? '', placeholder: 'e.g. 12' });
+  const reminders = h('input', { name: 'remindersEnabled', type: 'checkbox', value: 'true', checked: existing ? existing.remindersEnabled !== false : true });
   const unit = (n, val) => select(n, [['km', 'km'], ['mi', 'mi']], val ?? v.odometerUnit, { 'aria-label': `${n === 'intervalUnit' ? 'Interval' : 'Odometer'} unit` });
   const repeatBox = h('div', { class: 'grid' },
     field('Every how many days (optional)', days, '365 days is about a year. Leave empty for a distance-only task.'),
+    field('Or every how many months (optional)', months, 'Calendar months, for example 36 for every three years. Use days or months, not both.'),
     field('Every how far (optional)', h('div', { class: 'inline' }, h('input', { name: 'intervalDistance', inputmode: 'decimal', pattern: '\\d+(\\.\\d{1,3})?', 'aria-label': 'Interval distance', value: existing?.intervalDistance?.value ?? '' }), unit('intervalUnit', existing?.intervalDistance?.unit)),
       'If you set both, the task is due when either is reached first.'));
   const sync = () => { repeatBox.hidden = recurring.value !== 'true'; };
@@ -130,15 +152,20 @@ export function taskForm(v, existing, catalog, done) {
       field('First due on (optional)', h('input', { name: 'firstDueOn', type: 'date', value: existing?.firstDueOn ?? '' }), 'Used until the task is first recorded as done.'),
       field('First due at odometer (optional)', h('div', { class: 'inline' }, h('input', { name: 'firstDueOdometer', inputmode: 'decimal', pattern: '\\d+(\\.\\d{1,3})?', 'aria-label': 'First due odometer', value: existing?.firstDueOdometer?.value ?? '' }), unit('firstUnit', existing?.firstDueOdometer?.unit)))),
     field('Notes (optional)', h('textarea', { name: 'notes', maxlength: 500 }, existing?.notes ?? '')),
+    h('label', { class: 'check' }, reminders, 'Email reminders for this task (when the vehicle\'s emails are on)'),
     h('div', { class: 'row' }, h('button', { type: 'submit' }, existing ? 'Save changes' : 'Add task'), h('button', { type: 'button', class: 'secondary', onclick: () => done(false) }, 'Cancel')),
   ], async (x) => {
     const rec = x.recurring === 'true';
-    const iv = x.intervalDistance.trim(), fo = x.firstDueOdometer.trim(), d = String(x.intervalDays ?? '').trim();
+    const iv = x.intervalDistance.trim(), fo = x.firstDueOdometer.trim(), d = String(x.intervalDays ?? '').trim(), mo = String(x.intervalMonths ?? '').trim();
+    if (rec && d && mo) throw new Error('Give the interval in days or in months, not both.');
     const body = {
       name: x.name.trim(), catalogKey: x.catalog || null, recurring: rec,
-      intervalDays: rec && d ? Number(d) : null, intervalDistance: rec && iv ? { value: iv, unit: x.intervalUnit } : null,
+      intervalDays: rec && d ? Number(d) : null, intervalMonths: rec && mo ? Number(mo) : null, intervalDistance: rec && iv ? { value: iv, unit: x.intervalUnit } : null,
       firstDueOn: x.firstDueOn || null, firstDueOdometer: fo ? { value: fo, unit: x.firstUnit } : null, notes: x.notes.trim() || null,
+      remindersEnabled: x.remindersEnabled === 'true',
     };
+    // A one-time task has no starting point of its own; its first due point is what counts.
+    if (!rec && existing?.baselineKind) Object.assign(body, { baselineKind: null, baselineOn: null, baselineOdometer: null });
     if (existing) await patch(`/v1/vehicles/${v.id}/maintenance-tasks/${existing.id}`, body); else await post(`/v1/vehicles/${v.id}/maintenance-tasks`, body);
     done(true);
     return existing ? 'Task updated.' : 'Task added.';

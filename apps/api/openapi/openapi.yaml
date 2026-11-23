@@ -1296,7 +1296,7 @@ paths:
       operationId: createMaintenanceTask
       summary: Add a maintenance task (owner or editor)
       description: >
-        A repeating task (`recurring` true, the default) needs `intervalDays`, `intervalDistance`, or both;
+        A repeating task (`recurring` true, the default) needs `intervalDays` or `intervalMonths`, `intervalDistance`, or both;
         whichever is reached first makes it due. A one-time task has no interval and needs `firstDueOn` or
         `firstDueOdometer`. `name` may be omitted when `catalogKey` is given. At most 200 tasks per vehicle.
       tags: [service]
@@ -2730,10 +2730,20 @@ components:
         catalogKey: { oneOf: [{ type: string }, { type: 'null' }], description: A key from the catalog; a label only, it brings no interval. }
         recurring: { type: boolean, default: true }
         intervalDays: { oneOf: [{ type: integer, minimum: 1, maximum: 36500 }, { type: 'null' }] }
+        intervalMonths: { oneOf: [{ type: integer, minimum: 1, maximum: 1200 }, { type: 'null' }], description: "Calendar months (end-of-month clamped, UTC). Not together with `intervalDays`." }
         intervalDistance: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }], description: Greater than zero. }
         firstDueOn: { oneOf: [{ type: string, format: date }, { type: 'null' }], description: Used until the task is first completed. }
         firstDueOdometer: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }], description: Used until the task is first completed. }
         notes: { type: [string, 'null'], maxLength: 500 }
+        presetId: { oneOf: [{ type: string, pattern: '^[a-z0-9][a-z0-9-]{0,99}$' }, { type: 'null' }], description: "Preset provenance; `presetId`, `presetVersion` and `presetTaskId` are given together or not at all. A vehicle has at most one task per preset task (409 otherwise)." }
+        presetVersion: { oneOf: [{ type: integer, minimum: 1 }, { type: 'null' }] }
+        presetTaskId: { oneOf: [{ type: string, pattern: '^[a-z0-9][a-z0-9_-]{0,99}$' }, { type: 'null' }] }
+        baselineKind: { oneOf: [{ type: string, enum: [reported, tracking] }, { type: 'null' }], description: "`reported`: when / at what odometer it was last done, by the owner's word, without a record; scheduled like a completion. `tracking`: start tracking now; never a completion and never `ok`. Recurring tasks only; needs `baselineOn`, `baselineOdometer` or both." }
+        baselineOn: { oneOf: [{ type: string, format: date }, { type: 'null' }], description: "Today or earlier." }
+        baselineOdometer: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }] }
+        remindersEnabled: { type: [boolean, 'null'], description: "Email reminders for this task (on top of the vehicle's switch). Defaults to true. Turning it on records what is already due as announced, so no backlog is emailed." }
+        sourceTrust: { oneOf: [{ type: string, enum: [manufacturer, community] }, { type: 'null' }], description: "Provenance label for the interval." }
+        sourceNote: { type: [string, 'null'], maxLength: 300 }
     MaintenanceTaskPatch:
       type: object
       additionalProperties: false
@@ -2743,10 +2753,20 @@ components:
         catalogKey: { oneOf: [{ type: string }, { type: 'null' }] }
         recurring: { type: boolean }
         intervalDays: { oneOf: [{ type: integer, minimum: 1, maximum: 36500 }, { type: 'null' }] }
+        intervalMonths: { oneOf: [{ type: integer, minimum: 1, maximum: 1200 }, { type: 'null' }], description: "Calendar months (end-of-month clamped, UTC). Not together with `intervalDays`." }
         intervalDistance: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }] }
         firstDueOn: { oneOf: [{ type: string, format: date }, { type: 'null' }] }
         firstDueOdometer: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }] }
         notes: { type: [string, 'null'], maxLength: 500 }
+        presetId: { oneOf: [{ type: string, pattern: '^[a-z0-9][a-z0-9-]{0,99}$' }, { type: 'null' }], description: "Preset provenance; `presetId`, `presetVersion` and `presetTaskId` are given together or not at all. A vehicle has at most one task per preset task (409 otherwise)." }
+        presetVersion: { oneOf: [{ type: integer, minimum: 1 }, { type: 'null' }] }
+        presetTaskId: { oneOf: [{ type: string, pattern: '^[a-z0-9][a-z0-9_-]{0,99}$' }, { type: 'null' }] }
+        baselineKind: { oneOf: [{ type: string, enum: [reported, tracking] }, { type: 'null' }], description: "`reported`: when / at what odometer it was last done, by the owner's word, without a record; scheduled like a completion. `tracking`: start tracking now; never a completion and never `ok`. Recurring tasks only; needs `baselineOn`, `baselineOdometer` or both." }
+        baselineOn: { oneOf: [{ type: string, format: date }, { type: 'null' }], description: "Today or earlier." }
+        baselineOdometer: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }] }
+        remindersEnabled: { type: [boolean, 'null'], description: "Email reminders for this task (on top of the vehicle's switch). Defaults to true. Turning it on records what is already due as announced, so no backlog is emailed." }
+        sourceTrust: { oneOf: [{ type: string, enum: [manufacturer, community] }, { type: 'null' }], description: "Provenance label for the interval." }
+        sourceNote: { type: [string, 'null'], maxLength: 300 }
         archived: { type: boolean, description: Hide the task without deleting it or its history. }
     MaintenanceSnoozeInput:
       type: object
@@ -2761,7 +2781,9 @@ components:
       description: >
         A task and its status, computed on read (never stored). The next due point comes from the most recent
         service item linked to the task (that visit's date and, when recorded, odometer) plus the interval; without
-        a linked completion, from `firstDueOn` / `firstDueOdometer`. Distance uses only the latest known odometer
+        a linked completion, from the task's own baseline (`reported`, then `tracking`), else from `firstDueOn` /
+        `firstDueOdometer`. A `tracking` baseline never yields `ok`: a result that would be `ok` is `no_baseline`, with
+        the provisional due points filled in. Distance uses only the latest known odometer
         and never extrapolates. Dates are compared in UTC; due today is `due_soon`, past is `overdue`.
       required: [id, vehicleId, name, catalogKey, recurring, intervalDays, intervalDistance, firstDueOn, firstDueOdometer, notes, archived, createdBy, createdAt, updatedAt,
         status, dueOn, dueOdometer, daysUntilDue, distanceUntilDue, baseline, distanceBaselineMissing, readingStale, lastCompleted, snoozed, snoozes, reminderSuppressed, needsAttention]
@@ -2780,13 +2802,23 @@ components:
         createdBy: { oneOf: [{ $ref: '#/components/schemas/Id' }, { type: 'null' }] }
         createdAt: { $ref: '#/components/schemas/Timestamp' }
         updatedAt: { $ref: '#/components/schemas/Timestamp' }
+        intervalMonths: { type: [integer, 'null'] }
+        presetId: { type: [string, 'null'], description: "Set when the task was imported from a preset." }
+        presetVersion: { type: [integer, 'null'] }
+        presetTaskId: { type: [string, 'null'] }
+        baselineKind: { oneOf: [{ type: string, enum: [reported, tracking] }, { type: 'null' }] }
+        baselineOn: { oneOf: [{ type: string, format: date }, { type: 'null' }] }
+        baselineOdometer: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }], description: "Exactly as entered." }
+        remindersEnabled: { type: boolean, description: "Email reminders for this task; when false it is never emailed about." }
+        sourceTrust: { oneOf: [{ type: string, enum: [manufacturer, community] }, { type: 'null' }] }
+        sourceNote: { type: [string, 'null'] }
         status: { $ref: '#/components/schemas/MaintenanceTaskState' }
         dueOn: { oneOf: [{ type: string, format: date }, { type: 'null' }] }
         dueOdometer: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }], description: In the vehicle's odometer unit, rounded to whole units. }
         daysUntilDue: { type: [integer, 'null'], description: Negative when past. }
         distanceUntilDue: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }], description: From the latest known reading to `dueOdometer`; negative when past. Null without a reading. }
-        baseline: { type: string, enum: [completion, first_due, none] }
-        distanceBaselineMissing: { type: boolean, description: A distance interval exists but the last completion recorded no odometer. }
+        baseline: { type: string, enum: [completion, reported, tracking, first_due, none], description: "What the due point is counted from. `reported` and `tracking` come from the task's own baseline; `tracking` is not a completion." }
+        distanceBaselineMissing: { type: boolean, description: "A distance interval exists but the last completion (or the task's baseline) recorded no odometer." }
         readingStale: { type: boolean, description: The task has an odometer due point and the latest reading is missing or older than `staleReadingDays`. Time-only tasks are never stale. }
         lastCompleted:
           oneOf:
@@ -2820,7 +2852,7 @@ components:
             completed: { type: integer }
             snoozed: { type: integer, description: Tasks with an active snooze for the caller. }
             needsAttention: { type: integer, description: Overdue plus due soon, snoozed or not. }
-            remindersActive: { type: integer, description: Needing attention and not snoozed. }
+            remindersActive: { type: integer, description: "Needing attention, not snoozed, and with the task's reminders enabled." }
         reading:
           oneOf:
             - type: 'null'
@@ -2847,6 +2879,16 @@ components:
         firstDueOn: { oneOf: [{ type: string, format: date }, { type: 'null' }] }
         firstDueOdometer: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }] }
         notes: { type: [string, 'null'], maxLength: 500 }
+        intervalMonths: { oneOf: [{ type: integer, minimum: 1, maximum: 1200 }, { type: 'null' }], description: "Calendar months (end-of-month clamped, UTC). Not together with `intervalDays`." }
+        presetId: { oneOf: [{ type: string, pattern: '^[a-z0-9][a-z0-9-]{0,99}$' }, { type: 'null' }], description: "Preset provenance; `presetId`, `presetVersion` and `presetTaskId` are given together or not at all. A vehicle has at most one task per preset task (409 otherwise)." }
+        presetVersion: { oneOf: [{ type: integer, minimum: 1 }, { type: 'null' }] }
+        presetTaskId: { oneOf: [{ type: string, pattern: '^[a-z0-9][a-z0-9_-]{0,99}$' }, { type: 'null' }] }
+        baselineKind: { oneOf: [{ type: string, enum: [reported, tracking] }, { type: 'null' }], description: "`reported`: when / at what odometer it was last done, by the owner's word, without a record; scheduled like a completion. `tracking`: start tracking now; never a completion and never `ok`. Recurring tasks only; needs `baselineOn`, `baselineOdometer` or both." }
+        baselineOn: { oneOf: [{ type: string, format: date }, { type: 'null' }], description: "Today or earlier." }
+        baselineOdometer: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }] }
+        remindersEnabled: { type: [boolean, 'null'], description: "Email reminders for this task (on top of the vehicle's switch). Defaults to true. Turning it on records what is already due as announced, so no backlog is emailed." }
+        sourceTrust: { oneOf: [{ type: string, enum: [manufacturer, community] }, { type: 'null' }], description: "Provenance label for the interval." }
+        sourceNote: { type: [string, 'null'], maxLength: 300 }
         archived: { type: boolean, default: false }
         snooze:
           type: object
