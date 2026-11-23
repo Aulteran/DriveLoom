@@ -491,3 +491,61 @@ button.icon-only .icon { width: 22px; height: 22px; }
   *, *::before, *::after { animation: none !important; transition: none !important; }
   .card:hover, button:hover, .button:hover { transform: none; }
 }
+
+/* ---------- service history ---------- */
+.svc-list { display: grid; gap: 12px; margin: 0 0 16px; padding: 0; list-style: none; }
+.svc-visit { margin: 0; }
+.svc-head { display: flex; gap: 12px; justify-content: space-between; align-items: flex-start; }
+.svc-head h2 { margin: 0; font-size: 1.05rem; }
+.svc-total { text-align: right; }
+.svc-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; padding: 0; list-style: none; }
+.svc-chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--text); border: 1px solid var(--line); font-size: .85rem; }
+.svc-chip-cat, .svc-chip-cost { color: var(--muted); font-size: .75rem; }
+.svc-notes { margin: 0 0 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.svc-filters { margin-bottom: 16px; align-items: flex-end; }
+.svc-fieldset { border: 1px solid var(--line); border-radius: var(--radius-sm); margin: 0 0 16px; padding: 12px; }
+.svc-fieldset legend { padding: 0 6px; font-weight: 600; }
+.svc-item { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) auto; gap: 8px; align-items: end; }
+.svc-item .field { margin-bottom: 8px; }
+.svc-remove { margin-bottom: 8px; }
+.m-list-plain { list-style: none; padding: 0; }
+@media (max-width: 700px) {
+  .svc-item { grid-template-columns: minmax(0, 1fr) auto; }
+  .svc-item .field:nth-child(1) { grid-column: 1 / -1; }
+  .svc-head { flex-direction: column; }
+  .svc-total { text-align: left; }
+}
+
+/* ---------- service attachments ---------- */
+.att { margin: 12px 0; }
+/* Maintenance planning (Service page) */
+.svc-tabs { display: flex; gap: 4px; margin: 0 0 16px; border-bottom: 1px solid var(--line); }
+.svc-tab { padding: 8px 14px; color: var(--muted); text-decoration: none; border-bottom: 2px solid transparent; margin-bottom: -1px; font-weight: 600; }
+.svc-tab:hover { color: var(--text); }
+.svc-tab.on { color: var(--text); border-bottom-color: var(--accent); }
+.mt-summary, .mt-note { margin: 0 0 12px; }
+.mt-note { display: flex; gap: 8px; align-items: center; }
+.mt-counts { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 0 0 8px; padding: 0; list-style: none; }
+.mt-count { display: inline-flex; align-items: center; gap: 6px; }
+.mt-count .badge { margin-left: 0; }
+.mt-task { margin: 0; }
+.mt-head { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.mt-head h3 { margin: 0; font-size: 1.05rem; }
+.mt-task p { margin: 4px 0; }
+.mt-snooze { display: flex; gap: 6px; align-items: flex-start; }
+.mt-actions { margin-top: 8px; }
+.mt-badge .icon { width: 14px; height: 14px; }
+.badge.bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, transparent); }
+.badge.good { color: var(--good); border-color: color-mix(in srgb, var(--good) 40%, transparent); }
+.svc-item .mt-link { grid-column: 1 / -1; }
+.mt-preset { margin: 0 0 8px; }
+.mt-suggest:empty { display: none; }
+.att-h { margin: 0 0 8px; font-size: .95rem; }
+.att-list, .att-status { display: grid; gap: 6px; margin: 0 0 8px; padding: 0; list-style: none; }
+.att-item { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid var(--line); }
+.att-item > input { flex: 1 1 12rem; min-width: 0; }
+.att-name { flex: 1 1 8rem; min-width: 0; overflow-wrap: anywhere; font-weight: 500; }
+.att-pick { margin: 4px 0; }
+.att-bad { color: var(--bad); }
+.att-preview { max-width: min(92vw, 900px); }
+.att-preview img { display: block; max-width: 100%; max-height: 70vh; margin: 0 auto 12px; }

@@ -7,7 +7,7 @@ import { get } from '../api.js';
 import { state } from '../core.js';
 import { h } from '../ui.js';
 import { icon } from '../icons.js';
-import { qty, money, date, UNIT, ROLE, vehicleTitle, vehicleDescription } from '../format.js';
+import { qty, money, date, UNIT, ROLE, vehicleTitle, vehicleDescription, canAddFuel, canEditVehicle } from '../format.js';
 import { difference, lowerIsBetter } from '../economy.js';
 import { DAY, statsUrl } from '../views/vehicle.js';
 import { touchEconomyChart } from './chart.js';
@@ -48,7 +48,7 @@ function stat(label, value, sub) {
 /** ctx: { query, friends } — `friends` is the accepted-friends count the shell fetched. */
 export async function homeScreen(id, { query, friends = 0 }) {
   const v = await get(`/v1/vehicles/${id}`);
-  const canEdit = v.role !== 'viewer' && !v.archived;
+  const canEdit = canAddFuel(v) && !v.archived;
   const win = PERIODS.some(([k]) => k === query.get('window')) ? query.get('window') : '90';
   const days = win === 'all' ? null : Number(win);
   const now = Date.now();
@@ -69,7 +69,7 @@ export async function homeScreen(id, { query, friends = 0 }) {
         h('span', { class: 'm-empty-art', 'aria-hidden': 'true' }, icon('gauge')),
         h('h2', { id: 'm-empty-h' }, 'No fill-ups yet'),
         h('p', {}, 'Log a fill-up each time you buy fuel. Economy needs two full fills: the first sets the starting point.'),
-        canEdit ? h('div', { class: 'm-actions' }, h('a', { class: 'button', href: '#/fill' }, icon('plus'), 'Log a fill-up'), h('a', { class: 'button secondary', href: `#/vehicles/${v.id}/data` }, icon('upload'), 'Import')) : null),
+        canEdit ? h('div', { class: 'm-actions' }, h('a', { class: 'button', href: '#/fill' }, icon('plus'), 'Log a fill-up'), canEditVehicle(v) ? h('a', { class: 'button secondary', href: `#/vehicles/${v.id}/data` }, icon('upload'), 'Import') : null) : null),
       friends > 0 ? friendsCard(friends) : null);
   }
 

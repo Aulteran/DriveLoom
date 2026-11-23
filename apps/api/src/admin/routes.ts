@@ -12,6 +12,7 @@ import { Integrations, parseOidc, parseSmtp, sameIssuer } from './integrations.t
 import { randomToken, sha256Hex } from '../auth/crypto.ts';
 import { requireFresh, revokeAll } from '../auth/sessions.ts';
 import { getInstanceDefaults, parseUnits, setInstanceDefaults } from '../preferences.ts';
+import { getModules, isModuleName, setModule } from '../modules.ts';
 
 const ADMIN_LOCK = 7_165_202; // same key as the bootstrap lock: serialises every change to the set of admins
 const notFound = () => new HttpProblem(404, 'user_not_found', 'User not found');
@@ -128,6 +129,24 @@ export function adminRoutes(ctx: AuthContext): Route[] {
       const next = await setInstanceDefaults(ctx.db, patch);
       await audit(ctx.db, p.userId, 'admin.unit_defaults_changed', null, { ...patch }, ctx.now());
       return { status: 200, body: next };
+    } },
+    // Opt-in modules: off until an administrator turns one on for the whole instance.
+    { method: 'GET', path: '/v1/admin/settings/modules', async handler(r) {
+      admin(r);
+      return { status: 200, body: { modules: await getModules(ctx.db) } };
+    } },
+    { method: 'PUT', path: '/v1/admin/settings/modules/:module', async handler(r) {
+      const p = admin(r);
+      const name = r.params['module'];
+      if (!isModuleName(name)) throw new HttpProblem(404, 'module_not_found', 'Module not found');
+      const { enabled } = obj(r.body, ['enabled']);
+      if (typeof enabled !== 'boolean') throw invalid('enabled must be a boolean.');
+      const was = (await getModules(ctx.db))[name];
+      await withTx(ctx.db, async (tx) => {
+        await setModule(tx, name, enabled);
+        await audit(tx, p.userId, 'admin.module_changed', null, { module: name, from: was, to: enabled }, ctx.now());
+      });
+      return { status: 200, body: { modules: await getModules(ctx.db) } };
     } },
     // SMTP and OIDC. Secrets are write-only: the views say only whether one is stored.
     { method: 'GET', path: '/v1/admin/settings/smtp', async handler(r) { admin(r); return { status: 200, body: integ().smtpView() }; } },

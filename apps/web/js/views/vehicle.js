@@ -3,22 +3,24 @@
 import { api, get, post, patch, put, del } from '../api.js';
 import { h, form, field, select, toast, confirmDialog, download } from '../ui.js';
 import { go, render, state } from '../core.js';
-import { qty, date, dateTime, money, REASONS, ROLE, UNIT, localInput, toInstant, vehicleTitle, vehicleDescription, vehicleLabel } from '../format.js';
+import { qty, date, dateTime, money, REASONS, ROLE, GRANTABLE_ROLES, ROLE_HELP, UNIT, canEditVehicle, canAddFuel, canChangeFill, localInput, toInstant, vehicleTitle, vehicleDescription, vehicleLabel } from '../format.js';
 import { economyChart, barChart } from './chart.js';
 import { currencyOptions, pageHead } from './vehicles.js';
 import { icon } from '../icons.js';
+import { serviceTab } from './service.js';
 
-const SECTIONS = { overview: 'Dashboard', log: 'Fuel log', members: 'Members', data: 'Import & export', settings: 'Vehicle settings' };
+const SECTIONS = { overview: 'Dashboard', log: 'Fuel log', service: 'Service', members: 'Members', data: 'Import & export', settings: 'Vehicle settings' };
 
 const meta = (v) => [vehicleTitle(v) === vehicleDescription(v) ? '' : vehicleDescription(v), ' ', h('span', { class: `badge ${v.role === 'owner' ? 'accent' : ''}` }, ROLE[v.role]), v.archived ? h('span', { class: 'badge warn' }, 'Archived') : null];
 
 export async function vehicleView(id, tab, query) {
   const v = await get(`/v1/vehicles/${id}`);
   if (!SECTIONS[tab]) tab = 'overview';
-  const canEdit = v.role !== 'viewer' && !v.archived;
-  if (tab === 'overview') return { vehicle: v, title: SECTIONS[tab], view: await overviewTab(v, canEdit, query) };
-  const body = tab === 'members' ? await membersTab(v) : tab === 'data' ? dataTab(v, canEdit)
-    : tab === 'settings' ? await settingsTab(v) : await logTab(v, canEdit, query);
+  const canAdd = canAddFuel(v) && !v.archived;
+  if (tab === 'service') return { vehicle: v, title: SECTIONS[tab], view: await serviceTab(v, query, pageHead, meta) };
+  if (tab === 'overview') return { vehicle: v, title: SECTIONS[tab], view: await overviewTab(v, canAdd, query) };
+  const body = tab === 'members' ? await membersTab(v) : tab === 'data' ? dataTab(v, canEditVehicle(v) && !v.archived)
+    : tab === 'settings' ? await settingsTab(v) : await logTab(v, canAdd, query);
   return { vehicle: v, title: SECTIONS[tab], view: h('div', {}, pageHead(vehicleTitle(v), SECTIONS[tab], meta(v)), body) };
 }
 
@@ -62,6 +64,8 @@ function fillForm(v, existing, done) {
 }
 
 async function logTab(v, canEdit, query) {
+  // canEdit: may log fill-ups. Drivers see actions only on the rows they logged.
+  const mayChange = (f) => !v.archived && canChangeFill(v, f, state.account.id);
   const PAGE = 100;
   const offset = Math.max(0, Number(query.get('offset') ?? 0) || 0);
   const { items, total } = await get(`/v1/vehicles/${v.id}/fill-ups?limit=${PAGE}&offset=${offset}`);
@@ -76,12 +80,12 @@ async function logTab(v, canEdit, query) {
     h('td', { class: 'num' }, qty(f.display.volume), f.full ? null : h('div', { class: 'small muted' }, 'partial')),
     h('td', { class: 'num hide-sm' }, f.cost ? money(f.cost.amount, f.cost.currency) : '—', f.cost && f.cost.currency !== f.cost.reportingCurrency ? h('div', { class: 'small muted' }, `= ${money(f.cost.reportingAmount, f.cost.reportingCurrency)}`) : null),
     h('td', { class: 'num' }, f.interval?.available ? h('strong', {}, qty(f.interval.economy)) : h('span', { class: 'small muted' }, REASONS[f.interval?.reason] ?? '')),
-    canEdit ? h('td', { class: 'num' },
+    canEdit ? h('td', { class: 'num' }, mayChange(f) ? [
       h('button', { class: 'ghost', 'aria-label': `Edit fill-up of ${date(f.occurredAt)}`, onclick: () => open(f) }, 'Edit'),
       h('button', { class: 'ghost', 'aria-label': `Delete fill-up of ${date(f.occurredAt)}`, onclick: async () => {
         if (!(await confirmDialog(`Delete the fill-up of ${dateTime(f.occurredAt)}?`, 'Delete'))) return;
         await del(`/v1/vehicles/${v.id}/fill-ups/${f.id}`); toast('Fill-up deleted.'); render();
-      } }, 'Delete')) : null);
+      } }, 'Delete')] : null) : null);
   // The dashboard's "Add fill-up" lands here with ?add=1; drop it so a re-render does not reopen the form.
   if (canEdit && query.get('add') === '1') {
     history.replaceState(null, '', `#/vehicles/${v.id}/log`);
@@ -187,7 +191,7 @@ async function overviewTab(v, canEdit, query) {
         h('div', { class: 'empty-art', 'aria-hidden': 'true' }, icon('chart')),
         h('h2', {}, 'No fill-ups yet'),
         h('p', { class: 'muted' }, 'Charts and reports appear here once you log fill-ups. Economy needs two full fills: the first sets the starting point.'),
-        canEdit ? h('div', { class: 'row center' }, addFill, h('a', { class: 'button secondary', href: `#/vehicles/${v.id}/data` }, icon('upload'), 'Import a CSV')) : null));
+        canEdit ? h('div', { class: 'row center' }, addFill, canEditVehicle(v) ? h('a', { class: 'button secondary', href: `#/vehicles/${v.id}/data` }, icon('upload'), 'Import a CSV') : null) : null));
   }
 
   // ---- headline figures ----
@@ -253,11 +257,11 @@ async function membersTab(v) {
   const rows = items.map((m) => h('tr', {},
     h('td', {}, m.displayName || m.email, m.userId === me ? ' (you)' : '', h('div', { class: 'small muted' }, m.email)),
     h('td', {}, owner && m.role !== 'owner'
-      ? select('role', [['editor', 'Editor'], ['viewer', 'Viewer']], m.role, { 'aria-label': `Role for ${m.email}`, style: 'width:auto', onchange: async (e) => { await put(`/v1/vehicles/${v.id}/members/${m.userId}`, { role: e.target.value }); toast('Role changed.'); } })
+      ? select('role', GRANTABLE_ROLES, m.role, { 'aria-label': `Role for ${m.email}`, style: 'width:auto', onchange: async (e) => { await put(`/v1/vehicles/${v.id}/members/${m.userId}`, { role: e.target.value }); toast('Role changed.'); } })
       : ROLE[m.role]),
     h('td', { class: 'num' },
       owner && m.role !== 'owner' ? h('button', { class: 'ghost', onclick: async () => {
-        if (!(await confirmDialog(`Make ${m.email} the owner? You will become an editor.`, 'Transfer ownership'))) return;
+        if (!(await confirmDialog(`Make ${m.email} the owner? You will become an Authorized Manager, and the new owner can change your role.`, 'Transfer ownership'))) return;
         await put(`/v1/vehicles/${v.id}/owner`, { userId: m.userId }); toast('Ownership transferred.'); render();
       } }, 'Make owner') : null,
       (owner && m.role !== 'owner') || (m.userId === me && m.role !== 'owner') ? h('button', { class: 'ghost', onclick: async () => {
@@ -270,8 +274,8 @@ async function membersTab(v) {
     h('div', { class: 'panel table-wrap' }, h('table', {}, h('thead', {}, h('tr', {}, h('th', { scope: 'col' }, 'Member'), h('th', { scope: 'col' }, 'Role'), h('th', { scope: 'col' }))), h('tbody', {}, rows))),
     owner ? form({ class: 'panel' }, [
       h('h2', {}, 'Share this vehicle'),
-      h('p', { class: 'muted small' }, 'Editors can add and correct fill-ups and edit details. Viewers can only read. Only you can manage members.'),
-      h('div', { class: 'grid' }, field('Email of a user on this instance', h('input', { name: 'email', type: 'email', required: true })), field('Role', select('role', [['viewer', 'Viewer'], ['editor', 'Editor']], 'viewer'))),
+      h('p', { class: 'muted small' }, `${ROLE.editor}: ${ROLE_HELP.editor} ${ROLE.driver}: ${ROLE_HELP.driver} ${ROLE.viewer}: ${ROLE_HELP.viewer} Only you can manage members.`),
+      h('div', { class: 'grid' }, field('Email of a user on this instance', h('input', { name: 'email', type: 'email', required: true })), field('Role', select('role', GRANTABLE_ROLES, 'viewer'))),
       h('button', { type: 'submit' }, 'Add member'),
     ], async (x, el) => { await post(`/v1/vehicles/${v.id}/members`, { email: x.email, role: x.role }); el.reset(); render(); return 'Member added.'; }) : null);
 }
@@ -287,6 +291,7 @@ function dataTab(v, canEdit) {
   const showReport = (r) => report.replaceChildren(h('div', { class: r.committed ? 'notice' : r.summary.invalid ? 'error' : 'notice' },
     h('p', {}, r.committed ? 'Imported.' : r.dryRun ? 'Preview only. Nothing has been saved yet.' : 'Nothing was imported.'),
     h('p', {}, `${r.summary.total} rows: ${r.summary.created} ${r.committed ? 'added' : 'to add'}, ${r.summary.duplicates} already present, ${r.summary.invalid} invalid.`),
+    r.serviceVisits ? h('p', {}, `${r.serviceVisits.total} service visits: ${r.serviceVisits.created} ${r.committed ? 'added' : 'to add'}, ${r.serviceVisits.duplicates} already present, ${r.serviceVisits.invalid} invalid.`) : null,
     r.errors.length ? h('ul', {}, r.errors.map((e) => h('li', {}, `Row ${e.row}: ${e.message}`))) : null));
   return h('div', {},
     h('div', { class: 'panel' }, h('h2', {}, 'Export'),
@@ -314,7 +319,7 @@ function dataTab(v, canEdit) {
 // ---------- settings ----------
 async function settingsTab(v) {
   const owner = v.role === 'owner';
-  const canEdit = v.role !== 'viewer';
+  const canEdit = canEditVehicle(v);
   const optIn = await get(`/v1/vehicles/${v.id}/comparison`);
   const parts = [];
   if (canEdit) {
@@ -327,7 +332,7 @@ async function settingsTab(v) {
         field('Year', h('input', { name: 'year', type: 'number', value: v.year ?? '' })),
         field('State or province (optional)', h('input', { name: 'plateRegion', maxlength: 10, placeholder: 'ON', value: v.plateRegion ?? '', autocomplete: 'off' })),
         field('Licence plate (optional)', h('input', { name: 'plateNumber', maxlength: 12, placeholder: 'CXPZ101', value: v.plateNumber ?? '', autocomplete: 'off' })),
-        field('VIN (optional)', h('input', { name: 'vin', maxlength: 20, value: v.vin ?? '', autocomplete: 'off' }), 'Plate and VIN are visible only to this vehicle\'s owner and drivers, never to friends.'),
+        field('VIN (optional)', h('input', { name: 'vin', maxlength: 20, value: v.vin ?? '', autocomplete: 'off' }), 'Plate and VIN are visible only to this vehicle\'s members, never to friends.'),
         field('Odometer unit', select('odometerUnit', [['km', 'Kilometres'], ['mi', 'Miles']], v.odometerUnit)),
         field('Reporting currency', select('currency', currencyOptions(v.currency), v.currency), 'Cannot change once costs are recorded.')),
       h('button', { type: 'submit' }, 'Save'),
@@ -353,6 +358,15 @@ async function settingsTab(v) {
     owner ? h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: optIn.enabled, onchange: async (e) => {
       try { await put(`/v1/vehicles/${v.id}/comparison`, { enabled: e.target.checked }); toast(e.target.checked ? 'Shared with friends.' : 'No longer shared.'); } catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
     } }), 'Share this vehicle\'s economy with my friends') : h('p', {}, optIn.enabled ? 'The owner shares this vehicle with their friends.' : 'Not shared. Only the owner can change this.')));
+  const vis = await get(`/v1/vehicles/${v.id}/service-visibility`);
+  if (vis.moduleEnabled) {
+    parts.push(h('div', { class: 'panel' },
+      h('h2', {}, 'Service page'),
+      h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: vis.showService, onchange: async (e) => {
+        try { await put(`/v1/vehicles/${v.id}/service-visibility`, { showService: e.target.checked }); toast(e.target.checked ? 'Service page shown.' : 'Service page hidden.'); render(); } catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
+      } }), 'Show Service page for this vehicle'),
+      h('p', { class: 'small muted' }, 'Only changes your own menus. Service data and what you are allowed to do are not affected.')));
+  }
   if (owner) {
     parts.push(h('div', { class: 'panel' },
       h('h2', {}, v.archived ? 'Archived' : 'Archive'),

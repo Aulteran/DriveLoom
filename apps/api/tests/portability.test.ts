@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { VehicleService } from '../src/vehicles/service.ts';
 import { vehicleRoutes } from '../src/vehicles/routes.ts';
 import { imageRoutes, MAX_IMAGE_BYTES } from '../src/vehicles/images.ts';
+import { ServiceService } from '../src/service/service.ts';
 import { FuelService } from '../src/fuel/service.ts';
 import { fuelRoutes } from '../src/fuel/routes.ts';
 import { PortabilityService, MAX_IMPORT_ROWS } from '../src/portability/service.ts';
@@ -23,7 +24,7 @@ async function instance(): Promise<Instance> {
   const [owner, editor, viewer, stranger] = await Promise.all([createTestUser(db.pool), createTestUser(db.pool), createTestUser(db.pool), createTestUser(db.pool)]) as [TestUser, TestUser, TestUser, TestUser];
   const vehicles = new VehicleService(db.pool), fuel = new FuelService(db.pool, vehicles);
   const app = await startApp([owner, editor, viewer, stranger], [
-    ...vehicleRoutes(vehicles), ...imageRoutes(db.pool, vehicles), ...fuelRoutes(fuel), ...portabilityRoutes(new PortabilityService(db.pool, vehicles, fuel)),
+    ...vehicleRoutes(vehicles), ...imageRoutes(db.pool, vehicles), ...fuelRoutes(fuel), ...portabilityRoutes(new PortabilityService(db.pool, vehicles, fuel, new ServiceService(db.pool, vehicles))),
   ]);
   return { db, app, owner, editor, viewer, stranger };
 }

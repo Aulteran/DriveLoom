@@ -3,7 +3,7 @@
 import { get } from '../api.js';
 import { h } from '../ui.js';
 import { icon } from '../icons.js';
-import { state } from '../core.js';
+import { state, defaultVehicle, serviceVisible } from '../core.js';
 import { UNIT } from '../format.js';
 import { installStatus } from './install.js';
 
@@ -22,6 +22,8 @@ export async function moreView({ requests = 0, onSignOut }) {
   const p = state.prefs ?? {};
   const units = [UNIT[p.distanceUnit], UNIT[p.volumeUnit], p.currency].filter(Boolean).join(' · ');
   const version = await get('/v1/version').then((v) => v.server, () => null);
+  const car = defaultVehicle();
+  const showService = car ? await serviceVisible(car.id) : false;
   const initials = who.split(/[\s@.]+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('') || '?';
 
   return h('div', { class: 'm-screen m-more' },
@@ -31,6 +33,7 @@ export async function moreView({ requests = 0, onSignOut }) {
       h('span', { class: 'm-profile-text' }, h('strong', {}, a.displayName || a.email), h('span', {}, [a.displayName ? a.email : null, admin ? 'Administrator' : null].filter(Boolean).join(' · ') || 'Your profile')),
       icon('next', 'icon m-row-next')),
     group('More', [
+      showService ? row(`#/vehicles/${car.id}/service`, 'wrench', 'Service', null, 'Service history for the active vehicle') : null,
       row('#/friends', 'users', 'Friends', requests
         ? h('span', { class: 'm-count' }, h('span', { 'aria-hidden': 'true' }, String(requests)), h('span', { class: 'm-vh' }, `(${requests} friend ${requests === 1 ? 'request' : 'requests'})`))
         : null),

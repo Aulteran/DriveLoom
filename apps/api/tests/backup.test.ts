@@ -10,6 +10,7 @@ import { BackupError, EPHEMERAL_TABLES, createBackup, restoreBackup, verifyBacku
 import { MIGRATIONS_DIR, migrate } from '../src/migrate.ts';
 import { uuidv7 } from '../src/ids.ts';
 import { VehicleService } from '../src/vehicles/service.ts';
+import { ServiceService } from '../src/service/service.ts';
 import { FuelService } from '../src/fuel/service.ts';
 import { harness, signUp, principalFor } from './helpers/auth.ts';
 import * as acct from '../src/auth/accounts.ts';
@@ -41,6 +42,8 @@ async function snapshot(q: Pick<pg.Client, 'query'>): Promise<Record<string, str
   return out;
 }
 
+// Every byte value, including 0x00 and 0xff, to prove bytea survives the text dump.
+const RECEIPT = Buffer.concat([Buffer.from('%PDF-1.4\n'), Buffer.from(Array.from({ length: 2048 }, (_, i) => (i * 7) % 256))]);
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from(Array.from({ length: 4096 }, (_, i) => i % 256))]);
 
 async function seed(h: NonNullable<Awaited<ReturnType<typeof harness>>>) {
@@ -53,6 +56,28 @@ async function seed(h: NonNullable<Awaited<ReturnType<typeof harness>>>) {
   await fuel.create(pb, v.id, { occurredAt: '2026-05-01T08:00:00Z', odometer: { value: '1000.5', unit: 'mi' }, volume: { value: '10.250', unit: 'gal_us' }, cost: { amount: '55.10', currency: 'CHF', exchangeRate: '1.0637' }, notes: 'näïve "quotes"\n☃' });
   await fuel.create(pb, v.id, { occurredAt: '2026-05-09T08:00:00Z', odometer: { value: '1300', unit: 'mi' }, volume: { value: '9', unit: 'gal_us' } });
   await h.ctx.db.query('INSERT INTO vehicle_images (vehicle_id, content_type, data, uploaded_by) VALUES ($1,$2,$3,$4)', [v.id, 'image/png', PNG, pb.userId]);
+  await h.ctx.db.query("INSERT INTO instance_modules (module, enabled) VALUES ('service', true)");
+  const service = new ServiceService(h.ctx.db, vehicles, h.ctx.now);
+  await service.create(pb, v.id, { servicedOn: '2026-04-02', odometer: { value: '950.25', unit: 'mi' }, provider: 'Näïve Garage', totalCost: '0', notes: 'free ☃',
+    items: [{ name: 'Oil change', category: 'scheduled', cost: '0.00' }, { name: 'Wipers', cost: null }] });
+  const visitId = (await h.ctx.db.query('SELECT id FROM service_visits')).rows[0].id;
+  await h.ctx.db.query('INSERT INTO service_attachments (id, visit_id, file_name, content_type, size_bytes, sha256, data, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
+    [uuidv7(), visitId, 'Quittung ☃.pdf', 'application/pdf', RECEIPT.length, createHash('sha256').update(RECEIPT).digest('hex'), RECEIPT, pb.userId]);
+  await h.ctx.db.query('INSERT INTO vehicle_user_prefs (vehicle_id, user_id, show_service) VALUES ($1,$2,false)', [v.id, pa.userId]);
+  // Maintenance planning: a task linked from the visit's first item, with a vehicle-wide and a personal snooze.
+  const taskId = uuidv7();
+  await h.ctx.db.query(`INSERT INTO maintenance_tasks (id, vehicle_id, name, catalog_key, recurring, interval_days, interval_distance_input, interval_distance_unit, interval_distance_km, first_due_on, notes, created_by)
+    VALUES ($1,$2,'Öl ☃','oil_change',true,365,'7500.5','mi','12071.7',$3,'note',$4)`, [taskId, v.id, '2026-09-01', pb.userId]);
+  await h.ctx.db.query("UPDATE service_items SET task_id = $1 WHERE visit_id = $2 AND position = 0", [taskId, visitId]);
+  await h.ctx.db.query("INSERT INTO task_snoozes (id, task_id, scope, user_id, snooze_until_date, snooze_until_odometer_km, reason, created_by) VALUES ($1,$2,'vehicle',NULL,'2026-10-01','5000.5','später',$3)", [uuidv7(), taskId, pb.userId]);
+  await h.ctx.db.query("INSERT INTO task_snoozes (id, task_id, scope, user_id, snooze_until_date, created_by) VALUES ($1,$2,'personal',$3,'2026-10-05',$3)", [uuidv7(), taskId, pa.userId]);
+  // Reminder emails: settings, a selection, an opt-out, what was already told (kept) and a queued email (not kept).
+  await h.ctx.db.query('INSERT INTO vehicle_notification_settings (vehicle_id, email_enabled, follow_up_days, updated_by) VALUES ($1,true,14,$2)', [v.id, pb.userId]);
+  await h.ctx.db.query('INSERT INTO vehicle_notification_recipients (vehicle_id, user_id, selected_by) VALUES ($1,$2,$3)', [v.id, pa.userId, pb.userId]);
+  await h.ctx.db.query('INSERT INTO vehicle_notification_optouts (vehicle_id, user_id) VALUES ($1,$2)', [v.id, pa.userId]);
+  await h.ctx.db.query("INSERT INTO notification_task_log (user_id, task_id, vehicle_id, occurrence_key, level, first_notified_at, last_bucket, sends, muted) VALUES ($1,$2,$3,'2026-09-01|-','overdue','2026-09-02T08:00:00Z',2,3,true)", [pb.userId, taskId, v.id]);
+  await h.ctx.db.query(`INSERT INTO notification_outbox (id, vehicle_id, user_id, dedupe_key, payload, status, next_attempt_at, created_at)
+    VALUES ($1,$2,$3,'k1','{"tasks":[],"reading":null}','pending',now(),now())`, [uuidv7(), v.id, pb.userId]);
   return { a, b, pb, v, totp };
 }
 
@@ -70,6 +95,13 @@ test('full restore into an isolated instance preserves users, vehicles, records 
     const info = await createBackup(h.ctx.db, file);
     assert.equal(info.tables['users'], 2);
     assert.equal(info.tables['vehicle_images'], 1);
+    assert.equal(info.tables['instance_modules'], 1);
+    assert.equal(info.tables['service_visits'], 1);
+    assert.equal(info.tables['service_items'], 2);
+    assert.equal(info.tables['service_attachments'], 1);
+    assert.equal(info.tables['vehicle_user_prefs'], 1);
+    for (const t of ['vehicle_notification_settings', 'vehicle_notification_recipients', 'vehicle_notification_optouts', 'notification_task_log']) assert.equal(info.tables[t], 1, t);
+    assert.ok(EPHEMERAL_TABLES.includes('notification_outbox'));
     for (const t of EPHEMERAL_TABLES) assert.ok(!(t in info.tables), `${t} is not archived`);
     assert.deepEqual(await verifyBackup(file), info);
 
@@ -77,6 +109,29 @@ test('full restore into an isolated instance preserves users, vehicles, records 
     assert.deepEqual(await snapshot(target.client), await snapshot(h.ctx.db));
     const img = await target.client.query('SELECT data FROM vehicle_images WHERE vehicle_id = $1', [v.id]);
     assert.ok((img.rows[0].data as Buffer).equals(PNG), 'image bytes are identical');
+    assert.deepEqual((await target.client.query('SELECT module, enabled FROM instance_modules')).rows, [{ module: 'service', enabled: true }]);
+    const att = await target.client.query('SELECT file_name, content_type, size_bytes, sha256, data FROM service_attachments');
+    assert.equal(att.rows.length, 1);
+    assert.ok((att.rows[0].data as Buffer).equals(RECEIPT), 'attachment bytes are identical');
+    assert.equal(att.rows[0].file_name, 'Quittung ☃.pdf');
+    assert.equal(att.rows[0].sha256, createHash('sha256').update(att.rows[0].data).digest('hex'));
+    const sv = await target.client.query("SELECT v.serviced_on::text, v.odometer_input::text, v.visit_total_cost::text, v.provider, i.name, i.cost::text FROM service_visits v JOIN service_items i ON i.visit_id = v.id ORDER BY i.position");
+    assert.deepEqual(sv.rows, [
+      { serviced_on: '2026-04-02', odometer_input: '950.25', visit_total_cost: '0', provider: 'Näïve Garage', name: 'Oil change', cost: '0.00' },
+      { serviced_on: '2026-04-02', odometer_input: '950.25', visit_total_cost: '0', provider: 'Näïve Garage', name: 'Wipers', cost: null },
+    ], 'service visits and items round-trip, unknown stays null and zero stays zero');
+    // Queued emails never travel: the restored instance cannot send another instance's queue.
+    // What was already told is kept, so nothing is announced again either.
+    assert.equal((await target.client.query('SELECT count(*)::int AS n FROM notification_outbox')).rows[0].n, 0);
+    assert.deepEqual((await target.client.query('SELECT occurrence_key, level, last_bucket, sends, muted FROM notification_task_log')).rows, [{ occurrence_key: '2026-09-01|-', level: 'overdue', last_bucket: 2, sends: 3, muted: true }]);
+    assert.deepEqual((await target.client.query('SELECT email_enabled, follow_up_days FROM vehicle_notification_settings')).rows, [{ email_enabled: true, follow_up_days: 14 }]);
+    assert.deepEqual((await target.client.query('SELECT show_service FROM vehicle_user_prefs')).rows, [{ show_service: false }]);
+    assert.equal(info.tables['maintenance_tasks'], 1); assert.equal(info.tables['task_snoozes'], 2);
+    assert.deepEqual((await target.client.query('SELECT name, catalog_key, recurring, interval_days, interval_distance_input::text, interval_distance_unit, interval_distance_km::text, first_due_on::text, notes FROM maintenance_tasks')).rows,
+      [{ name: 'Öl ☃', catalog_key: 'oil_change', recurring: true, interval_days: 365, interval_distance_input: '7500.5', interval_distance_unit: 'mi', interval_distance_km: '12071.700000', first_due_on: '2026-09-01', notes: 'note' }], 'maintenance tasks round-trip');
+    assert.deepEqual((await target.client.query('SELECT i.name, t.name AS task FROM service_items i JOIN maintenance_tasks t ON t.id = i.task_id')).rows, [{ name: 'Oil change', task: 'Öl ☃' }], 'the completion link survives');
+    assert.deepEqual((await target.client.query('SELECT scope, user_id IS NULL AS vehicle_wide, snooze_until_date::text AS d, snooze_until_odometer_km::text AS km, reason FROM task_snoozes ORDER BY scope')).rows,
+      [{ scope: 'personal', vehicle_wide: false, d: '2026-10-05', km: null, reason: null }, { scope: 'vehicle', vehicle_wide: true, d: '2026-10-01', km: '5000.500000', reason: 'später' }], 'both snooze scopes round-trip');
     // Sessions do not survive: the old cookie is dead on the restored instance, but the password works.
     assert.equal((await target.client.query('SELECT count(*)::int AS n FROM sessions')).rows[0].n, 0);
     const pool = new pg.Pool({ connectionString: target.url, max: 2 });

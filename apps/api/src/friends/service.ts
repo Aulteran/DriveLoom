@@ -19,6 +19,7 @@ import type { Id } from '../types.ts';
 import { currencyScale, distanceUnitOf, fromKm } from '../units.ts';
 import type { FuelService } from '../fuel/service.ts';
 import type { VehicleService } from '../vehicles/service.ts';
+import { canManageComparison } from '../vehicles/permissions.ts';
 
 export const WINDOWS = { '30d': 30, '90d': 90, '365d': 365, all: null } as const;
 export type WindowKey = keyof typeof WINDOWS;
@@ -104,7 +105,7 @@ export class FriendService {
     try {
       await c.query('BEGIN');
       const v = await this.#vehicles.access(c, p, vehicleId, true);
-      if (v.role !== 'owner') throw new HttpProblem(403, 'forbidden', 'Forbidden', 'Only the owner decides whether a vehicle is compared with friends.');
+      if (!canManageComparison(v.role)) throw new HttpProblem(403, 'forbidden', 'Forbidden', 'Only the owner decides whether a vehicle is compared with friends.');
       const r = enabled
         ? await c.query('INSERT INTO vehicle_comparison_optins (vehicle_id, enabled_by) VALUES ($1,$2) ON CONFLICT DO NOTHING', [v.id, p.userId])
         : await c.query('DELETE FROM vehicle_comparison_optins WHERE vehicle_id = $1', [v.id]);

@@ -6,8 +6,8 @@
 import { api, get, post, put, patch, del } from '../api.js';
 import { h, form, field, select, toast, download } from '../ui.js';
 import { icon } from '../icons.js';
-import { state, go, render, rememberVehicle } from '../core.js';
-import { qty, money, date, UNIT, ROLE, vehicleTitle, vehicleDescription, vehicleLabel } from '../format.js';
+import { state, go, render, rememberVehicle, serviceVisible } from '../core.js';
+import { qty, money, date, UNIT, ROLE, GRANTABLE_ROLES, ROLE_HELP, vehicleTitle, vehicleDescription, vehicleLabel, canEditVehicle } from '../format.js';
 import { Dec, lowerIsBetter } from '../economy.js';
 import { DAY, statsUrl, lastMonths, compactMoney } from '../views/vehicle.js';
 import { createForm, importForm, currencyOptions } from '../views/vehicles.js';
@@ -129,9 +129,11 @@ export async function detailScreen(id, query, active) {
     barChart({ items: spendItems, label: `spending per month in ${v.currency}`, unitLabel: `Spent (${v.currency})`, tick: compactMoney(v.currency), empty: 'No costs recorded in the last 12 months.' }),
     h('p', { class: 'm-small m-muted' }, `This month so far: ${spendItems.at(-1).text}. Tap a bar to read it.`));
 
+  const showService = await serviceVisible(v.id);
+  const rows = showService ? [['service', 'wrench', 'Service', 'Oil changes, repairs and costs'], ...SECTION_ROWS] : SECTION_ROWS;
   const sections = h('nav', { class: 'm-stack-s', 'aria-labelledby': 'm-sec-h' },
     h('h2', { class: 'm-label m-label-out', id: 'm-sec-h' }, 'This vehicle'),
-    h('ul', { class: 'm-card m-rows' }, SECTION_ROWS.map(([key, ic, label, sub]) => h('li', {},
+    h('ul', { class: 'm-card m-rows' }, rows.map(([key, ic, label, sub]) => h('li', {},
       h('a', { class: 'm-row', href: `#/vehicles/${v.id}/${key}` }, icon(ic), h('span', { class: 'm-row-label' }, label, h('span', { class: 'm-row-sub' }, sub)), icon('next', 'icon m-row-next'))))));
 
   return h('div', { class: 'm-screen m-stack' }, head,
@@ -163,15 +165,15 @@ async function membersBody(v) {
     const parts = [];
     if (owner && !self) {
       parts.push(h('div', { class: 'm-field' }, h('p', { class: 'm-label', id: 'm-role-l' }, 'Role'),
-        h('div', { class: 'm-seg', role: 'group', 'aria-labelledby': 'm-role-l' }, [['editor', 'Editor'], ['viewer', 'Viewer']].map(([r, label]) =>
+        h('div', { class: 'm-seg', role: 'group', 'aria-labelledby': 'm-role-l' }, GRANTABLE_ROLES.map(([r, label]) =>
           h('button', { type: 'button', class: 'm-seg-opt', 'aria-pressed': String(m.role === r), onclick: async () => {
             if (m.role === r) return;
             try { await put(`/v1/vehicles/${v.id}/members/${m.userId}`, { role: r }); sheet.close(); toast('Role changed.'); render(); } catch (err) { toast(err.message); }
           } }, label))),
-        h('p', { class: 'm-small m-muted' }, 'Editors add and correct fill-ups and edit details. Viewers can only read.')));
+        h('p', { class: 'm-small m-muted' }, ROLE_HELP[m.role] ?? '')));
       parts.push(h('div', { class: 'm-actions m-actions-col' },
         h('button', { type: 'button', class: 'secondary', onclick: async () => {
-          if (await confirmSheet({ title: 'Transfer ownership?', message: `${who(m)} becomes the owner of ${vehicleTitle(v)}. You become an editor and can no longer manage members.`, confirmLabel: 'Make owner', action: () => put(`/v1/vehicles/${v.id}/owner`, { userId: m.userId }) })) {
+          if (await confirmSheet({ title: 'Transfer ownership?', message: `${who(m)} becomes the owner of ${vehicleTitle(v)}. You become an Authorized Manager and can no longer manage members; the new owner can change your role.`, confirmLabel: 'Make owner', action: () => put(`/v1/vehicles/${v.id}/owner`, { userId: m.userId }) })) {
             sheet.close(); toast('Ownership transferred.'); render();
           }
         } }, icon('key'), 'Make owner'),
@@ -181,7 +183,7 @@ async function membersBody(v) {
           }
         } }, glyph('trash'), 'Remove from vehicle')));
     } else if (self && m.role !== 'owner') {
-      parts.push(h('p', {}, `You are ${m.role === 'editor' ? 'an editor' : 'a viewer'} of this vehicle.`),
+      parts.push(h('p', {}, `You are ${m.role === 'editor' ? 'an' : 'a'} ${ROLE[m.role] ?? m.role} of this vehicle. ${ROLE_HELP[m.role] ?? ''}`),
         h('div', { class: 'm-actions m-actions-col' }, h('button', { type: 'button', class: 'danger', onclick: async () => {
           if (await confirmSheet({ title: 'Leave this vehicle?', message: `You will lose access to ${vehicleTitle(v)} and its fill-ups until an owner adds you again.`, confirmLabel: 'Leave vehicle', action: () => del(`/v1/vehicles/${v.id}/members/${m.userId}`) })) {
             sheet.close(); go('#/garage');
@@ -204,7 +206,7 @@ async function membersBody(v) {
   const addMember = () => formSheet('Share this vehicle', form({ class: 'm-form' }, [
     h('p', { class: 'm-small m-muted' }, 'Add a person who already has an account on this server. Only you, the owner, can manage members.'),
     field('Email', h('input', { name: 'email', type: 'email', required: true, autocomplete: 'off' })),
-    field('Role', select('role', [['viewer', 'Viewer: can only read'], ['editor', 'Editor: adds and corrects fill-ups']], 'viewer')),
+    field('Role', select('role', GRANTABLE_ROLES.map(([r, label]) => [r, `${label}: ${ROLE_HELP[r]}`]), 'viewer')),
     h('button', { type: 'submit', class: 'm-wide' }, icon('plus'), 'Add member'),
   ], async (x) => { await post(`/v1/vehicles/${v.id}/members`, { email: x.email, role: x.role }); render(); return 'Member added.'; }));
 
@@ -215,7 +217,7 @@ async function membersBody(v) {
 }
 
 function dataBody(v) {
-  const canEdit = v.role !== 'viewer' && !v.archived;
+  const canEdit = canEditVehicle(v) && !v.archived;
   const exporter = (format, label, sub) => h('li', {}, h('button', { type: 'button', class: 'm-row m-row-btn', onclick: async (e) => {
     const b = e.currentTarget; b.disabled = true;
     try {
@@ -230,6 +232,7 @@ function dataBody(v) {
     const show = (r) => report.replaceChildren(h('div', { class: r.committed ? 'notice' : r.summary.invalid ? 'error' : 'notice' },
       h('p', {}, r.committed ? 'Imported.' : r.dryRun ? 'Preview only. Nothing has been saved yet.' : 'Nothing was imported.'),
       h('p', {}, `${r.summary.total} rows: ${r.summary.created} ${r.committed ? 'added' : 'to add'}, ${r.summary.duplicates} already present, ${r.summary.invalid} invalid.`),
+      r.serviceVisits ? h('p', {}, `${r.serviceVisits.total} service visits: ${r.serviceVisits.created} ${r.committed ? 'added' : 'to add'}, ${r.serviceVisits.duplicates} already present, ${r.serviceVisits.invalid} invalid.`) : null,
       r.errors.length ? h('ul', {}, r.errors.slice(0, 20).map((x) => h('li', {}, `Row ${x.row}: ${x.message}`))) : null));
     const f = form({ class: 'm-form' }, [
       h('p', { class: 'm-small m-muted' }, 'A DriveLoom CSV or JSON export, or a CSV with the columns occurred_at, odometer, odometer_unit, volume, volume_unit and optionally full, missed_previous, cost_amount, cost_currency, exchange_rate, reporting_amount, notes. Rows already present are skipped; if any row is invalid, nothing is imported.'),
@@ -262,8 +265,9 @@ function dataBody(v) {
 
 async function settingsBody(v) {
   const owner = v.role === 'owner';
-  const canEdit = v.role !== 'viewer';
+  const canEdit = canEditVehicle(v);
   const optIn = await get(`/v1/vehicles/${v.id}/comparison`);
+  const vis = await get(`/v1/vehicles/${v.id}/service-visibility`);
   const rowBtn = (ic, label, sub, onclick) => h('li', {}, h('button', { type: 'button', class: 'm-row m-row-btn', onclick }, ic, h('span', { class: 'm-row-label' }, label, sub ? h('span', { class: 'm-row-sub' }, sub) : null), icon('next', 'icon m-row-next')));
 
   const openDetails = () => formSheet('Vehicle details', form({ class: 'm-form' }, [
@@ -308,6 +312,17 @@ async function settingsBody(v) {
       : h('p', {}, optIn.enabled ? 'The owner shares this vehicle with their friends.' : 'Not shared. Only the owner can change this.'),
     h('p', { class: 'm-small m-muted' }, 'Friends see the nickname, make, model, year and the average economy for the period they choose. Never the plate or VIN, fill-ups, dates, distances, notes or members.'));
 
+  const svcId = 'm-svc-sw';
+  const service = vis.moduleEnabled ? h('section', { class: 'm-card m-pad m-stack-s', 'aria-labelledby': 'm-svc-h' },
+    h('h2', { id: 'm-svc-h' }, 'Service page'),
+    h('div', { class: 'm-switch-row' },
+      h('label', { for: svcId }, 'Show Service page for this vehicle'),
+      h('input', { id: svcId, type: 'checkbox', role: 'switch', class: 'm-toggle', checked: vis.showService, onchange: async (e) => {
+        const on = e.target.checked;
+        try { await put(`/v1/vehicles/${v.id}/service-visibility`, { showService: on }); toast(on ? 'Service page shown.' : 'Service page hidden.'); } catch (err) { e.target.checked = !on; toast(err.message); }
+      } })),
+    h('p', { class: 'm-small m-muted' }, 'Only changes your own menus. Service data and what you are allowed to do are not affected.')) : null;
+
   const archive = owner ? h('section', { class: 'm-card m-pad m-stack-s', 'aria-labelledby': 'm-arch-h' },
     h('h2', { id: 'm-arch-h' }, v.archived ? 'Archived' : 'Archive'),
     h('p', { class: 'm-small m-muted' }, v.archived ? 'Archived vehicles are read-only and folded away in Vehicles.' : 'Archive a vehicle you no longer drive. Its history stays and can be exported.'),
@@ -324,5 +339,5 @@ async function settingsBody(v) {
     canEdit ? h('ul', { class: 'm-card m-rows', 'aria-label': 'Edit' },
       rowBtn(glyph('edit'), 'Details', [vehicleDescription(v), v.plateNumber ? [v.plateRegion, v.plateNumber].filter(Boolean).join(' ') : ''].filter(Boolean).join(' · ') || 'Nickname, make, model, plate, units', openDetails),
       rowBtn(glyph('image'), 'Photo', v.imageVersion ? 'Change or remove the photo' : 'Add a photo', openPhoto)) : null,
-    share, archive);
+    share, service, archive);
 }

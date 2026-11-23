@@ -395,7 +395,7 @@ export async function deleteAccount(ctx: AuthContext, p: Principal): Promise<voi
       const others = await tx.query("SELECT 1 FROM users WHERE instance_role = 'admin' AND status = 'active' AND id <> $1 LIMIT 1", [p.userId]);
       if (!others.rowCount) throw new HttpProblem(409, 'last_admin', 'The last administrator cannot be removed; promote another user first');
     }
-    for (const t of ['vehicle_members', 'user_preferences', 'password_credentials', 'totp_credentials', 'recovery_codes', 'passkeys', 'oidc_identities', 'one_time_codes', 'auth_challenges']) {
+    for (const t of ['vehicle_members', 'vehicle_user_prefs', 'user_preferences', 'password_credentials', 'totp_credentials', 'recovery_codes', 'passkeys', 'oidc_identities', 'one_time_codes', 'auth_challenges']) {
       await tx.query(`DELETE FROM ${t} WHERE user_id = $1`, [p.userId]);
     }
     await tx.query('DELETE FROM friendships WHERE requester_id = $1 OR addressee_id = $1', [p.userId]);
