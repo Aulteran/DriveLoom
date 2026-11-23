@@ -1,0 +1,13 @@
+# Used by deploy/dev-up.cmd only: builds the app from this checkout instead of
+# pulling the published image, and sets a throwaway secret so it can boot.
+# Local development values; never use them for a real deployment.
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: driveloom:local
+    pull_policy: never
+    environment:
+      DRIVELOOM_PUBLIC_ORIGIN: http://127.0.0.1:8080
+      DRIVELOOM_SECRET_KEY: local-dev-only-secret-key-not-for-production-use

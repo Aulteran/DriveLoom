@@ -10,6 +10,7 @@ title DriveLoom launcher
 
 rem ---- Settings you may want to change --------------------------------------
 set "BASEFILE=deploy\compose.yml"
+set "LOCALFILE=deploy\compose.local.yml"
 set "OVERRIDE=deploy\compose.override.yml"
 set "OVERRIDE_ALT=deploy\compose.override.yaml"
 set "ENVFILE=deploy\.env"
@@ -38,13 +39,17 @@ if errorlevel 1 (
   echo Please start Docker Desktop, wait until it says "running", then try again.
   goto :fatal
 )
+if not exist "%LOCALFILE%" (
+  echo ERROR: %LOCALFILE% not found. Run this script from the DriveLoom checkout.
+  goto :fatal
+)
 if not exist "%BASEFILE%" (
   echo ERROR: %BASEFILE% not found. Run this script from the DriveLoom checkout.
   goto :fatal
 )
 
 rem Build the compose arguments: base file, optional local override, optional .env.
-set "DCARGS=-f %BASEFILE%"
+set "DCARGS=-f %BASEFILE% -f %LOCALFILE%"
 if exist "%OVERRIDE%" set "DCARGS=%DCARGS% -f %OVERRIDE%"
 if exist "%OVERRIDE_ALT%" set "DCARGS=%DCARGS% -f %OVERRIDE_ALT%"
 
