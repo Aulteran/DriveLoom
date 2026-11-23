@@ -407,13 +407,18 @@ test('deleting a vehicle removes its tasks and snoozes', { skip }, async () => {
 
 // ---------- months, task baselines, reminders switch and preset provenance (presets, Phase A) ----------
 const PRESET = { presetId: 'us-honda-odyssey-2015', presetVersion: 1, presetTaskId: 'brake-fluid' };
+const PROVENANCE = { ...PRESET, sourceTrust: 'manufacturer', sourceNote: 'manual' };
+/** Provenance is not writable over the public API; seed it the way applyPreset does (straight into the row). */
+async function seedProvenance(id: string, p: Record<string, unknown> = PROVENANCE) {
+  await db!.pool.query('UPDATE maintenance_tasks SET preset_id = $2, preset_version = $3, preset_task_id = $4, source_trust = $5, source_note = $6 WHERE id = $1',
+    [id, p['presetId'], p['presetVersion'], p['presetTaskId'], p['sourceTrust'], p['sourceNote']]);
+}
 
 test('months, baselines, reminders and provenance: create, read, patch, validate', { skip }, async () => {
   const v = await vehicle({ odometerUnit: 'mi' });
-  const brake = await task(v, {
-    catalogKey: 'brake_fluid', intervalMonths: 36, baselineKind: 'reported', baselineOn: '2024-05-10', remindersEnabled: false,
-    sourceTrust: 'manufacturer', sourceNote: 'Owner\'s manual maintenance section', ...PRESET,
-  });
+  const made = await task(v, { catalogKey: 'brake_fluid', intervalMonths: 36, baselineKind: 'reported', baselineOn: '2024-05-10', remindersEnabled: false });
+  await seedProvenance(made.id, { ...PROVENANCE, sourceNote: 'Owner\'s manual maintenance section' });
+  const brake = await get(v, made.id);
   assert.equal(brake.intervalMonths, 36); assert.equal(brake.intervalDays, null);
   assert.equal(brake.baselineKind, 'reported'); assert.equal(brake.baselineOn, '2024-05-10'); assert.equal(brake.baselineOdometer, null);
   assert.equal(brake.baseline, 'reported'); assert.equal(brake.dueOn, '2027-05-10', 'acceptance 2 end to end');
@@ -444,13 +449,6 @@ test('months, baselines, reminders and provenance: create, read, patch, validate
   assert.equal(nul.status, 422, 'null never turns reminders on'); assert.equal((await get(v, brake.id)).remindersEnabled, false);
   assert.equal(renamed.json.presetTaskId, 'brake-fluid'); assert.equal(renamed.json.baselineOn, '2024-05-10'); assert.equal(renamed.json.remindersEnabled, false); assert.equal(renamed.json.intervalMonths, 36);
 
-  // A second task from the same preset task on the same vehicle is a conflict, not a server error.
-  const dup = await app.call(owner, 'POST', T(v), { name: 'Again', intervalMonths: 36, ...PRESET });
-  assert.equal(dup.status, 409, dup.text); assert.equal(dup.json.code, 'maintenance_task_preset_exists');
-  assert.equal((await app.call(owner, 'PATCH', T(v, manual.id), PRESET)).status, 409);
-  // ...but the same preset task on another vehicle is fine.
-  assert.equal((await app.call(owner, 'POST', T(await vehicle()), { name: 'Brake fluid', intervalMonths: 36, ...PRESET })).status, 201);
-
   const bad: [string, unknown][] = [
     ['days and months', { name: 'A', intervalDays: 30, intervalMonths: 1 }], ['zero months', { name: 'A', intervalMonths: 0 }], ['huge months', { name: 'A', intervalMonths: 1201 }],
     ['fractional months', { name: 'A', intervalMonths: 1.5 }], ['one-time with months', { name: 'A', recurring: false, intervalMonths: 3, firstDueOn: day(5) }],
@@ -461,9 +459,7 @@ test('months, baselines, reminders and provenance: create, read, patch, validate
     ['baseline in the future', { name: 'A', intervalMonths: 6, baselineKind: 'reported', baselineOn: day(1) }],
     ['baseline ancient', { name: 'A', intervalMonths: 6, baselineKind: 'reported', baselineOn: '1850-01-01' }],
     ['baseline negative odometer', { name: 'A', intervalMonths: 6, baselineKind: 'tracking', baselineOdometer: { value: '-1', unit: 'km' } }],
-    ['partial preset', { name: 'A', intervalMonths: 6, presetId: 'x', presetVersion: 1 }], ['preset id upper case', { name: 'A', intervalMonths: 6, ...PRESET, presetId: 'US' }],
-    ['preset version zero', { name: 'A', intervalMonths: 6, ...PRESET, presetVersion: 0 }], ['reminders string', { name: 'A', intervalMonths: 6, remindersEnabled: 'no' }],
-    ['trust unknown', { name: 'A', intervalMonths: 6, sourceTrust: 'official' }], ['long source note', { name: 'A', intervalMonths: 6, sourceNote: 'x'.repeat(301) }],
+    ['reminders string', { name: 'A', intervalMonths: 6, remindersEnabled: 'no' }],
   ];
   for (const [what, b] of bad) assert.equal((await app.call(owner, 'POST', T(v), b)).status, 422, what);
 });
@@ -504,10 +500,11 @@ test('reminders switch: tasksNeedingAttention leaves out tasks whose reminders a
 
 test('export and import carry months, baselines, reminders and provenance; a customised preset task is not duplicated', { skip }, async () => {
   const v = await vehicle();
-  const t = await task(v, {
-    catalogKey: 'brake_fluid', intervalMonths: 36, baselineKind: 'reported', baselineOn: '2024-05-10', baselineOdometer: { value: '81234.5', unit: 'mi' },
-    remindersEnabled: false, sourceTrust: 'manufacturer', sourceNote: 'manual', ...PRESET,
+  const made = await task(v, {
+    catalogKey: 'brake_fluid', intervalMonths: 36, baselineKind: 'reported', baselineOn: '2024-05-10', baselineOdometer: { value: '81234.5', unit: 'mi' }, remindersEnabled: false,
   });
+  await seedProvenance(made.id);
+  const t = await get(v, made.id);
   const doc = JSON.parse((await app.call(owner, 'GET', `/v1/vehicles/${v}/export?format=json`)).text);
   const ex = doc.maintenanceTasks[0];
   assert.deepEqual(
@@ -534,4 +531,32 @@ test('export and import carry months, baselines, reminders and provenance; a cus
   assert.equal(old.status, 200, old.text);
   const [o] = (await app.call(stranger, 'GET', T(old.json.vehicle.id))).json.items;
   assert.equal(o.remindersEnabled, true); assert.equal(o.presetId, null); assert.equal(o.intervalMonths, null);
+});
+
+test('provenance is not writable over the public API; an interval edit drops the trust label, other edits keep it', { skip }, async () => {
+  const v = await vehicle();
+  const fields: Record<string, unknown> = { presetId: PRESET.presetId, presetVersion: 1, presetTaskId: 'brake-fluid', sourceTrust: 'community', sourceNote: 'note' };
+  const plain = await task(v, { name: 'Hand made', intervalMonths: 12 });
+  for (const [k, val] of Object.entries(fields)) {
+    const post = await app.call(owner, 'POST', T(v), { name: 'X', intervalMonths: 6, [k]: val });
+    assert.equal(post.status, 422, `POST ${k}: ${post.text}`);
+    const patch = await app.call(owner, 'PATCH', T(v, plain.id), { [k]: val });
+    assert.equal(patch.status, 422, `PATCH ${k}: ${patch.text}`);
+    assert.equal((await app.call(owner, 'PATCH', T(v, plain.id), { [k]: null })).status, 422, `PATCH ${k} null`);
+  }
+  const after = await get(v, plain.id);
+  assert.deepEqual([after.presetId, after.presetTaskId, after.sourceTrust, after.sourceNote], [null, null, null, null]);
+
+  const t = await task(v, { catalogKey: 'brake_fluid', intervalMonths: 36, intervalDistance: { value: '30000', unit: 'mi' } });
+  await seedProvenance(t.id);
+  const renamed = await app.call(owner, 'PATCH', T(v, t.id), { name: 'Brake fluid flush' });
+  assert.equal(renamed.json.sourceTrust, 'manufacturer', 'a name edit keeps the trust label');
+  const same = await app.call(owner, 'PATCH', T(v, t.id), { intervalMonths: 36, intervalDistance: { value: '30000.0', unit: 'mi' } });
+  assert.equal(same.json.sourceTrust, 'manufacturer', 'resending the same interval keeps it');
+  const changed = await app.call(owner, 'PATCH', T(v, t.id), { intervalMonths: 24 });
+  assert.equal(changed.status, 200, changed.text); assert.equal(changed.json.sourceTrust, null);
+  assert.deepEqual([changed.json.sourceNote, changed.json.presetId, changed.json.presetVersion, changed.json.presetTaskId], ['manual', PRESET.presetId, 1, 'brake-fluid']);
+  const dist = await task(v, { name: 'Dist', intervalDistance: { value: '5000', unit: 'mi' } });
+  await seedProvenance(dist.id, { ...PROVENANCE, presetTaskId: 'other' });
+  assert.equal((await app.call(owner, 'PATCH', T(v, dist.id), { intervalDistance: { value: '6000', unit: 'mi' } })).json.sourceTrust, null);
 });

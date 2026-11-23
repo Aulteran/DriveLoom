@@ -37,7 +37,10 @@ import {
 type Q = Pick<pg.Pool, 'query'>;
 export const TASK_FIELDS = ['name', 'catalogKey', 'recurring', 'intervalDays', 'intervalMonths', 'intervalDistance', 'firstDueOn', 'firstDueOdometer', 'notes',
   'presetId', 'presetVersion', 'presetTaskId', 'baselineKind', 'baselineOn', 'baselineOdometer', 'remindersEnabled', 'sourceTrust', 'sourceNote'] as const;
-const PATCH_FIELDS = [...TASK_FIELDS, 'archived'] as const;
+/** Provenance written only by applyPreset and export import; never by the public task bodies. */
+export const PROVENANCE_FIELDS = ['presetId', 'presetVersion', 'presetTaskId', 'sourceTrust', 'sourceNote'] as const;
+const PUBLIC_TASK_FIELDS = TASK_FIELDS.filter((k) => !(PROVENANCE_FIELDS as readonly string[]).includes(k));
+const PATCH_FIELDS = [...PUBLIC_TASK_FIELDS, 'archived'] as const;
 const SNOOZE_FIELDS = ['until', 'untilOdometer', 'additionalDistance', 'reason'] as const;
 export const MAX_TASKS = 200;
 const MAX_SNOOZE_DAYS = 3650;
@@ -88,7 +91,8 @@ const notFound = () => new HttpProblem(404, 'maintenance_task_not_found', 'Maint
 const forbidden = (detail: string) => new HttpProblem(403, 'forbidden', 'Forbidden', detail);
 
 /** Validate a complete task body. A recurring task repeats by an interval; a one-time task is due once, at a first-due date or odometer. */
-export function parseTask(body: Record<string, unknown>, now: Date): ParsedTask {
+export function parseTask(body: Record<string, unknown>, now: Date, trusted = false): ParsedTask {
+  if (!trusted) { const bad = PROVENANCE_FIELDS.find((k) => k in body); if (bad) throw invalid(`Unknown field: ${bad}.`); }
   const catalogKey = body['catalogKey'] === undefined || body['catalogKey'] === null ? null : body['catalogKey'];
   if (catalogKey !== null && (typeof catalogKey !== 'string' || !catalogName(catalogKey))) throw invalid(`catalogKey must be one of ${CATALOG.map((c) => c.key).join(', ')}.`);
   const name = text(body['name'], 'name', 120, catalogKey === null) ?? catalogName(catalogKey as string)!;
@@ -326,7 +330,14 @@ export function parseImportTask(raw: unknown, now: Date): ParsedImportTask {
     if (untilDate === null && q === null) throw invalid('snooze needs until or untilOdometer.');
     sn = { untilDate, untilKm: q ? toKm(q.dec, q.unit) : null, reason: text(s['reason'], 'snooze.reason', 200) };
   }
-  return { ref: (ref as string | undefined) ?? null, f: parseTask(rest, now), archived: archived === true, snooze: sn };
+  return { ref: (ref as string | undefined) ?? null, f: parseTask(rest, now, true), archived: archived === true, snooze: sn };
+}
+
+const INTERVAL_FIELDS = ['intervalDays', 'intervalMonths', 'intervalDistance'] as const;
+/** Same interval? Distances compare by value and unit; absent and null are the same. */
+function sameInterval(a: unknown, b: unknown): boolean {
+  const norm = (x: unknown) => (x === undefined || x === null ? null : typeof x === 'object' ? { value: Dec.parse(String((x as { value: unknown }).value)).toFixed(6), unit: (x as { unit: unknown }).unit } : x);
+  return JSON.stringify(norm(a)) === JSON.stringify(norm(b));
 }
 
 /** Values of the preset-era columns, in the order of EXTRA_COLS. */
@@ -460,7 +471,7 @@ export class MaintenanceService {
   readonly #manage = (role: VehicleAccess['role']) => (canManageSchedules(role) ? null : 'Your role does not allow changing maintenance tasks.');
 
   async create(p: Principal, vehicleId: unknown, body: unknown): Promise<TaskView> {
-    const b = obj(body, TASK_FIELDS);
+    const b = obj(body, PUBLIC_TASK_FIELDS);
     return this.#write(p, vehicleId, async (c, v) => {
       const f = parseTask(b, this.#now());
       const n = Number((await c.query<{ n: string }>('SELECT count(*) AS n FROM maintenance_tasks WHERE vehicle_id = $1', [v.id])).rows[0]!.n);
@@ -480,7 +491,9 @@ export class MaintenanceService {
       const cur = await this.#one(c, v, p, taskId);
       const { archived, ...fields } = patch;
       const merged = Object.fromEntries(TASK_FIELDS.map((k) => [k, k in fields ? fields[k] : cur[k]]));
-      const f = parseTask(merged, this.#now());
+      const f = parseTask(merged, this.#now(), true);
+      // An interval the owner changed is theirs, not the preset's: it loses the trust label (note and provenance stay).
+      if (f.sourceTrust !== null && INTERVAL_FIELDS.some((k) => k in fields && !sameInterval(fields[k], cur[k]))) f.sourceTrust = null;
       await presetConflict(() => c.query(
         `UPDATE maintenance_tasks SET name = $2, catalog_key = $3, recurring = $4, interval_days = $5, interval_distance_input = $6, interval_distance_unit = $7, interval_distance_km = $8,
            first_due_on = $9, first_due_odometer_input = $10, first_due_odometer_unit = $11, first_due_odometer_km = $12, notes = $13,
@@ -658,7 +671,7 @@ export class MaintenanceService {
           draft['baselineKind'] = 'reported'; draft['baselineOn'] = s.baseline.on ?? null; draft['baselineOdometer'] = s.baseline.odometer ?? null;
         }
         let f: ParsedTask;
-        try { f = parseTask(draft, now); } catch (e) { throw e instanceof HttpProblem ? invalid(`${at}: ${e.message}`) : e; }
+        try { f = parseTask(draft, now, true); } catch (e) { throw e instanceof HttpProblem ? invalid(`${at}: ${e.message}`) : e; }
         if (count >= MAX_TASKS) throw invalid(`A vehicle allows at most ${MAX_TASKS} maintenance tasks.`);
         const id = await insertTask(c, v.id, f, p.userId);
         count++;

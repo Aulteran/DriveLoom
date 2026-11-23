@@ -428,6 +428,20 @@ test('export and import carry imported tasks; the new vehicle sees them as alrea
   assert.equal((await apply(nv, { tasks: sel(['brake-fluid']) })).results[0].reason, 'already_imported');
 });
 
+test('a hand-made task cannot claim a presetTaskId, so a real apply still imports it', { skip }, async () => {
+  const v = await vehicle();
+  const claim = await app.call(owner, 'POST', T(v), { name: 'Coolant', intervalMonths: 36, presetId: ODY, presetVersion: 1, presetTaskId: 'brake-fluid', sourceTrust: 'manufacturer' });
+  assert.equal(claim.status, 422, claim.text);
+  const mine = await app.call(owner, 'POST', T(v), { name: 'Coolant', intervalMonths: 36 });
+  assert.equal(mine.status, 201, mine.text);
+  assert.equal((await app.call(owner, 'PATCH', T(v, mine.json.id), { presetId: ODY, presetVersion: 1, presetTaskId: 'brake-fluid' })).status, 422);
+  const r = await apply(v, { tasks: sel(['brake-fluid']) });
+  assert.equal(r.results[0].result, 'created', JSON.stringify(r.results[0]));
+  const made = byPreset(await tasks(v), 'brake-fluid');
+  assert.ok(made); assert.equal(made.presetId, ODY); assert.notEqual(made.id, mine.json.id);
+  assert.equal((await tasks(v)).length, 2);
+});
+
 test('acceptance 8: no maintenance-code or dashboard-code vocabulary anywhere in the product', async () => {
   const root = new URL('../../../', import.meta.url);
   const TEXT = /\.(ts|js|mjs|json|yaml|yml|html|css|md|sql|webmanifest)$/;

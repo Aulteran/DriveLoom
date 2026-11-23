@@ -29,3 +29,7 @@ Never present a community value as an official requirement.
 ## Validate
 
 From `apps/api`: `npm run check` (runs `scripts/check-presets.ts`) and `npm test`.
+
+## Opening a preset PR
+
+Open preset pull requests with the preset template: https://github.com/Aulteran/DriveLoom/compare?template=preset.md (use `?template=preset.md` when opening a preset PR).

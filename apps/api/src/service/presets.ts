@@ -65,7 +65,7 @@ export function loadPresets(dir: URL = PRESETS_DIR, warn: (m: string) => void = 
     if (errors.length) { warn(`maintenance presets: skipped ${rel}: ${errors.join('; ')}`); continue; }
     const p = preset as Preset;
     if (out.some((x) => x.id === p.id)) { warn(`maintenance presets: skipped ${rel}: id ${p.id} is already used`); continue; }
-    const bad = p.tasks.map((t) => { try { parseTask(presetTaskBody(p, t), new Date()); return null; } catch (e) { return `${t.id}: ${(e as { detail?: string }).detail ?? (e as Error).message}`; } })
+    const bad = p.tasks.map((t) => { try { parseTask(presetTaskBody(p, t), new Date(), true); return null; } catch (e) { return `${t.id}: ${(e as { detail?: string }).detail ?? (e as Error).message}`; } })
       .filter((x) => x !== null);
     if (bad.length) { warn(`maintenance presets: skipped ${rel}: ${bad.join('; ')}`); continue; }
     out.push(p);
