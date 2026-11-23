@@ -72,11 +72,11 @@ export function profileScreen() {
     h('section', { class: 'm-sec', 'aria-labelledby': 'm-del-h' },
       h('h2', { class: 'm-label', id: 'm-del-h' }, 'Delete your account'),
       h('div', { class: 'm-group m-pad m-danger-zone' },
-        h('p', { class: 'm-note m-flush' }, 'Transfer or archive the vehicles you own first. Records you entered on vehicles shared with you stay with those vehicles. This cannot be undone.'),
+        h('p', { class: 'm-note m-flush' }, 'Transfer or delete the vehicles you own first. Records you entered on vehicles shared with you stay with those vehicles. This cannot be undone.'),
         action('Delete account', async () => {
           if (!(await confirmSheet({ title: 'Delete your account?', text: `${a.email} is deleted permanently and you are signed out.`, confirm: 'Delete account' }))) return false;
           try { await withFreshSignIn(() => del('/v1/auth/account')); } catch (err) {
-            if (err.code === 'owns_vehicles') throw new Error('You still own vehicles. Transfer ownership from each vehicle’s Members page, then try again.');
+            if (err.code === 'owns_vehicles') throw new Error('You still own vehicles. Transfer ownership from each vehicle’s Members page, or archive and delete the vehicle, then try again.');
             throw err;
           }
           state.account = null; setCsrf(null); closeSheets(); go('#/signin');

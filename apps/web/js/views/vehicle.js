@@ -2,7 +2,7 @@
 // The sidebar in main.js links the sections; each returns its own heading.
 import { api, get, post, patch, put, del } from '../api.js';
 import { h, form, field, select, toast, confirmDialog, download } from '../ui.js';
-import { go, render, state } from '../core.js';
+import { go, render, state, forgetVehicle } from '../core.js';
 import { qty, date, dateTime, money, REASONS, ROLE, GRANTABLE_ROLES, ROLE_HELP, UNIT, canEditVehicle, canAddFuel, canChangeFill, localInput, toInstant, vehicleTitle, vehicleDescription, vehicleLabel } from '../format.js';
 import { economyChart, barChart } from './chart.js';
 import { currencyOptions, pageHead } from './vehicles.js';
@@ -372,6 +372,14 @@ async function settingsTab(v) {
       h('h2', {}, v.archived ? 'Archived' : 'Archive'),
       h('p', { class: 'muted' }, v.archived ? 'Archived vehicles are read-only and hidden from the main list.' : 'Archive a vehicle you no longer drive. Its history stays and can be exported.'),
       h('button', { class: 'secondary', onclick: async () => { await put(`/v1/vehicles/${v.id}/archive`, { archived: !v.archived }); render(); } }, v.archived ? 'Unarchive' : 'Archive vehicle'),
+      v.archived ? [
+        h('p', { class: 'small muted', style: 'margin-top:12px' }, 'Deleting cannot be undone. The vehicle and all its fill-ups, service history, attachments, maintenance tasks, members and photo are removed for every member.'),
+        h('button', { class: 'danger', onclick: async () => {
+          if (!(await confirmDialog(`Permanently delete ${vehicleLabel(v)}? This cannot be undone. All of its fill-ups, service history and attachments, maintenance tasks, members and photo are erased for every member, and nobody can get them back.`, 'Delete permanently'))) return;
+          try { await del(`/v1/vehicles/${v.id}`); } catch (err) { toast(err.message); return; }
+          forgetVehicle(v.id); toast('Vehicle deleted.'); go('#/garage');
+        } }, 'Delete permanently'),
+      ] : h('p', { class: 'small muted', style: 'margin-top:12px' }, 'To delete this vehicle permanently, archive it first.'),
       h('p', { class: 'small muted', style: 'margin-top:12px' }, 'To hand this vehicle to someone else, add them as a member, then use “Make owner” on the Members page.')));
   }
   return h('div', {}, parts);

@@ -38,6 +38,7 @@ export function parse() {
 // The URL is the source of truth; storage only answers "which vehicle does #/ open?".
 const lastKey = () => `driveloom.vehicle.${state.account?.id ?? ''}`;
 export function rememberVehicle(id) { try { localStorage.setItem(lastKey(), id); } catch { /* not remembered */ } }
+export function forgetVehicle(id) { try { if (localStorage.getItem(lastKey()) === id) localStorage.removeItem(lastKey()); } catch { /* nothing to forget */ } }
 export function recalledVehicle() { try { return localStorage.getItem(lastKey()); } catch { return null; } }
 
 export function defaultVehicle() {
