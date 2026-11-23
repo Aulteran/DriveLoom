@@ -26,6 +26,10 @@ export function vehicleRoutes(svc: VehicleService): Route[] {
       if (!Object.keys(patch).length) throw invalid('At least one field is required.');
       return { status: 200, body: await svc.update(p, r.params['vehicleId'], patch) };
     } },
+    { method: 'DELETE', path: '/v1/vehicles/:vehicleId', async handler(r) {
+      await svc.delete(who(r), r.params['vehicleId']);
+      return { status: 204 };
+    } },
     { method: 'PUT', path: '/v1/vehicles/:vehicleId/archive', async handler(r) {
       const p = who(r);
       const { archived } = obj(r.body, ['archived']);

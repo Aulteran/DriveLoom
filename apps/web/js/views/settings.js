@@ -86,7 +86,7 @@ function profile() {
     }),
     h('section', { class: 'panel danger-zone' },
       h('h2', {}, 'Delete your account'),
-      h('p', { class: 'muted' }, 'Transfer or archive the vehicles you own first. Records you entered on vehicles shared with you stay with those vehicles. This cannot be undone.'),
+      h('p', { class: 'muted' }, 'Transfer or delete the vehicles you own first. Records you entered on vehicles shared with you stay with those vehicles. This cannot be undone.'),
       (() => {
         const box = errorBox();
         return h('div', {}, box, h('button', { class: 'danger', onclick: async () => {
@@ -96,7 +96,7 @@ function profile() {
             state.account = null; setCsrf(null); go('#/signin');
             toast('Your account was deleted.');
           } catch (err) {
-            showError(box, err.code === 'owns_vehicles' ? new Error('You still own vehicles. Transfer ownership from each vehicle\'s Members page, then try again.') : err);
+            showError(box, err.code === 'owns_vehicles' ? new Error('You still own vehicles. Transfer ownership from each vehicle\'s Members page, or archive and delete the vehicle, then try again.') : err);
           }
         } }, 'Delete account'));
       })()));

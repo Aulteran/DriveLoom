@@ -6,7 +6,7 @@
 import { api, get, post, put, patch, del } from '../api.js';
 import { h, form, field, select, toast, download } from '../ui.js';
 import { icon } from '../icons.js';
-import { state, go, render, rememberVehicle, serviceVisible } from '../core.js';
+import { state, go, render, rememberVehicle, forgetVehicle, serviceVisible } from '../core.js';
 import { qty, money, date, UNIT, ROLE, GRANTABLE_ROLES, ROLE_HELP, vehicleTitle, vehicleDescription, vehicleLabel, canEditVehicle } from '../format.js';
 import { Dec, lowerIsBetter } from '../economy.js';
 import { DAY, statsUrl, lastMonths, compactMoney } from '../views/vehicle.js';
@@ -333,6 +333,13 @@ async function settingsBody(v) {
         : await put(`/v1/vehicles/${v.id}/archive`, { archived: false }).then(() => true, (err) => { toast(err.message); return false; });
       if (ok) { toast(to ? 'Vehicle archived.' : 'Vehicle unarchived.'); render(); }
     } }, glyph('archive'), v.archived ? 'Unarchive' : 'Archive vehicle'),
+    v.archived ? [
+      h('p', { class: 'm-small m-muted' }, 'Deleting cannot be undone. The vehicle and all its fill-ups, service history, attachments, maintenance tasks, members and photo are removed for every member.'),
+      h('button', { type: 'button', class: 'danger m-wide', onclick: async () => {
+        const ok = await confirmSheet({ title: 'Delete this vehicle permanently?', message: `${vehicleTitle(v)} and all of its fill-ups, service history and attachments, maintenance tasks, members and photo are erased for every member. This cannot be undone.`, confirmLabel: 'Delete permanently', action: () => del(`/v1/vehicles/${v.id}`) });
+        if (ok) { forgetVehicle(v.id); toast('Vehicle deleted.'); go('#/garage'); }
+      } }, glyph('trash'), 'Delete permanently'),
+    ] : h('p', { class: 'm-small m-muted' }, 'To delete this vehicle permanently, archive it first.'),
     h('p', { class: 'm-small m-muted' }, 'To hand this vehicle to someone else, add them as a member, then choose “Make owner” on Members.')) : null;
 
   return h('div', { class: 'm-stack' },

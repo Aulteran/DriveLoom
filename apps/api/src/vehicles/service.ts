@@ -191,6 +191,18 @@ export class VehicleService {
     });
   }
 
+  /** Permanently delete an archived vehicle and, by cascade, its members, fill-ups, image and sharing settings. Owner only. */
+  async delete(p: Principal, vehicleId: unknown): Promise<void> {
+    await this.#tx(async (c) => {
+      const v = await this.#lock(c, p, vehicleId);
+      if (v.role !== 'owner') throw forbidden('deleting this vehicle');
+      const { rows } = await c.query<{ archived: boolean }>('SELECT archived_at IS NOT NULL AS archived FROM vehicles WHERE id = $1', [v.id]);
+      if (!rows[0]!.archived) throw conflict('not_archived', 'Archive the vehicle before deleting it.');
+      await c.query('DELETE FROM vehicles WHERE id = $1', [v.id]);
+      await this.#audit(c, p.userId, 'vehicle.delete', v.id);
+    });
+  }
+
   async listMembers(p: Principal, vehicleId: unknown): Promise<Member[]> {
     const vid = id(vehicleId);
     await this.get(p, vid);
