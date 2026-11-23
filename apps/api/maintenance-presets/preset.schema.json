@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DriveLoom maintenance preset",
+  "description": "Advisory maintenance template. Every object is closed: unknown keys are rejected. scripts/check-presets.ts adds the checks JSON Schema cannot express (path match, unique task ids, catalogKey in CATALOG, 64 KB cap).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "version", "market", "make", "model", "reviewedOn", "sources", "tasks"],
+  "oneOf": [{ "required": ["year"], "not": { "required": ["yearRange"] } }, { "required": ["yearRange"], "not": { "required": ["year"] } }],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "id": { "$ref": "#/$defs/slug" },
+    "version": { "type": "integer", "minimum": 1 },
+    "market": { "$ref": "#/$defs/slug" },
+    "make": { "$ref": "#/$defs/slug" },
+    "model": { "$ref": "#/$defs/slug" },
+    "year": { "type": "integer", "minimum": 1900, "maximum": 2100 },
+    "yearRange": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "integer", "minimum": 1900, "maximum": 2100 } },
+    "variants": { "type": "array", "maxItems": 20, "items": { "type": "string", "minLength": 1, "maxLength": 80 } },
+    "reviewedOn": { "type": "string", "format": "date" },
+    "sources": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title", "url", "kind"],
+        "properties": {
+          "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+          "url": { "type": "string", "pattern": "^https://\\S+$", "maxLength": 500 },
+          "kind": { "enum": ["manufacturer", "community"] },
+          "note": { "type": "string", "minLength": 1, "maxLength": 300 }
+        }
+      }
+    },
+    "tasks": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 60,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "name", "description", "rule", "trust", "sourceNote"],
+        "properties": {
+          "id": { "$ref": "#/$defs/slug" },
+          "name": { "type": "string", "minLength": 1, "maxLength": 100 },
+          "catalogKey": { "type": "string" },
+          "description": { "type": "string", "minLength": 1, "maxLength": 500 },
+          "rule": {
+            "type": "object",
+            "additionalProperties": false,
+            "minProperties": 1,
+            "properties": {
+              "months": { "type": "integer", "minimum": 1, "maximum": 1200 },
+              "distance": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["value", "unit"],
+                "properties": {
+                  "value": { "type": "string", "pattern": "^(0|[1-9][0-9]{0,11})(\\.[0-9]{1,6})?$" },
+                  "unit": { "enum": ["km", "mi"] }
+                }
+              }
+            }
+          },
+          "trust": { "enum": ["manufacturer", "community"] },
+          "sourceNote": { "type": "string", "minLength": 1, "maxLength": 300 },
+          "severity": { "enum": ["info", "caution"] }
+        }
+      }
+    }
+  },
+  "$defs": { "slug": { "type": "string", "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$", "maxLength": 80 } }
+}

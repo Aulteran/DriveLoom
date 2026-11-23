@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "id": "us-honda-odyssey-2015",
+  "version": 1,
+  "market": "us",
+  "make": "honda",
+  "model": "odyssey",
+  "year": 2015,
+  "reviewedOn": "2026-11-23",
+  "sources": [],
+  "tasks": [
+    {
+      "id": "engine-oil",
+      "name": "Engine oil and filter",
+      "catalogKey": "oil_change",
+      "description": "Change the engine oil and filter.",
+      "rule": { "months": 6, "distance": { "value": "5000", "unit": "mi" } },
+      "trust": "community",
+      "sourceNote": "Community-suggested, editable interval. Not an official Honda requirement; check your owner's guide and adjust to how you drive.",
+      "severity": "info"
+    },
+    {
+      "id": "brake-fluid",
+      "name": "Brake fluid",
+      "catalogKey": "brake_fluid",
+      "description": "Replace the brake fluid, which absorbs moisture over time.",
+      "rule": { "months": 36 },
+      "trust": "community",
+      "sourceNote": "Community-suggested time interval of 3 years, editable. Not verified against the Honda owner's guide; check it and adjust.",
+      "severity": "caution"
+    },
+    {
+      "id": "timing-belt",
+      "name": "Timing belt",
+      "catalogKey": "timing_belt",
+      "description": "Replace the timing belt (the 3.5L V6 is generally reported to use a belt). A failed belt can cause severe engine damage.",
+      "rule": { "months": 84, "distance": { "value": "100000", "unit": "mi" } },
+      "trust": "community",
+      "sourceNote": "Community-suggested, editable interval, deliberately conservative. Not an official Honda requirement; confirm with your owner's guide or a Honda technician.",
+      "severity": "caution"
+    },
+    {
+      "id": "transmission-fluid",
+      "name": "Transmission fluid",
+      "description": "Drain and refill the automatic transmission fluid with the type your owner's guide specifies.",
+      "rule": { "months": 36, "distance": { "value": "30000", "unit": "mi" } },
+      "trust": "community",
+      "sourceNote": "Community-suggested, editable interval. Not an official Honda requirement; check your owner's guide and adjust to how you drive.",
+      "severity": "info"
+    }
+  ]
+}

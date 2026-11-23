@@ -10,6 +10,7 @@ RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 
 COPY apps/api/src ./src
 COPY apps/api/migrations ./migrations
+COPY apps/api/maintenance-presets ./maintenance-presets
 COPY apps/api/scripts/migrate.ts apps/api/scripts/backup.ts apps/api/scripts/auth-admin.ts ./scripts/
 COPY apps/web /app/apps/web
 
