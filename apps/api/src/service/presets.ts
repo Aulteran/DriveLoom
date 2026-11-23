@@ -10,7 +10,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { sep } from 'node:path';
 import type { DistanceUnit, Id } from '../types.ts';
-import { normalizeIdentity, sameIdentity } from '../vehicles/model-identity.ts';
+import { normalizeIdentity, sameMake, sameModel } from '../vehicles/model-identity.ts';
 import { catalogName } from './maintenance-status.ts';
 import { parseTask } from './maintenance.ts';
 import { validatePresetText } from './preset-schema.ts';
@@ -94,7 +94,7 @@ export function missingIdentity(v: VehicleIdentity): ('make' | 'model' | 'year')
 /** Presets for this vehicle in this market: same normalised make and model, and the year (or within the year range). */
 export function matchPresets(presets: readonly Preset[], v: VehicleIdentity, market: string): Preset[] {
   if (missingIdentity(v).length) return [];
-  return presets.filter((p) => p.market === market && sameIdentity(v.make, p.make) && sameIdentity(v.model, p.model)
+  return presets.filter((p) => p.market === market && sameMake(v.make, p.make) && sameModel(p.make, v.model, p.model)
     && (p.year !== undefined ? p.year === v.year : p.yearRange !== undefined && v.year! >= p.yearRange[0] && v.year! <= p.yearRange[1]));
 }
 

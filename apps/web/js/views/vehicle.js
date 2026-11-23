@@ -1,5 +1,6 @@
 // One vehicle: dashboard, fuel log, members, data (export/import) and settings.
 // The sidebar in main.js links the sections; each returns its own heading.
+import { makeModelFields } from '../identity.js';
 import { api, get, post, patch, put, del } from '../api.js';
 import { h, form, field, select, toast, confirmDialog, download } from '../ui.js';
 import { go, render, state, forgetVehicle } from '../core.js';
@@ -327,8 +328,7 @@ async function settingsTab(v) {
       h('h2', {}, 'Details'),
       h('div', { class: 'grid' },
         field('Nickname (optional)', h('input', { name: 'name', maxlength: 80, value: v.name ?? '' })),
-        field('Make', h('input', { name: 'make', maxlength: 80, value: v.make ?? '' })),
-        field('Model', h('input', { name: 'model', maxlength: 80, value: v.model ?? '' })),
+        makeModelFields(v),
         field('Year', h('input', { name: 'year', type: 'number', value: v.year ?? '' })),
         field('State or province (optional)', h('input', { name: 'plateRegion', maxlength: 10, placeholder: 'ON', value: v.plateRegion ?? '', autocomplete: 'off' })),
         field('Licence plate (optional)', h('input', { name: 'plateNumber', maxlength: 12, placeholder: 'CXPZ101', value: v.plateNumber ?? '', autocomplete: 'off' })),

@@ -148,6 +148,82 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       assert.equal(await page.getByRole('combobox', { name: 'Vehicle' }).inputValue(), vehicle.split('/')[1]);
     });
 
+    await t.test('make and model suggest but never constrain: custom text saves verbatim, a suggestion fills its name, a failed lookup changes nothing', async () => {
+      const api = (call: string) => page.evaluate(`import('/js/api.js').then((m) => m.${call})`) as Promise<any>;
+      const made: string[] = [];
+      const add = async () => {
+        await page.goto(`${base}/#/garage`);
+        await page.getByRole('heading', { name: 'Garage', level: 1 }).waitFor();
+        await page.getByRole('button', { name: 'Add vehicle' }).first().click();
+        return page.locator('form', { hasText: 'Add a vehicle' });
+      };
+      const submit = async () => {
+        await page.locator('form').getByRole('button', { name: 'Add vehicle' }).click();
+        await page.waitForURL(/#\/vehicles\/[0-9a-f-]{36}/);
+        const id = new URL(page.url()).hash.split('/')[2]!;
+        made.push(id);
+        return await api(`get('/v1/vehicles/${id}')`);
+      };
+      const rows = async () => (await db.pool.query('SELECT id, make, model FROM vehicles ORDER BY id')).rows;
+      try {
+        // Custom text, no suggestion matches: saved exactly as typed.
+        let f = await add();
+        await f.getByLabel('Make').fill('Zorblax');
+        await f.getByLabel('Model').fill('Custom One');
+        await f.getByLabel('Year').fill('2015');
+        const custom = await submit();
+        assert.deepEqual([custom.make, custom.model, custom.year], ['Zorblax', 'Custom One', 2015]);
+
+        // A suggestion: typing a prefix offers the canonical name; choosing it puts that name in the field.
+        f = await add();
+        const make = f.getByLabel('Make'), model = f.getByLabel('Model');
+        await make.click();
+        await make.pressSequentially('hon');
+        await page.locator(`datalist[id="${await make.getAttribute('list')}"] option[value="Honda"]`).waitFor({ state: 'attached' });
+        assert.deepEqual(await axe('add vehicle with suggestions'), []);
+        await make.fill('Honda');
+        await model.click();
+        await model.pressSequentially('ody');
+        await page.locator(`datalist[id="${await model.getAttribute('list')}"] option[value="Odyssey"]`).waitFor({ state: 'attached' });
+        await model.fill('Odyssey');
+        await f.getByLabel('Year').fill('2015');
+        const picked = await submit();
+        assert.deepEqual([picked.make, picked.model], ['Honda', 'Odyssey']);
+
+        // An alias typed as free text is still saved as typed (never rewritten to the canonical name).
+        f = await add();
+        await f.getByLabel('Make').fill('chevy');
+        await f.getByLabel('Model').fill('Silverado LT');
+        const alias = await submit();
+        assert.deepEqual([alias.make, alias.model], ['chevy', 'Silverado LT']);
+
+        // The lookup failing leaves plain inputs that work as before.
+        await page.route('**/v1/vehicle-identities*', (r) => r.abort());
+        f = await add();
+        await f.getByLabel('Make').pressSequentially('Ren');
+        await f.getByLabel('Model').pressSequentially('Clio V');
+        const offline = await submit();
+        assert.deepEqual([offline.make, offline.model], ['Ren', 'Clio V']);
+        await page.unroute('**/v1/vehicle-identities*');
+        // The aborted lookups are expected to log failed loads; nothing else may.
+        for (let i = problems.length - 1; i >= 0; i--) if (problems[i] === 'console: Failed to load resource: net::ERR_FAILED') problems.splice(i, 1);
+
+        // Editing: the stored text shows as it is, and saving without touching it rewrites nothing.
+        await page.goto(`${base}/#/vehicles/${alias.id}/settings`);
+        await page.reload();
+        await page.getByLabel('Make').waitFor();
+        assert.equal(await page.getByLabel('Make').inputValue(), 'chevy');
+        const snapshot = await rows();
+        await page.getByRole('button', { name: /^Save/ }).first().click();
+        await page.getByText('Saved').first().waitFor().catch(() => undefined);
+        assert.deepEqual((await rows()).map((r) => [r.id, r.make, r.model]), snapshot.map((r) => [r.id, r.make, r.model]));
+      } finally {
+        if (made.length) await db.pool.query('DELETE FROM vehicles WHERE id = ANY($1)', [made]);
+        await page.goto(`${base}/#/${vehicle}`);
+        await page.getByRole('heading', { name: 'Golf', level: 1 }).waitFor();
+      }
+    });
+
     await t.test('the theme toggle overrides the system and survives a reload', async () => {
       const findings: string[] = [];
       for (const [system, forced] of [['light', 'Dark'], ['dark', 'Light']] as const) {
@@ -650,6 +726,13 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
         assert.equal(await p.getByRole('switch', { name: 'Share this vehicle’s economy with my friends' }).isChecked(), true, 'the desktop opt-in shows here');
         await p.getByRole('button', { name: /^Details/ }).click();
         assert.equal(await p.getByRole('dialog', { name: 'Vehicle details' }).getByLabel('Nickname (optional)').inputValue(), 'Golf');
+        const details = p.getByRole('dialog', { name: 'Vehicle details' });
+        assert.equal(await details.getByLabel('Make').inputValue(), 'VW', 'stored text is shown as saved');
+        const dl = await details.getByLabel('Make').getAttribute('list');
+        await details.getByLabel('Make').click();
+        await details.getByLabel('Make').fill('vol');
+        await p.locator(`datalist[id="${dl}"] option[value="Volkswagen"]`).waitFor({ state: 'attached' });
+        await details.getByLabel('Make').fill('VW');
         await p.keyboard.press('Escape');
 
         // Empty states: the second vehicle has no fill-ups.
