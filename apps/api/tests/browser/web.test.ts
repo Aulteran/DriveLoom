@@ -1365,6 +1365,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       // The history card never offers adding; files are added from the edit form only.
       assert.equal(await card.locator('input[type=file]').count(), 0, 'no file picker on the history card');
       assert.equal(await card.getByRole('button', { name: /^Choose files/ }).count(), 0);
+      assert.doesNotMatch(await card.innerText(), /null/, 'no stray null text on the card');
       await card.getByRole('button', { name: /^Edit service visit/ }).click();
       await page.getByRole('button', { name: 'Choose files to attach to this service visit' }).waitFor();
       await page.locator('.svc-form input[type=file]').setInputFiles({ name: 'invoice.pdf', mimeType: 'application/pdf', buffer: TINY_PDF });
