@@ -440,6 +440,8 @@ test('months, baselines, reminders and provenance: create, read, patch, validate
   assert.equal(cleared.json.baseline, 'none'); assert.equal(cleared.json.status, 'no_baseline'); assert.equal(cleared.json.dueOn, null);
   // Untouched new fields survive an unrelated patch.
   const renamed = await app.call(owner, 'PATCH', T(v, brake.id), { name: 'Brake fluid (DOT 3)' });
+  const nul = await app.call(owner, 'PATCH', T(v, brake.id), { remindersEnabled: null });
+  assert.equal(nul.status, 422, 'null never turns reminders on'); assert.equal((await get(v, brake.id)).remindersEnabled, false);
   assert.equal(renamed.json.presetTaskId, 'brake-fluid'); assert.equal(renamed.json.baselineOn, '2024-05-10'); assert.equal(renamed.json.remindersEnabled, false); assert.equal(renamed.json.intervalMonths, 36);
 
   // A second task from the same preset task on the same vehicle is a conflict, not a server error.

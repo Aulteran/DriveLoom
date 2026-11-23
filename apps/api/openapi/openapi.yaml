@@ -2741,7 +2741,7 @@ components:
         baselineKind: { oneOf: [{ type: string, enum: [reported, tracking] }, { type: 'null' }], description: "`reported`: when / at what odometer it was last done, by the owner's word, without a record; scheduled like a completion. `tracking`: start tracking now; never a completion and never `ok`. Recurring tasks only; needs `baselineOn`, `baselineOdometer` or both." }
         baselineOn: { oneOf: [{ type: string, format: date }, { type: 'null' }], description: "Today or earlier." }
         baselineOdometer: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }] }
-        remindersEnabled: { type: [boolean, 'null'], description: "Email reminders for this task (on top of the vehicle's switch). Defaults to true. Turning it on records what is already due as announced, so no backlog is emailed." }
+        remindersEnabled: { type: boolean, description: "Email reminders for this task (on top of the vehicle's switch). Defaults to true. Turning it on records what is already due as announced, so no backlog is emailed." }
         sourceTrust: { oneOf: [{ type: string, enum: [manufacturer, community] }, { type: 'null' }], description: "Provenance label for the interval." }
         sourceNote: { type: [string, 'null'], maxLength: 300 }
     MaintenanceTaskPatch:
@@ -2764,7 +2764,7 @@ components:
         baselineKind: { oneOf: [{ type: string, enum: [reported, tracking] }, { type: 'null' }], description: "`reported`: when / at what odometer it was last done, by the owner's word, without a record; scheduled like a completion. `tracking`: start tracking now; never a completion and never `ok`. Recurring tasks only; needs `baselineOn`, `baselineOdometer` or both." }
         baselineOn: { oneOf: [{ type: string, format: date }, { type: 'null' }], description: "Today or earlier." }
         baselineOdometer: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }] }
-        remindersEnabled: { type: [boolean, 'null'], description: "Email reminders for this task (on top of the vehicle's switch). Defaults to true. Turning it on records what is already due as announced, so no backlog is emailed." }
+        remindersEnabled: { type: boolean, description: "Email reminders for this task (on top of the vehicle's switch). Defaults to true. Turning it on records what is already due as announced, so no backlog is emailed." }
         sourceTrust: { oneOf: [{ type: string, enum: [manufacturer, community] }, { type: 'null' }], description: "Provenance label for the interval." }
         sourceNote: { type: [string, 'null'], maxLength: 300 }
         archived: { type: boolean, description: Hide the task without deleting it or its history. }
@@ -2886,7 +2886,7 @@ components:
         baselineKind: { oneOf: [{ type: string, enum: [reported, tracking] }, { type: 'null' }], description: "`reported`: when / at what odometer it was last done, by the owner's word, without a record; scheduled like a completion. `tracking`: start tracking now; never a completion and never `ok`. Recurring tasks only; needs `baselineOn`, `baselineOdometer` or both." }
         baselineOn: { oneOf: [{ type: string, format: date }, { type: 'null' }], description: "Today or earlier." }
         baselineOdometer: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }] }
-        remindersEnabled: { type: [boolean, 'null'], description: "Email reminders for this task (on top of the vehicle's switch). Defaults to true. Turning it on records what is already due as announced, so no backlog is emailed." }
+        remindersEnabled: { type: boolean, description: "Email reminders for this task (on top of the vehicle's switch). Defaults to true. Turning it on records what is already due as announced, so no backlog is emailed." }
         sourceTrust: { oneOf: [{ type: string, enum: [manufacturer, community] }, { type: 'null' }], description: "Provenance label for the interval." }
         sourceNote: { type: [string, 'null'], maxLength: 300 }
         archived: { type: boolean, default: false }

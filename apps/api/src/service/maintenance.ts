@@ -123,7 +123,8 @@ export function parseTask(body: Record<string, unknown>, now: Date): ParsedTask 
     if (firstDueOn === null && firstDueOdometer === null) throw invalid('A one-time task needs a due date or a due odometer.');
     if (baseline !== null) throw invalid('A one-time task has no baseline; record a visit that completes it instead.');
   }
-  const remindersEnabled = body['remindersEnabled'] === undefined || body['remindersEnabled'] === null ? true : bool(body['remindersEnabled'], 'remindersEnabled');
+  // Only an explicit true turns reminders on; a missing field means the default (on), null is refused.
+  const remindersEnabled = body['remindersEnabled'] === undefined ? true : bool(body['remindersEnabled'], 'remindersEnabled');
   const st = body['sourceTrust'];
   if (st !== undefined && st !== null && st !== 'manufacturer' && st !== 'community') throw invalid("sourceTrust must be 'manufacturer' or 'community'.");
   return {
