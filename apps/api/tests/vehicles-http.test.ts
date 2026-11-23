@@ -63,6 +63,30 @@ test('create, read, edit, share, transfer end to end over HTTP', { skip }, async
   assert.equal((await call(owner, 'GET', `/v1/vehicles/${id}`)).status, 404);
 });
 
+test('DELETE needs the vehicle archived first, then removes it for good (owner only)', { skip }, async () => {
+  const id = (await call(owner, 'POST', '/v1/vehicles', { name: 'Doomed' })).json.id as string;
+  await call(owner, 'POST', `/v1/vehicles/${id}/members`, { userId: viewer.id, role: 'viewer' });
+
+  assert.equal((await call(null, 'DELETE', `/v1/vehicles/${id}`)).status, 401);
+  const early = await call(owner, 'DELETE', `/v1/vehicles/${id}`);
+  assert.equal(early.status, 409);
+  assert.match(early.type, /problem\+json/);
+  assert.equal(early.json.code, 'not_archived');
+
+  assert.equal((await call(owner, 'PUT', `/v1/vehicles/${id}/archive`, { archived: true })).status, 200);
+  assert.equal((await call(viewer, 'DELETE', `/v1/vehicles/${id}`)).status, 403);
+  assert.equal((await call(stranger, 'DELETE', `/v1/vehicles/${id}`)).status, 404);
+  assert.equal((await call(admin, 'DELETE', `/v1/vehicles/${id}`)).status, 404);
+  assert.equal((await call(owner, 'GET', `/v1/vehicles/${id}`)).status, 200, 'refused deletes change nothing');
+
+  const done = await call(owner, 'DELETE', `/v1/vehicles/${id}`);
+  assert.equal(done.status, 204);
+  assert.equal(done.json, undefined);
+  assert.equal((await call(owner, 'GET', `/v1/vehicles/${id}`)).status, 404);
+  assert.equal((await call(viewer, 'GET', `/v1/vehicles/${id}`)).status, 404);
+  assert.equal((await call(owner, 'DELETE', `/v1/vehicles/${id}`)).status, 404);
+});
+
 test('rejects unknown fields and bad bodies', { skip }, async () => {
   assert.equal((await call(owner, 'POST', '/v1/vehicles', { name: 'x', owner: 'me' })).status, 422);
   assert.equal((await call(owner, 'POST', '/v1/vehicles', [])).status, 422);
