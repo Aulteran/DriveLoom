@@ -577,6 +577,17 @@ paths:
         '403': { $ref: '#/components/responses/Problem' }
         '404': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
+    delete:
+      operationId: deleteVehicle
+      summary: Permanently delete an archived vehicle (owner only)
+      description: 'Removes the vehicle with its members, fill-ups, service visits, items and attachments, maintenance tasks and snoozes, notification settings, photo and friend-comparison setting. Refused with `not_archived` (409) until the vehicle has been archived. This cannot be undone.'
+      tags: [vehicles]
+      responses:
+        '204': { description: Deleted. }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
   /v1/vehicles/{vehicleId}/archive:
     parameters:
         - { $ref: '#/components/parameters/VehicleId' }
