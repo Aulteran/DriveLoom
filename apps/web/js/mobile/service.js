@@ -7,8 +7,9 @@ import { h, field, select, toast } from '../ui.js';
 import { icon } from '../icons.js';
 import { go, render, state } from '../core.js';
 import { get } from '../api.js';
-import { vehicleTitle, canAddService, canChangeVisit } from '../format.js';
-import { FILTER_CATEGORIES, SERVICE_EMPTY, deleteVisit, loadVisits, moduleOn, plainDate, visitCard, visitForm } from '../views/service.js';
+import { vehicleTitle, canAddService, canChangeVisit, canEditVehicle } from '../format.js';
+import { FILTER_CATEGORIES, SERVICE_EMPTY, attentionLine, deleteVisit, loadVisits, moduleOn, plainDate, sectionNav, visitCard, visitForm } from '../views/service.js';
+import { loadMaintenance, loadTaskChoices, maintenancePanel } from '../maintenance.js';
 import { openSheet } from './sheet.js';
 import { confirmSheet } from './confirm.js';
 
@@ -19,18 +20,31 @@ export async function serviceScreen(id, query) {
   if (!moduleOn()) {
     return { vehicle: v, view: h('div', { class: 'm-screen m-stack' }, back, title, h('div', { class: 'm-card m-empty' }, h('p', {}, 'The Service module is not enabled on this server.'))) };
   }
-  const filters = { q: query.get('q') ?? '', category: query.get('category') ?? '' };
-  const filtered = Object.values(filters).some(Boolean);
   const canAdd = canAddService(v) && !v.archived;
-  const first = await loadVisits(v, filters);
-
-  const open = (existing) => {
-    const sheet = openSheet({
-      title: existing ? 'Edit service visit' : 'Add a service visit', sub: vehicleTitle(v), className: 'm-form-sheet',
-      content: visitForm(v, existing, (changed) => { sheet.close(); if (changed) render(); }, { phone: true }),
-    });
+  const view = query.get('view') === 'maintenance' ? 'maintenance' : 'history';
+  const sections = sectionNav(v, view, true);
+  const sheetFor = (title, build) => {
+    const sheet = openSheet({ title, sub: vehicleTitle(v), className: 'm-form-sheet', content: build(() => sheet.close()) });
     sheet.dialog.querySelector('input:not([type=hidden]), select, textarea')?.focus();
   };
+
+  if (view === 'maintenance') {
+    const data = await loadMaintenance(v);
+    const openVisit = (prefill) => sheetFor('Add a service visit', (close) => visitForm(v, null, (changed) => { close(); if (changed) render(); }, { phone: true, tasks: data.tasks, prefill }));
+    const panel = maintenancePanel(v, data, {
+      phone: true, present: sheetFor, openVisit, refresh: render,
+      confirm: (message, confirmLabel) => confirmSheet({ title: 'Are you sure?', message, confirmLabel, action: async () => undefined }),
+      mayRecord: canAdd, mayManage: canEditVehicle(v) && !v.archived, maySnooze: !v.archived,
+    });
+    return { vehicle: v, view: h('div', { class: 'm-screen m-stack' }, back, title, sections, panel.add, panel.node) };
+  }
+
+  const filters = { q: query.get('q') ?? '', category: query.get('category') ?? '' };
+  const filtered = Object.values(filters).some(Boolean);
+  const [first, choices, summary] = await Promise.all([loadVisits(v, filters), loadTaskChoices(v), get(`/v1/vehicles/${v.id}/maintenance-status`)]);
+  const taskNames = new Map(choices.map((t) => [t.id, t.name]));
+
+  const open = (existing) => sheetFor(existing ? 'Edit service visit' : 'Add a service visit', (close) => visitForm(v, existing, (changed) => { close(); if (changed) render(); }, { phone: true, tasks: choices }));
   const remove = async (visit) => {
     const gone = await confirmSheet({
       title: 'Delete this service visit?',
@@ -39,7 +53,7 @@ export async function serviceScreen(id, query) {
     });
     if (gone) { toast('Service visit deleted.'); render(); }
   };
-  const card = (visit) => h('li', {}, visitCard(v, visit, { mayChange: !v.archived && canChangeVisit(v, visit, state.account.id), onEdit: open, onDelete: remove, phone: true }));
+  const card = (visit) => h('li', {}, visitCard(v, visit, { mayChange: !v.archived && canChangeVisit(v, visit, state.account.id), onEdit: open, onDelete: remove, phone: true, taskNames }));
   const list = h('ul', { class: 'svc-list m-list-plain', 'aria-label': 'Service visits' }, first.items.map(card));
   let cursor = first.nextCursor;
   const more = h('button', { type: 'button', class: 'secondary m-wide', hidden: !cursor, onclick: async () => {
@@ -60,7 +74,7 @@ export async function serviceScreen(id, query) {
   const empty = !first.items.length;
   return {
     vehicle: v,
-    view: h('div', { class: 'm-screen m-stack' }, back, title,
+    view: h('div', { class: 'm-screen m-stack' }, back, title, sections, attentionLine(v, summary, true),
       canAdd ? h('button', { type: 'button', class: 'm-wide', onclick: () => open(null) }, icon('plus'), 'Add service visit') : null,
       !empty || filtered ? filterForm : null,
       empty

@@ -2,6 +2,8 @@
 export const UNIT = { km: 'km', mi: 'mi', l: 'L', gal_us: 'US gal', gal_imp: 'imp gal', l_per_100km: 'L/100 km', km_per_l: 'km/L', mpg_us: 'mpg (US)', mpg_imp: 'mpg (imp)' };
 export const qty = (q) => (q ? `${q.value} ${UNIT[q.unit] ?? q.unit}` : '—');
 export const date = (iso) => new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+/** A calendar date (YYYY-MM-DD) as the person's locale writes it; never shifted by a time zone. */
+export const plainDate = (d) => new Date(`${d}T00:00:00`).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 export const dateTime = (iso) => new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 export function money(amount, currency) {
   if (amount === null || amount === undefined) return '—';

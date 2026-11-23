@@ -27,3 +27,5 @@ export const canArchive = (role: Role): boolean => role === 'owner';
 /** Opting the vehicle in or out of friend comparisons. */
 export const canManageComparison = (role: Role): boolean => role === 'owner';
 export const canTransferOwnership = (role: Role): boolean => role === 'owner';
+/** Creating, changing, archiving and deleting maintenance tasks, and snoozing one for the whole vehicle. Drivers and viewers read tasks and may snooze only for themselves. */
+export const canManageSchedules = (role: Role): boolean => role === 'owner' || role === 'editor';

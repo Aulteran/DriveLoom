@@ -5,16 +5,20 @@
 // The odometer is optional, stored like fuel's (as entered plus kilometres) and
 // never read from or written to fuel records. Costs: NULL is unknown, "0" is a
 // known zero; they stay distinct end to end. Currency is the vehicle's.
+// An item may name the maintenance task it completes (task_id): only ever by a
+// person's choice, same vehicle only, and the link clears if the task is deleted.
 import type pg from 'pg';
 import { Dec } from '../decimal.ts';
 import { HttpProblem } from '../http/problem.ts';
-import { bool, decimal, invalid, obj } from '../http/validate.ts';
+import { bool, decimal, invalid, obj, uuid } from '../http/validate.ts';
 import { isUuid, uuidv7 } from '../ids.ts';
 import type { Principal } from '../identity.ts';
 import { quantity } from '../fuel/service.ts';
 import { requireModule } from '../modules.ts';
 import type { Decimal, DistanceUnit, Id } from '../types.ts';
 import { currencyScale, fromKm, isDistanceUnit, toKm } from '../units.ts';
+import { dateOnly, text } from './fields.ts';
+import { assertTaskLinks, taskRefs } from './maintenance.ts';
 import { attachmentsFor, exportAttachments, type AttachmentView } from './attachments.ts';
 import { canChangeVisit, canWriteService } from '../vehicles/permissions.ts';
 import type { VehicleService } from '../vehicles/service.ts';
@@ -23,7 +27,7 @@ import type { VehicleAccess } from '../vehicles/types.ts';
 export const CATEGORIES = ['scheduled', 'repair', 'inspection', 'other'] as const;
 export type Category = (typeof CATEGORIES)[number];
 export const VISIT_FIELDS = ['servicedOn', 'odometer', 'provider', 'diy', 'totalCost', 'notes', 'items'] as const;
-const ITEM_FIELDS = ['name', 'category', 'cost', 'notes'] as const;
+const ITEM_FIELDS = ['name', 'category', 'cost', 'notes', 'taskId'] as const;
 export const MAX_ITEMS = 50;
 
 interface VisitRow {
@@ -31,17 +35,18 @@ interface VisitRow {
   provider: string | null; is_diy: boolean; visit_total_cost: string | null; currency: string; notes: string | null;
   created_by: Id | null; created_at: Date; updated_at: Date;
 }
-interface ItemRow { id: Id; visit_id: Id; position: number; name: string; category: Category; cost: string | null; notes: string | null }
+interface ItemRow { id: Id; visit_id: Id; position: number; name: string; category: Category; cost: string | null; notes: string | null; task_id: Id | null }
 const COLS = `id, vehicle_id, serviced_on::text, odometer_input::text, odometer_unit, odometer_km::text, provider, is_diy, visit_total_cost::text, currency, notes, created_by, created_at, updated_at`;
 
-export interface ParsedItem { name: string; category: Category; cost: string | null; notes: string | null }
+export interface ParsedItem { name: string; category: Category; cost: string | null; notes: string | null; taskId: Id | null }
 export interface ParsedVisit {
   servicedOn: string;
   odometer: { value: string; unit: DistanceUnit; km: Dec } | null;
   provider: string | null; diy: boolean; totalCost: string | null; notes: string | null; items: ParsedItem[];
 }
 
-export interface ServiceItemView { id: Id; name: string; category: Category; cost: Decimal | null; notes: string | null }
+/** `taskId` is the maintenance task this item completes (chosen by a person, never inferred); null when none or the task was deleted. */
+export interface ServiceItemView { id: Id; name: string; category: Category; cost: Decimal | null; notes: string | null; taskId: Id | null }
 export interface ServiceVisitView {
   id: Id; vehicleId: Id; servicedOn: string;
   /** Exactly as entered; null when not recorded. */
@@ -54,23 +59,6 @@ export interface ServiceVisitView {
 
 const notFound = () => new HttpProblem(404, 'service_visit_not_found', 'Service visit not found');
 const forbidden = (detail = 'Your role does not allow changing service records.') => new HttpProblem(403, 'forbidden', 'Forbidden', detail);
-
-/** A calendar date YYYY-MM-DD that exists. */
-function dateOnly(v: unknown, field: string): string {
-  if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v)) throw invalid(`${field} must be a date such as 2026-03-14.`);
-  const d = new Date(`${v}T00:00:00Z`);
-  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== v) throw invalid(`${field} is not a valid date.`);
-  return v;
-}
-
-function text(v: unknown, field: string, max: number, required = false): string | null {
-  if (v === undefined || v === null) { if (required) throw invalid(`${field} is required.`); return null; }
-  if (typeof v !== 'string') throw invalid(`${field} must be text.`);
-  const t = v.trim();
-  if (!t) { if (required) throw invalid(`${field} must not be empty.`); return null; }
-  if (t.length > max) throw invalid(`${field} must be at most ${max} characters.`);
-  return t;
-}
 
 function money(v: unknown, field: string, currency: string): string | null {
   if (v === undefined || v === null) return null;
@@ -95,7 +83,8 @@ export function parseVisit(body: Record<string, unknown>, currency: string, now:
     const it = obj(raw, ITEM_FIELDS, `items[${i}]`);
     const category = it['category'] === undefined || it['category'] === null ? 'other' : it['category'];
     if (!(CATEGORIES as readonly unknown[]).includes(category)) throw invalid(`items[${i}].category must be one of ${CATEGORIES.join(', ')}.`);
-    return { name: text(it['name'], `items[${i}].name`, 120, true)!, category: category as Category, cost: money(it['cost'], `items[${i}].cost`, currency), notes: text(it['notes'], `items[${i}].notes`, 500) };
+    return { name: text(it['name'], `items[${i}].name`, 120, true)!, category: category as Category, cost: money(it['cost'], `items[${i}].cost`, currency), notes: text(it['notes'], `items[${i}].notes`, 500),
+      taskId: it['taskId'] === undefined || it['taskId'] === null ? null : uuid(it['taskId'], `items[${i}].taskId`) };
   });
   return {
     servicedOn, odometer, provider: text(body['provider'], 'provider', 120), diy, totalCost: money(body['totalCost'], 'totalCost', currency),
@@ -119,7 +108,7 @@ export class ServiceService {
   async #items(q: Pick<pg.Pool, 'query'>, ids: Id[]): Promise<Map<Id, ItemRow[]>> {
     const out = new Map<Id, ItemRow[]>();
     if (!ids.length) return out;
-    const { rows } = await q.query<ItemRow>('SELECT id, visit_id, position, name, category, cost::text, notes FROM service_items WHERE visit_id = ANY($1::uuid[]) ORDER BY visit_id, position', [ids]);
+    const { rows } = await q.query<ItemRow>('SELECT id, visit_id, position, name, category, cost::text, notes, task_id FROM service_items WHERE visit_id = ANY($1::uuid[]) ORDER BY visit_id, position', [ids]);
     for (const r of rows) (out.get(r.visit_id) ?? out.set(r.visit_id, []).get(r.visit_id)!).push(r);
     return out;
   }
@@ -130,7 +119,7 @@ export class ServiceService {
       odometer: r.odometer_input === null ? null : { value: r.odometer_input as Decimal, unit: r.odometer_unit! },
       display: { odometer: r.odometer_km === null ? null : { value: fromKm(Dec.parse(r.odometer_km), v.odometerUnit).toFixed(0), unit: v.odometerUnit } },
       provider: r.provider, diy: r.is_diy, totalCost: r.visit_total_cost as Decimal | null, currency: r.currency, notes: r.notes,
-      items: items.map((i) => ({ id: i.id, name: i.name, category: i.category, cost: i.cost as Decimal | null, notes: i.notes })), attachments,
+      items: items.map((i) => ({ id: i.id, name: i.name, category: i.category, cost: i.cost as Decimal | null, notes: i.notes, taskId: i.task_id })), attachments,
       createdBy: r.created_by, createdAt: r.created_at.toISOString(), updatedAt: r.updated_at.toISOString(),
     };
   }
@@ -200,7 +189,7 @@ export class ServiceService {
 
   async #insertItems(c: pg.PoolClient, visitId: Id, items: ParsedItem[]): Promise<void> {
     for (const [i, it] of items.entries()) {
-      await c.query('INSERT INTO service_items (id, visit_id, position, name, category, cost, notes) VALUES ($1,$2,$3,$4,$5,$6,$7)', [uuidv7(), visitId, i, it.name, it.category, it.cost, it.notes]);
+      await c.query('INSERT INTO service_items (id, visit_id, position, name, category, cost, notes, task_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)', [uuidv7(), visitId, i, it.name, it.category, it.cost, it.notes, it.taskId]);
     }
   }
 
@@ -228,7 +217,9 @@ export class ServiceService {
   async create(p: Principal, vehicleId: unknown, body: unknown): Promise<ServiceVisitView> {
     const b = obj(body, VISIT_FIELDS);
     return this.#write(p, vehicleId, async (c, v) => {
-      const id = await this.insertParsed(c, v.id, v.currency, parseVisit(b, v.currency, this.#now()), p.userId);
+      const f = parseVisit(b, v.currency, this.#now());
+      await assertTaskLinks(c, v.id, f.items);
+      const id = await this.insertParsed(c, v.id, v.currency, f, p.userId);
       await this.#audit(c, p, 'service_visit.create', v.id, id);
       return this.#one(c, v, id);
     });
@@ -246,10 +237,11 @@ export class ServiceService {
       const view = this.#view(cur, (await this.#items(c, [cur.id])).get(cur.id) ?? [], v);
       const merged = {
         servicedOn: view.servicedOn, odometer: view.odometer, provider: view.provider, diy: view.diy, totalCost: view.totalCost, notes: view.notes,
-        items: view.items.map((i) => ({ name: i.name, category: i.category, cost: i.cost, notes: i.notes })), ...patch,
+        items: view.items.map((i) => ({ name: i.name, category: i.category, cost: i.cost, notes: i.notes, taskId: i.taskId })), ...patch,
       };
       // The vehicle's currency cannot change once costs exist, so it is always the one these costs were entered in.
       const f = parseVisit(merged, v.currency, this.#now());
+      if ('items' in patch) await assertTaskLinks(c, v.id, f.items);
       await c.query(
         `UPDATE service_visits SET serviced_on = $2, odometer_input = $3, odometer_unit = $4, odometer_km = $5, provider = $6, is_diy = $7, visit_total_cost = $8, notes = $9, currency = $10, updated_at = now() WHERE id = $1`,
         [cur.id, f.servicedOn, f.odometer?.value ?? null, f.odometer?.unit ?? null, f.odometer?.km.toFixed(6) ?? null, f.provider, f.diy, f.totalCost, f.notes, v.currency]);
@@ -281,12 +273,13 @@ export class ServiceService {
   async exportBodies(q: Pick<pg.Pool, 'query'>, vehicleId: Id): Promise<Record<string, unknown>[]> {
     const { rows } = await q.query<VisitRow>(`SELECT ${COLS} FROM service_visits WHERE vehicle_id = $1 ORDER BY serviced_on, created_at, id`, [vehicleId]);
     const ids = rows.map((r) => r.id);
-    const [items, atts] = await Promise.all([this.#items(q, ids), exportAttachments(q, ids)]);
+    const [items, atts, refs] = await Promise.all([this.#items(q, ids), exportAttachments(q, ids), taskRefs(q, vehicleId)]);
     return rows.map((r) => ({
       servicedOn: r.serviced_on,
       odometer: r.odometer_input === null ? null : { value: r.odometer_input, unit: r.odometer_unit },
       provider: r.provider, diy: r.is_diy, totalCost: r.visit_total_cost, notes: r.notes,
-      items: (items.get(r.id) ?? []).map((i) => ({ name: i.name, category: i.category, cost: i.cost, notes: i.notes })),
+      // `taskRef` points at an entry of the export's `maintenanceTasks` (ids never leave the instance).
+      items: (items.get(r.id) ?? []).map((i) => ({ name: i.name, category: i.category, cost: i.cost, notes: i.notes, ...(i.task_id && refs.get(i.task_id) ? { taskRef: refs.get(i.task_id) } : {}) })),
       // Base64 bytes: exports with receipts can be large (see openapi).
       attachments: atts.get(r.id) ?? [],
     }));

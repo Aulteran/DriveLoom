@@ -16,6 +16,8 @@ import { FuelService } from './fuel/service.ts';
 import { fuelRoutes } from './fuel/routes.ts';
 import { ServiceService } from './service/service.ts';
 import { serviceRoutes } from './service/routes.ts';
+import { MaintenanceService } from './service/maintenance.ts';
+import { maintenanceRoutes } from './service/maintenance-routes.ts';
 import { AttachmentService, attachmentRoutes } from './service/attachments.ts';
 import { preferenceRoutes } from './preferences.ts';
 import { vehiclePrefRoutes } from './modules.ts';
@@ -53,6 +55,7 @@ export function allRoutes(ctx: AuthContext): Route[] {
     ...fuelRoutes(fuel),
     ...serviceRoutes(service),
     ...attachmentRoutes(new AttachmentService(ctx.db, vehicles)),
+    ...maintenanceRoutes(new MaintenanceService(ctx.db, vehicles, ctx.now)),
     ...preferenceRoutes(ctx.db),
     ...friendRoutes(new FriendService(ctx.db, vehicles, fuel, ctx.now)),
     ...portabilityRoutes(new PortabilityService(ctx.db, vehicles, fuel, service, ctx.now)),

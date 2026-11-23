@@ -1452,6 +1452,101 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       await page.getByRole('heading', { name: 'At a glance' }).waitFor();
     });
 
+    await t.test('maintenance planning on desktop: add a task, mark it done through a linked visit, snooze', async () => {
+      await db.pool.query("INSERT INTO instance_modules (module, enabled) VALUES ('service', true) ON CONFLICT (module) DO UPDATE SET enabled = true");
+      try {
+        await page.goto(`${base}/#/${vehicle}/service?view=maintenance`);
+        await page.reload();
+        await page.getByRole('heading', { name: 'Service', level: 1 }).waitFor();
+        await page.getByText('Add what you want to keep track of.').waitFor();
+        await page.getByText("DriveLoom does not ship manufacturer schedules.").waitFor();
+        assert.equal(await page.getByRole('navigation', { name: 'Service sections' }).getByRole('link', { name: 'Maintenance' }).getAttribute('aria-current'), 'page');
+        assert.deepEqual(await axe('maintenance empty'), []);
+
+        await page.getByRole('button', { name: 'Add maintenance task' }).click();
+        await page.getByLabel('Common service types').selectOption({ label: 'Oil change' });
+        assert.equal(await page.getByLabel('Task name').inputValue(), 'Oil change');
+        await page.getByLabel('Every how many days (optional)').fill('365');
+        await page.getByLabel('Interval distance').fill('15000');
+        assert.deepEqual(await axe('maintenance form'), []);
+        await page.getByRole('button', { name: 'Add task' }).click();
+        const card = page.locator('article.mt-task').first();
+        await card.getByRole('heading', { name: 'Oil change' }).waitFor();
+        await card.getByText('No starting point', { exact: true }).waitFor();
+        await card.getByText('Repeats every 365 days or 15,000 km, whichever comes first').waitFor();
+        assert.deepEqual(await axe('maintenance list'), []);
+
+        // "Mark done" opens the visit form with the item linked; nothing is linked automatically.
+        await card.getByRole('button', { name: 'Mark done: Oil change' }).click();
+        assert.equal(await page.getByLabel('Item', { exact: true }).first().inputValue(), 'Oil change');
+        assert.equal(await page.getByLabel('Completes maintenance task (optional)').inputValue() !== '', true);
+        await page.getByLabel('Odometer reading').fill('42000');
+        await page.getByRole('button', { name: 'Add visit' }).click();
+        await page.locator('article.mt-task').first().getByText('On track', { exact: true }).waitFor();
+        await page.locator('article.mt-task').first().getByText(/Last done .* at 42,000 km/).waitFor();
+        assert.equal((await db.pool.query('SELECT count(*)::int AS n FROM service_items WHERE task_id IS NOT NULL')).rows[0].n, 1);
+
+        // Snooze mutes reminders only; the status stays visible.
+        await page.locator('article.mt-task').first().getByRole('button', { name: 'Snooze reminders for Oil change' }).click();
+        await page.getByText('Snoozing only mutes reminders.').waitFor();
+        assert.deepEqual(await axe('snooze form'), []);
+        await page.getByLabel('Reason (optional)').fill('next week');
+        await page.getByRole('button', { name: 'Snooze', exact: true }).click();
+        await page.locator('article.mt-task').first().getByText(/Reminders muted for you until/).waitFor();
+        await page.locator('article.mt-task').first().getByText('On track', { exact: true }).waitFor();
+        assert.equal((await db.pool.query("SELECT count(*)::int AS n FROM task_snoozes WHERE scope = 'personal'")).rows[0].n, 1);
+
+        // The History section links the task by name and points at what needs attention.
+        await page.getByRole('navigation', { name: 'Service sections' }).getByRole('link', { name: 'History' }).click();
+        await page.locator('article.svc-visit').getByText('completes Oil change').waitFor();
+        assert.deepEqual(await axe('service history with a linked item'), []);
+        await noErrorPage();
+      } finally {
+        await db.pool.query('DELETE FROM service_visits');
+        await db.pool.query('DELETE FROM maintenance_tasks');
+        await db.pool.query("UPDATE instance_modules SET enabled = false WHERE module = 'service'");
+      }
+    });
+
+    await t.test('maintenance planning on a phone: section in the Service screen, add and snooze in sheets, bottom navigation untouched', async () => {
+      await db.pool.query("INSERT INTO instance_modules (module, enabled) VALUES ('service', true) ON CONFLICT (module) DO UPDATE SET enabled = true");
+      const { ctx, p, phoneAxe, open } = await phonePage();
+      try {
+        await open(`${vehicle}/overview`);
+        await p.getByRole('link', { name: /^Service/ }).click();
+        await p.getByRole('heading', { name: 'Service', level: 1 }).waitFor();
+        await p.getByRole('navigation', { name: 'Service sections' }).getByRole('link', { name: 'Maintenance' }).click();
+        await p.getByText('Add what you want to keep track of.').waitFor();
+        assert.equal(await p.getByRole('navigation', { name: 'Main' }).getByRole('link').count(), 5, 'bottom navigation is unchanged');
+        assert.deepEqual(await bothThemes(p, phoneAxe, 'maintenance empty'), []);
+        await p.getByRole('button', { name: 'Add maintenance task' }).click();
+        const sheet = p.getByRole('dialog');
+        await sheet.getByLabel('Task name').fill('Tyre rotation');
+        await sheet.getByLabel('Interval distance').fill('10000');
+        assert.deepEqual(await bothThemes(p, phoneAxe, 'maintenance sheet'), []);
+        await sheet.getByRole('button', { name: 'Add task' }).click();
+        const card = p.locator('article.mt-task').first();
+        await card.getByRole('heading', { name: 'Tyre rotation' }).waitFor();
+        assert.equal(await overflows(p), false, 'maintenance overflows on a phone');
+        assert.deepEqual(await bothThemes(p, phoneAxe, 'maintenance list'), []);
+        await card.getByRole('button', { name: 'Snooze reminders for Tyre rotation' }).click();
+        const snooze = p.getByRole('dialog');
+        await snooze.getByText('Snoozing only mutes reminders.').waitFor();
+        assert.equal(await snooze.getByLabel('Additional distance', { exact: true }).isDisabled(), false, 'the vehicle has fuel records, so a distance snooze can be worked out');
+        await snooze.getByText('Counted from the latest odometer reading, once, when you save.').waitFor();
+        assert.deepEqual(await bothThemes(p, phoneAxe, 'snooze sheet'), []);
+        await snooze.getByRole('radio', { name: '1 month' }).check();
+        await snooze.getByRole('button', { name: 'Snooze', exact: true }).click();
+        await p.locator('article.mt-task').first().getByText(/Reminders muted for you until/).waitFor();
+        assert.equal((await db.pool.query("SELECT count(*)::int AS n FROM task_snoozes WHERE scope = 'personal'")).rows[0].n, 1);
+        await p.emulateMedia({ colorScheme: 'light' });
+      } finally {
+        await ctx.close();
+        await db.pool.query('DELETE FROM maintenance_tasks');
+        await db.pool.query("UPDATE instance_modules SET enabled = false WHERE module = 'service'");
+      }
+    });
+
     await t.test('signing out and back in, the request is accepted', async () => {
       await page.getByRole('button', { name: /sign out/i }).click();
       await page.getByRole('heading', { name: 'Sign in' }).waitFor();

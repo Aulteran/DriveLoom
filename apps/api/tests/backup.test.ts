@@ -64,6 +64,13 @@ async function seed(h: NonNullable<Awaited<ReturnType<typeof harness>>>) {
   await h.ctx.db.query('INSERT INTO service_attachments (id, visit_id, file_name, content_type, size_bytes, sha256, data, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
     [uuidv7(), visitId, 'Quittung ☃.pdf', 'application/pdf', RECEIPT.length, createHash('sha256').update(RECEIPT).digest('hex'), RECEIPT, pb.userId]);
   await h.ctx.db.query('INSERT INTO vehicle_user_prefs (vehicle_id, user_id, show_service) VALUES ($1,$2,false)', [v.id, pa.userId]);
+  // Maintenance planning: a task linked from the visit's first item, with a vehicle-wide and a personal snooze.
+  const taskId = uuidv7();
+  await h.ctx.db.query(`INSERT INTO maintenance_tasks (id, vehicle_id, name, catalog_key, recurring, interval_days, interval_distance_input, interval_distance_unit, interval_distance_km, first_due_on, notes, created_by)
+    VALUES ($1,$2,'Öl ☃','oil_change',true,365,'7500.5','mi','12071.7',$3,'note',$4)`, [taskId, v.id, '2026-09-01', pb.userId]);
+  await h.ctx.db.query("UPDATE service_items SET task_id = $1 WHERE visit_id = $2 AND position = 0", [taskId, visitId]);
+  await h.ctx.db.query("INSERT INTO task_snoozes (id, task_id, scope, user_id, snooze_until_date, snooze_until_odometer_km, reason, created_by) VALUES ($1,$2,'vehicle',NULL,'2026-10-01','5000.5','später',$3)", [uuidv7(), taskId, pb.userId]);
+  await h.ctx.db.query("INSERT INTO task_snoozes (id, task_id, scope, user_id, snooze_until_date, created_by) VALUES ($1,$2,'personal',$3,'2026-10-05',$3)", [uuidv7(), taskId, pa.userId]);
   return { a, b, pb, v, totp };
 }
 
@@ -105,6 +112,12 @@ test('full restore into an isolated instance preserves users, vehicles, records 
       { serviced_on: '2026-04-02', odometer_input: '950.25', visit_total_cost: '0', provider: 'Näïve Garage', name: 'Wipers', cost: null },
     ], 'service visits and items round-trip, unknown stays null and zero stays zero');
     assert.deepEqual((await target.client.query('SELECT show_service FROM vehicle_user_prefs')).rows, [{ show_service: false }]);
+    assert.equal(info.tables['maintenance_tasks'], 1); assert.equal(info.tables['task_snoozes'], 2);
+    assert.deepEqual((await target.client.query('SELECT name, catalog_key, recurring, interval_days, interval_distance_input::text, interval_distance_unit, interval_distance_km::text, first_due_on::text, notes FROM maintenance_tasks')).rows,
+      [{ name: 'Öl ☃', catalog_key: 'oil_change', recurring: true, interval_days: 365, interval_distance_input: '7500.5', interval_distance_unit: 'mi', interval_distance_km: '12071.700000', first_due_on: '2026-09-01', notes: 'note' }], 'maintenance tasks round-trip');
+    assert.deepEqual((await target.client.query('SELECT i.name, t.name AS task FROM service_items i JOIN maintenance_tasks t ON t.id = i.task_id')).rows, [{ name: 'Oil change', task: 'Öl ☃' }], 'the completion link survives');
+    assert.deepEqual((await target.client.query('SELECT scope, user_id IS NULL AS vehicle_wide, snooze_until_date::text AS d, snooze_until_odometer_km::text AS km, reason FROM task_snoozes ORDER BY scope')).rows,
+      [{ scope: 'personal', vehicle_wide: false, d: '2026-10-05', km: null, reason: null }, { scope: 'vehicle', vehicle_wide: true, d: '2026-10-01', km: '5000.500000', reason: 'später' }], 'both snooze scopes round-trip');
     // Sessions do not survive: the old cookie is dead on the restored instance, but the password works.
     assert.equal((await target.client.query('SELECT count(*)::int AS n FROM sessions')).rows[0].n, 0);
     const pool = new pg.Pool({ connectionString: target.url, max: 2 });

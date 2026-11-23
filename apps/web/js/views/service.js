@@ -5,16 +5,16 @@
 import { get, post, patch, del } from '../api.js';
 import { h, form, field, select, toast, confirmDialog } from '../ui.js';
 import { go, render, state } from '../core.js';
-import { date, money, qty, canAddService, canChangeVisit, vehicleTitle, localInput } from '../format.js';
+import { money, qty, canAddService, canChangeVisit, canEditVehicle, vehicleTitle, localInput, plainDate } from '../format.js';
 import { icon } from '../icons.js';
 import { attachmentsPanel, stagedAttachments, uploadStaged } from '../attachments.js';
+import { loadMaintenance, loadTaskChoices, maintenancePanel } from '../maintenance.js';
 
 /** Suggestions only: any text up to 120 characters is accepted. */
 export const PRESETS = ['Oil change', 'Tyres rotated', 'Tyres replaced', 'Brake pads', 'Brake fluid', 'Air filter', 'Cabin filter', 'Battery', 'Spark plugs', 'Coolant', 'Wipers', 'Inspection', 'Alignment', 'Timing belt'];
 export const CATEGORIES = [['scheduled', 'Scheduled'], ['repair', 'Repair'], ['inspection', 'Inspection'], ['other', 'Other']];
 const CATEGORY_LABEL = Object.fromEntries(CATEGORIES);
 export const FILTER_CATEGORIES = [['', 'Any category'], ...CATEGORIES];
-const plainDate = (d) => new Date(`${d}T00:00:00`).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 export { plainDate };
 
 /** The page is reachable only with the module on; the personal preference merely hides the menu entry. */
@@ -29,8 +29,13 @@ export async function loadVisits(v, f = {}, cursor = null) {
 
 let presetSeq = 0;
 
-/** Add/edit form. `done(changed)` is called on save or cancel. */
-export function visitForm(v, existing, done, { phone = false } = {}) {
+/**
+ * Add/edit form. `done(changed)` is called on save or cancel. `tasks` are the
+ * vehicle's maintenance tasks for the per-item "Completes maintenance task"
+ * choice (linking is always a person's choice, never automatic); `prefill`
+ * ({ items }) starts a new visit with items already filled, as "Mark done" does.
+ */
+export function visitForm(v, existing, done, { phone = false, tasks = [], prefill = null } = {}) {
   const listId = `svc-presets-${++presetSeq}`;
   const itemRows = h('div', { class: 'svc-items', role: 'group', 'aria-label': 'Work done' });
   const mkItem = (it) => {
@@ -40,10 +45,27 @@ export function visitForm(v, existing, done, { phone = false } = {}) {
       field(`Cost (${v.currency}, optional)`, h('input', { name: 'itemCost', inputmode: 'decimal', pattern: '\\d+(\\.\\d+)?', value: it?.cost ?? '', placeholder: 'unknown' })),
       h('button', { type: 'button', class: 'ghost svc-remove', 'aria-label': 'Remove this item', onclick: () => { row.remove(); sync(); } }, icon('close')));
     row.dataset.notes = it?.notes ?? '';
+    row.dataset.task = it?.taskId ?? '';
+    const linked = tasks.filter((t) => !t.archived || t.id === it?.taskId);
+    if (linked.length) {
+      const sel = select('itemTask', [['', 'No task'], ...linked.map((t) => [t.id, t.archived ? `${t.name} (archived)` : t.name])], it?.taskId ?? '');
+      const nameInput = row.querySelector('[name=itemName]');
+      const hint = h('div', { class: 'small mt-suggest', 'aria-live': 'polite' });
+      // A match by name is only ever offered; nothing links until the person confirms.
+      const suggest = () => {
+        hint.replaceChildren();
+        const m = linked.find((t) => !t.archived && t.name.toLowerCase() === nameInput.value.trim().toLowerCase());
+        if (m && sel.value !== m.id) hint.append(h('button', { type: 'button', class: 'ghost', onclick: () => { sel.value = m.id; suggest(); } }, `Link to the maintenance task "${m.name}"?`));
+      };
+      nameInput.addEventListener('input', suggest);
+      sel.addEventListener('change', suggest);
+      row.append(h('div', { class: 'mt-link' }, field('Completes maintenance task (optional)', sel, 'Linking restarts that task\'s schedule from this visit.'), hint));
+      suggest();
+    }
     return row;
   };
   const sync = () => { for (const b of itemRows.querySelectorAll('.svc-remove')) b.hidden = itemRows.children.length < 2; };
-  for (const it of existing?.items?.length ? existing.items : [null]) itemRows.append(mkItem(it));
+  for (const it of existing?.items?.length ? existing.items : prefill?.items?.length ? prefill.items : [null]) itemRows.append(mkItem(it));
   sync();
   const diy = h('input', { type: 'checkbox', name: 'diy', checked: existing?.diy ?? false });
   const provider = h('input', { name: 'provider', maxlength: 120, value: existing?.provider ?? '', autocomplete: 'off' });
@@ -74,7 +96,8 @@ export function visitForm(v, existing, done, { phone = false } = {}) {
     const items = [...itemRows.querySelectorAll('.svc-item')].map((r) => {
       const cost = r.querySelector('[name=itemCost]').value.trim();
       const notes = r.dataset.notes;
-      return { name: r.querySelector('[name=itemName]').value.trim(), category: r.querySelector('[name=itemCategory]').value, cost: cost || null, ...(notes ? { notes } : {}) };
+      const taskId = r.querySelector('[name=itemTask]') ? r.querySelector('[name=itemTask]').value : r.dataset.task;
+      return { name: r.querySelector('[name=itemName]').value.trim(), category: r.querySelector('[name=itemCategory]').value, cost: cost || null, taskId: taskId || null, ...(notes ? { notes } : {}) };
     });
     const odo = x.odometer.trim();
     const body = {
@@ -100,7 +123,7 @@ export async function deleteVisit(v, visit) {
 }
 
 /** One visit as a card: date, provider/DIY, odometer, total, item chips, notes. */
-export function visitCard(v, visit, { onEdit, onDelete, mayChange, phone = false }) {
+export function visitCard(v, visit, { onEdit, onDelete, mayChange, phone = false, taskNames = null }) {
   const title = `${plainDate(visit.servicedOn)}`;
   const meta = [visit.diy ? 'DIY' : null, visit.provider, visit.odometer ? `${qty(visit.display.odometer ?? visit.odometer)}` : null].filter(Boolean).join(' · ');
   return h('article', { class: 'panel svc-visit', 'aria-label': `Service visit on ${title}` },
@@ -109,6 +132,7 @@ export function visitCard(v, visit, { onEdit, onDelete, mayChange, phone = false
       h('div', { class: 'svc-total' }, visit.totalCost !== null ? h('strong', {}, costText(visit.totalCost, visit.currency)) : h('span', { class: 'muted small' }, 'Cost not recorded'))),
     h('ul', { class: 'svc-chips', 'aria-label': 'Work done' }, visit.items.map((i) => h('li', { class: 'svc-chip', 'data-category': i.category },
       h('span', {}, i.name),
+      i.taskId && taskNames?.get(i.taskId) ? h('span', { class: 'svc-chip-cat' }, `completes ${taskNames.get(i.taskId)}`) : null,
       i.category !== 'other' ? h('span', { class: 'svc-chip-cat' }, CATEGORY_LABEL[i.category]) : null,
       i.cost !== null ? h('span', { class: 'svc-chip-cost' }, money(i.cost, visit.currency)) : null))),
     visit.notes ? h('p', { class: 'small muted svc-notes' }, visit.notes) : null,
@@ -120,6 +144,19 @@ export function visitCard(v, visit, { onEdit, onDelete, mayChange, phone = false
 
 export const SERVICE_EMPTY = ['Start from today. Adding past service is optional.', 'Record oil changes, tyres, brakes and repairs as they happen, with costs if you like.'];
 
+/** The two sections of the Service page, as links (the current one is aria-current). */
+export const sectionNav = (v, view, phone = false) => h('nav', { class: phone ? 'm-seg' : 'svc-tabs', 'aria-label': 'Service sections' },
+  [['history', 'History', `#/vehicles/${v.id}/service`], ['maintenance', 'Maintenance', `#/vehicles/${v.id}/service?view=maintenance`]].map(([key, label, href]) =>
+    h('a', { class: phone ? 'm-seg-opt' : `svc-tab${view === key ? ' on' : ''}`, href, ...(view === key ? { 'aria-current': phone ? 'true' : 'page' } : {}) }, label)));
+
+/** A one-line pointer on the History section when maintenance needs attention. */
+export function attentionLine(v, summary, phone = false) {
+  const c = summary?.counts;
+  if (!c || !c.needsAttention) return null;
+  const parts = [c.overdue ? `${c.overdue} overdue` : null, c.due_soon ? `${c.due_soon} due soon` : null].filter(Boolean).join(', ');
+  return h('p', { class: `${phone ? 'm-card ' : 'panel '}mt-note` }, icon('alert'), `Maintenance: ${parts}. `, h('a', { href: `#/vehicles/${v.id}/service?view=maintenance` }, 'Open Maintenance'));
+}
+
 // ---------- desktop page ----------
 export async function serviceTab(v, query, pageHead, meta) {
   const head = (actions) => pageHead(vehicleTitle(v), 'Service', meta(v), actions);
@@ -127,20 +164,32 @@ export async function serviceTab(v, query, pageHead, meta) {
     return h('div', {}, head(), h('div', { class: 'panel empty' }, h('p', {}, 'The Service module is not enabled on this server.'), h('p', { class: 'small' }, 'An administrator can turn it on under Administration.')));
   }
   const canAdd = canAddService(v) && !v.archived;
+  const view = query.get('view') === 'maintenance' ? 'maintenance' : 'history';
+  const slot = h('div');
+  const show = (node) => { slot.replaceChildren(node); slot.querySelector('input, select, textarea')?.focus(); };
+  const nav = sectionNav(v, view);
+
+  if (view === 'maintenance') {
+    const data = await loadMaintenance(v);
+    const openVisit = (prefill) => show(visitForm(v, null, (changed) => { slot.replaceChildren(); if (changed) render(); }, { tasks: data.tasks, prefill }));
+    const panel = maintenancePanel(v, data, {
+      present: (_title, build) => show(build(() => slot.replaceChildren())), openVisit, refresh: render, confirm: confirmDialog,
+      mayRecord: canAdd, mayManage: canEditVehicle(v) && !v.archived, maySnooze: !v.archived,
+    });
+    return h('div', {}, head(panel.add), nav, slot, panel.node);
+  }
+
   const filters = { q: query.get('q') ?? '', category: query.get('category') ?? '', from: query.get('from') ?? '', to: query.get('to') ?? '' };
   const filtered = Object.values(filters).some(Boolean);
-  const first = await loadVisits(v, filters);
-  const slot = h('div');
+  const [first, choices, summary] = await Promise.all([loadVisits(v, filters), loadTaskChoices(v), get(`/v1/vehicles/${v.id}/maintenance-status`)]);
+  const taskNames = new Map(choices.map((t) => [t.id, t.name]));
   const list = h('div', { class: 'svc-list' });
-  const open = (existing) => {
-    slot.replaceChildren(visitForm(v, existing, (changed) => { slot.replaceChildren(); if (changed) render(); }));
-    slot.querySelector('input')?.focus();
-  };
+  const open = (existing) => show(visitForm(v, existing, (changed) => { slot.replaceChildren(); if (changed) render(); }, { tasks: choices }));
   const remove = async (visit) => {
     if (!(await confirmDialog(`Delete the service visit of ${plainDate(visit.servicedOn)}${visit.provider ? ` at ${visit.provider}` : ''}? This removes its ${visit.items.length} item${visit.items.length === 1 ? '' : 's'} for everyone with access.`, 'Delete'))) return;
     await deleteVisit(v, visit); toast('Service visit deleted.'); render();
   };
-  const card = (visit) => visitCard(v, visit, { mayChange: !v.archived && canChangeVisit(v, visit, state.account.id), onEdit: open, onDelete: remove });
+  const card = (visit) => visitCard(v, visit, { mayChange: !v.archived && canChangeVisit(v, visit, state.account.id), onEdit: open, onDelete: remove, taskNames });
   list.append(...first.items.map(card));
   let cursor = first.nextCursor;
   const more = h('button', { type: 'button', class: 'secondary', hidden: !cursor, onclick: async () => {
@@ -163,7 +212,7 @@ export async function serviceTab(v, query, pageHead, meta) {
 
   const addBtn = canAdd ? h('button', { onclick: () => open(null) }, icon('plus'), 'Add service visit') : null;
   const empty = !first.items.length;
-  return h('div', {}, head(addBtn), slot,
+  return h('div', {}, head(addBtn), nav, attentionLine(v, summary), slot,
     !empty || filtered ? filterForm : null,
     empty
       ? h('div', { class: 'panel empty' }, h('p', {}, filtered ? 'No service visits match these filters.' : SERVICE_EMPTY[0]), filtered ? null : h('p', { class: 'small' }, SERVICE_EMPTY[1]))
