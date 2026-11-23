@@ -125,7 +125,8 @@ export function attachmentsPanel(v, visit, { mayChange, canAdd = false, phone = 
     setTimeout(() => { for (const li of [...status.children]) if (!li.classList.contains('att-bad')) li.remove(); }, 4000);
   };
   const note = h('p', { class: 'small muted' });
-  root.append(heading ? h('h3', { class: 'att-h' }, 'Attachments') : null, list, canAdd ? picker(label, phone, add) : null, canAdd ? note : null, status, errors);
+  // Node.append turns a null into the text "null", so leave out what is not shown.
+  root.append(...[heading ? h('h3', { class: 'att-h' }, 'Attachments') : null, list, canAdd ? picker(label, phone, add) : null, canAdd ? note : null, status, errors].filter(Boolean));
   visit.attachments ??= [];
   draw();
   return root;
