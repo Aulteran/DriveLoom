@@ -8,12 +8,13 @@ import { get, post, patch, put, del } from './api.js';
 import { h, form, field, select, toast } from './ui.js';
 import { icon } from './icons.js';
 import { plainDate } from './format.js';
+import { loadPresets, presetBanner, presetFlow, openDialog } from './presets.js';
 
 export const loadMaintenance = async (v) => {
-  const [tasks, summary, catalog] = await Promise.all([
-    get(`/v1/vehicles/${v.id}/maintenance-tasks`), get(`/v1/vehicles/${v.id}/maintenance-status`), get('/v1/maintenance-catalog'),
+  const [tasks, summary, catalog, presets] = await Promise.all([
+    get(`/v1/vehicles/${v.id}/maintenance-tasks`), get(`/v1/vehicles/${v.id}/maintenance-status`), get('/v1/maintenance-catalog'), loadPresets(v),
   ]);
-  return { tasks: tasks.items, summary, catalog };
+  return { tasks: tasks.items, summary, catalog, presets };
 };
 /** Every task including archived ones, for the visit form's "Completes maintenance task" choice. */
 export const loadTaskChoices = async (v) => (await get(`/v1/vehicles/${v.id}/maintenance-tasks?includeArchived=true`)).items;
@@ -25,9 +26,14 @@ const STATE = {
   no_baseline: { icon: 'list', label: 'No starting point', cls: '' },
   unknown_reading: { icon: 'gauge', label: 'Odometer needed', cls: '' },
   completed: { icon: 'check', label: 'Done', cls: 'good' },
+  tracking: { icon: 'clock', label: 'Tracking only', cls: '' },
 };
 /** Status as icon plus words: colour is never the only signal. */
-export const statusBadge = (state) => { const s = STATE[state] ?? STATE.no_baseline; return h('span', { class: `badge mt-badge ${s.cls}` }, icon(s.icon), s.label); };
+export const statusBadge = (state, task) => {
+  // A tracking point is not a completed service, so it is never called "No starting point" (or anything green).
+  const s = state === 'no_baseline' && task?.baseline === 'tracking' ? STATE.tracking : STATE[state] ?? STATE.no_baseline;
+  return h('span', { class: `badge mt-badge ${s.cls}` }, icon(s.icon), s.label);
+};
 
 const num = (n) => Number(n).toLocaleString();
 const dist = (d) => (d ? `${num(d.value)} ${d.unit}` : '');
@@ -50,7 +56,7 @@ export function baselineText(t) {
   const at = [t.baselineOn ? plainDate(t.baselineOn) : null, t.baselineOdometer ? `at ${dist(t.baselineOdometer)}` : null].filter(Boolean).join(' ');
   return t.baselineKind === 'reported'
     ? `Last done ${at}, as you reported (no service record).`
-    : `Tracking since ${at}. This is a starting point, not a record that the work was done.`;
+    : `Tracking since ${at} — not a completed service.`;
 }
 
 /** The lines under a task's name, each a short sentence. Never claims live mileage. */
@@ -60,6 +66,10 @@ export function dueLines(t, summary) {
   if (t.status === 'no_baseline' && t.baseline === 'tracking' && (t.dueOn || t.dueOdometer)) {
     const due = [t.dueOn ? plainDate(t.dueOn) : null, t.dueOdometer ? `at ${dist(t.dueOdometer)}` : null].filter(Boolean);
     out.push(`Check by ${due.join(' or ')} at the latest. Without a recorded service DriveLoom cannot say it is up to date.`);
+    return out;
+  }
+  if (t.status === 'no_baseline' && t.baseline === 'tracking') {
+    out.push('Without a recorded service DriveLoom cannot say this is up to date. Record a visit that completes it to set a real starting point.');
     return out;
   }
   if (t.status === 'no_baseline') {
@@ -93,9 +103,11 @@ function snoozeText(t) {
   return `Reminders muted ${s.scope === 'vehicle' ? 'for everyone' : 'for you'} ${end}${s.reason ? ` (${s.reason})` : ''}. The task is still ${STATE[t.status].label.toLowerCase()}.`;
 }
 
-function summaryStrip(summary, phone) {
+function summaryStrip(summary, phone, tasks = []) {
   const c = summary.counts, r = summary.reading, d = summary.defaults;
-  const bits = [['overdue', c.overdue, 'overdue'], ['due_soon', c.due_soon, 'due soon'], ['ok', c.ok + c.completed, 'on track'], ['no_baseline', c.no_baseline, 'without a starting point'], ['unknown_reading', c.unknown_reading, 'needing an odometer reading']]
+  // Tasks that only track from a date are not "without a starting point", and not on track either.
+  const tracking = tasks.filter((t) => !t.archived && t.status === 'no_baseline' && t.baseline === 'tracking').length;
+  const bits = [['overdue', c.overdue, 'overdue'], ['due_soon', c.due_soon, 'due soon'], ['ok', c.ok + c.completed, 'on track'], ['no_baseline', c.no_baseline - tracking, 'without a starting point'], ['tracking', tracking, 'tracking only, not a completed service'], ['unknown_reading', c.unknown_reading, 'needing an odometer reading']]
     .filter(([, n]) => n > 0).map(([k, n, label]) => h('li', { class: 'mt-count' }, statusBadge(k), `${n} ${label}`));
   return h('section', { class: `${phone ? 'm-card ' : 'panel '}mt-summary`, 'aria-label': 'Maintenance summary' },
     bits.length ? h('ul', { class: 'mt-counts' }, bits) : h('p', { class: 'muted' }, c.total ? 'Nothing needs attention right now.' : 'No tasks yet.'),
@@ -107,9 +119,15 @@ export function taskCard(v, t, summary, a) {
   const lines = dueLines(t, summary);
   const sn = snoozeText(t);
   const last = t.lastCompleted ? `Last done ${plainDate(t.lastCompleted.servicedOn)}${t.lastCompleted.odometer ? ` at ${dist(t.lastCompleted.odometer)}` : ''}.` : baselineText(t) ?? 'Not recorded as done yet.';
-  const source = t.sourceTrust ? `Interval: ${t.sourceTrust === 'manufacturer' ? 'from manufacturer information' : 'a community suggestion'}${t.sourceNote ? ` (${t.sourceNote})` : ''}. Check it against your owner's manual.` : null;
+  // The label says where the task started, not what its interval is now: an interval the owner edited
+  // loses its trust label (sourceTrust is null) and only the provenance is shown.
+  const source = t.presetId
+    ? (t.sourceTrust
+      ? `Originally suggested by the preset (${t.sourceTrust === 'manufacturer' ? 'manufacturer information' : 'community suggestion'})${t.sourceNote ? `: ${t.sourceNote}` : '.'} Check it against your owner's manual.`
+      : 'Originally suggested by the preset. The interval is now your own.')
+    : t.sourceTrust ? `Interval: ${t.sourceTrust === 'manufacturer' ? 'from manufacturer information' : 'a community suggestion'}${t.sourceNote ? ` (${t.sourceNote})` : ''}. Check it against your owner's manual.` : null;
   return h('article', { class: `${a.phone ? 'm-card ' : 'panel '}mt-task`, 'aria-label': `Maintenance task ${t.name}` },
-    h('div', { class: 'mt-head' }, h('h3', {}, t.name), statusBadge(t.status)),
+    h('div', { class: 'mt-head' }, h('h3', {}, t.name), statusBadge(t.status, t)),
     h('p', { class: 'small muted' }, scheduleText(t)),
     h('div', { class: 'mt-due' }, lines.map((l) => h('p', { class: 'small' }, l))),
     h('p', { class: 'small muted' }, last),
@@ -220,7 +238,7 @@ export const MAINT_EMPTY = ['Add what you want to keep track of.', 'DriveLoom do
  * opens the add-visit form; `refresh()` redraws the page.
  */
 export function maintenancePanel(v, data, { phone = false, present, openVisit, refresh, mayRecord, mayManage, maySnooze, confirm }) {
-  const { tasks, summary, catalog } = data;
+  const { tasks, summary, catalog, presets } = data;
   const actions = {
     phone, mayRecord, mayManage, maySnooze,
     onDone: (t) => openVisit({ items: [{ name: t.name, category: 'scheduled', taskId: t.id }] }),
@@ -234,11 +252,16 @@ export function maintenancePanel(v, data, { phone = false, present, openVisit, r
   };
   const guard = (fn) => (t) => fn(t)?.catch?.((e) => toast(e.message));
   for (const k of ['onArchive', 'onDelete']) actions[k] = guard(actions[k]);
+  // The review flow is a modal dialog on the desktop and a sheet on phones; a finished import refreshes the list however it is closed.
+  let imported = false;
+  const review = (p) => (phone ? present : openDialog)('Maintenance recommendations',
+    (close) => presetFlow(v, presets, p, { summary, close, onImported: () => { imported = true; } }), () => { if (imported) refresh(); });
+  const banner = mayManage ? presetBanner(v, presets, { phone, onReview: review }) : null;
   const add = mayManage ? h('button', { type: 'button', class: phone ? 'm-wide' : '', onclick: () => present('Add a maintenance task', (close) => taskForm(v, null, catalog, (changed) => { close(); if (changed) refresh(); })) }, icon('plus'), 'Add maintenance task') : null;
   const list = h('ul', { class: 'svc-list m-list-plain', 'aria-label': 'Maintenance tasks' }, tasks.map((t) => h('li', {}, taskCard(v, t, summary, actions))));
   return {
     add,
-    node: h('div', { class: phone ? 'm-stack' : '' }, summaryStrip(summary, phone),
+    node: h('div', { class: phone ? 'm-stack' : '' }, banner, summaryStrip(summary, phone, tasks),
       tasks.length ? list : h('div', { class: phone ? 'm-card m-empty' : 'panel empty' }, h('p', {}, MAINT_EMPTY[0]), h('p', { class: 'small' }, MAINT_EMPTY[1]))),
   };
 }
