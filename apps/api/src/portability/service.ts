@@ -17,6 +17,7 @@ import { uuidv7 } from '../ids.ts';
 import type { Principal } from '../identity.ts';
 import type { Id } from '../types.ts';
 import { parseFillUp, rowToBody, type FillUpRow, type FuelService, type ParsedFillUp } from '../fuel/service.ts';
+import { insertImported, parseImportAttachments, type ParsedAttachment } from '../service/attachments.ts';
 import { parseVisit, VISIT_FIELDS, type ParsedVisit, type ServiceService } from '../service/service.ts';
 import type { VehicleService } from '../vehicles/service.ts';
 import type { Vehicle, VehicleAccess } from '../vehicles/types.ts';
@@ -27,6 +28,8 @@ export const EXPORT_FORMAT = 'driveloom.vehicle';
 export const EXPORT_VERSION = 1;
 export const MAX_IMPORT_ROWS = 5000;
 export const MAX_IMPORT_BYTES = 8 * 1024 * 1024;
+/** JSON imports may carry base64 attachments, so their body limit is larger. */
+export const MAX_IMPORT_JSON_BYTES = 96 * 1024 * 1024;
 
 export const CSV_COLUMNS = [
   'occurred_at', 'odometer', 'odometer_unit', 'volume', 'volume_unit', 'full', 'missed_previous',
@@ -55,6 +58,8 @@ const csvRow = (r: FillUpRow, currency: string): string[] => [
 
 function csvCandidates(text: unknown): Candidate[] {
   if (typeof text !== 'string') throw invalid('data must be CSV text.');
+  // The route allows a larger body for JSON files that embed attachments; CSV stays small.
+  if (text.length > MAX_IMPORT_BYTES) throw new HttpProblem(413, 'body_too_large', 'Request body too large');
   let rows: string[][];
   try { rows = parseCsv(text, MAX_IMPORT_ROWS); } catch (e) {
     if (e instanceof CsvError) throw new HttpProblem(422, 'import_malformed', 'Validation failed', `The CSV could not be read: ${e.message}.`);
@@ -164,17 +169,21 @@ export class PortabilityService {
     let svc: ImportReport['serviceVisits'];
     if (visits.length) {
       svc = { total: visits.length, created: 0, duplicates: 0, invalid: 0 };
-      const ok: ParsedVisit[] = [];
+      const ok: { f: ParsedVisit; files: ParsedAttachment[] }[] = [];
       visits.forEach((raw, i) => {
-        try { ok.push(parseVisit(obj(raw, VISIT_FIELDS, 'Service visit'), v.currency, this.#now())); } catch (e) {
+        try {
+          const { attachments, ...rest } = obj(raw, [...VISIT_FIELDS, 'attachments'], 'Service visit');
+          ok.push({ f: parseVisit(rest, v.currency, this.#now()), files: parseImportAttachments(attachments).items });
+        } catch (e) {
           if (!(e instanceof HttpProblem)) throw e;
           if (errors.length < 100) errors.push({ row: i + 1, code: e.code, message: `Service visit: ${e.message}` });
           invalidCount++; svc!.invalid++;
         }
       });
-      for (const f of ok) {
+      for (const { f, files } of ok) {
         if (await this.#service.exists(c, v.id, f)) { svc.duplicates++; continue; }
-        await this.#service.insertParsed(c, v.id, v.currency, f, p.userId); svc.created++;
+        const visitId = await this.#service.insertParsed(c, v.id, v.currency, f, p.userId); svc.created++;
+        await insertImported(c, visitId, files, p.userId);
       }
     }
     const committed = !dryRun && invalidCount === 0;

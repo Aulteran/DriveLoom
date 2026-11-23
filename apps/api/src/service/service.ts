@@ -15,6 +15,7 @@ import { quantity } from '../fuel/service.ts';
 import { requireModule } from '../modules.ts';
 import type { Decimal, DistanceUnit, Id } from '../types.ts';
 import { currencyScale, fromKm, isDistanceUnit, toKm } from '../units.ts';
+import { attachmentsFor, exportAttachments, type AttachmentView } from './attachments.ts';
 import { canChangeVisit, canWriteService } from '../vehicles/permissions.ts';
 import type { VehicleService } from '../vehicles/service.ts';
 import type { VehicleAccess } from '../vehicles/types.ts';
@@ -48,7 +49,7 @@ export interface ServiceVisitView {
   /** Converted to the vehicle's odometer unit. */
   display: { odometer: { value: Decimal; unit: DistanceUnit } | null };
   provider: string | null; diy: boolean; totalCost: Decimal | null; currency: string; notes: string | null;
-  items: ServiceItemView[]; createdBy: Id | null; createdAt: string; updatedAt: string;
+  items: ServiceItemView[]; attachments: AttachmentView[]; createdBy: Id | null; createdAt: string; updatedAt: string;
 }
 
 const notFound = () => new HttpProblem(404, 'service_visit_not_found', 'Service visit not found');
@@ -123,13 +124,13 @@ export class ServiceService {
     return out;
   }
 
-  #view(r: VisitRow, items: ItemRow[], v: Pick<VehicleAccess, 'odometerUnit'>): ServiceVisitView {
+  #view(r: VisitRow, items: ItemRow[], v: Pick<VehicleAccess, 'odometerUnit'>, attachments: AttachmentView[] = []): ServiceVisitView {
     return {
       id: r.id, vehicleId: r.vehicle_id, servicedOn: r.serviced_on,
       odometer: r.odometer_input === null ? null : { value: r.odometer_input as Decimal, unit: r.odometer_unit! },
       display: { odometer: r.odometer_km === null ? null : { value: fromKm(Dec.parse(r.odometer_km), v.odometerUnit).toFixed(0), unit: v.odometerUnit } },
       provider: r.provider, diy: r.is_diy, totalCost: r.visit_total_cost as Decimal | null, currency: r.currency, notes: r.notes,
-      items: items.map((i) => ({ id: i.id, name: i.name, category: i.category, cost: i.cost as Decimal | null, notes: i.notes })),
+      items: items.map((i) => ({ id: i.id, name: i.name, category: i.category, cost: i.cost as Decimal | null, notes: i.notes })), attachments,
       createdBy: r.created_by, createdAt: r.created_at.toISOString(), updatedAt: r.updated_at.toISOString(),
     };
   }
@@ -160,8 +161,9 @@ export class ServiceService {
     const { rows } = await this.#pool.query<PageRow>(
       `SELECT ${COLS}, created_at::text AS created_at_text FROM service_visits WHERE ${where.join(' AND ')} ORDER BY serviced_on DESC, created_at DESC, id DESC LIMIT ${limit + 1}`, args);
     const page = rows.slice(0, limit);
-    const items = await this.#items(this.#pool, page.map((r) => r.id));
-    return { items: page.map((r) => this.#view(r, items.get(r.id) ?? [], v)), nextCursor: rows.length > limit ? encodeCursor(page[page.length - 1]!) : null };
+    const ids = page.map((r) => r.id);
+    const [items, atts] = await Promise.all([this.#items(this.#pool, ids), attachmentsFor(this.#pool, ids)]);
+    return { items: page.map((r) => this.#view(r, items.get(r.id) ?? [], v, atts.get(r.id) ?? [])), nextCursor: rows.length > limit ? encodeCursor(page[page.length - 1]!) : null };
   }
 
   async get(p: Principal, vehicleId: unknown, visitId: unknown): Promise<ServiceVisitView> {
@@ -174,7 +176,7 @@ export class ServiceService {
     if (!isUuid(visitId)) throw notFound();
     const r = (await q.query<VisitRow>(`SELECT ${COLS} FROM service_visits WHERE id = $1 AND vehicle_id = $2`, [visitId, v.id])).rows[0];
     if (!r) throw notFound();
-    return this.#view(r, (await this.#items(q, [r.id])).get(r.id) ?? [], v);
+    return this.#view(r, (await this.#items(q, [r.id])).get(r.id) ?? [], v, (await attachmentsFor(q, [r.id])).get(r.id) ?? []);
   }
 
   async #write<T>(p: Principal, vehicleId: unknown, fn: (c: pg.PoolClient, v: VehicleAccess) => Promise<T>): Promise<T> {
@@ -278,12 +280,15 @@ export class ServiceService {
    */
   async exportBodies(q: Pick<pg.Pool, 'query'>, vehicleId: Id): Promise<Record<string, unknown>[]> {
     const { rows } = await q.query<VisitRow>(`SELECT ${COLS} FROM service_visits WHERE vehicle_id = $1 ORDER BY serviced_on, created_at, id`, [vehicleId]);
-    const items = await this.#items(q, rows.map((r) => r.id));
+    const ids = rows.map((r) => r.id);
+    const [items, atts] = await Promise.all([this.#items(q, ids), exportAttachments(q, ids)]);
     return rows.map((r) => ({
       servicedOn: r.serviced_on,
       odometer: r.odometer_input === null ? null : { value: r.odometer_input, unit: r.odometer_unit },
       provider: r.provider, diy: r.is_diy, totalCost: r.visit_total_cost, notes: r.notes,
       items: (items.get(r.id) ?? []).map((i) => ({ name: i.name, category: i.category, cost: i.cost, notes: i.notes })),
+      // Base64 bytes: exports with receipts can be large (see openapi).
+      attachments: atts.get(r.id) ?? [],
     }));
   }
 }

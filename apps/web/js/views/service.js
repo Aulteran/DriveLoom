@@ -7,6 +7,7 @@ import { h, form, field, select, toast, confirmDialog } from '../ui.js';
 import { go, render, state } from '../core.js';
 import { date, money, qty, canAddService, canChangeVisit, vehicleTitle, localInput } from '../format.js';
 import { icon } from '../icons.js';
+import { attachmentsPanel, stagedAttachments, uploadStaged } from '../attachments.js';
 
 /** Suggestions only: any text up to 120 characters is accepted. */
 export const PRESETS = ['Oil change', 'Tyres rotated', 'Tyres replaced', 'Brake pads', 'Brake fluid', 'Air filter', 'Cabin filter', 'Battery', 'Spark plugs', 'Coolant', 'Wipers', 'Inspection', 'Alignment', 'Timing belt'];
@@ -29,7 +30,7 @@ export async function loadVisits(v, f = {}, cursor = null) {
 let presetSeq = 0;
 
 /** Add/edit form. `done(changed)` is called on save or cancel. */
-export function visitForm(v, existing, done) {
+export function visitForm(v, existing, done, { phone = false } = {}) {
   const listId = `svc-presets-${++presetSeq}`;
   const itemRows = h('div', { class: 'svc-items', role: 'group', 'aria-label': 'Work done' });
   const mkItem = (it) => {
@@ -47,6 +48,9 @@ export function visitForm(v, existing, done) {
   const diy = h('input', { type: 'checkbox', name: 'diy', checked: existing?.diy ?? false });
   const provider = h('input', { name: 'provider', maxlength: 120, value: existing?.provider ?? '', autocomplete: 'off' });
   diy.addEventListener('change', () => { provider.placeholder = diy.checked ? 'Optional: where parts came from' : ''; });
+  // A saved visit manages its files right away; a new one stages them until it exists.
+  const staged = existing ? null : stagedAttachments({ phone });
+  const attach = existing ? attachmentsPanel(v, existing, { mayChange: true, phone }) : staged.el;
   const el = form({ class: 'panel svc-form' }, [
     h('h2', {}, existing ? 'Edit service visit' : 'Add a service visit'),
     h('datalist', { id: listId }, PRESETS.map((p) => h('option', { value: p }))),
@@ -64,6 +68,7 @@ export function visitForm(v, existing, done) {
       field(`Total cost for the visit (${v.currency}, optional)`, h('input', { name: 'totalCost', inputmode: 'decimal', pattern: '\\d+(\\.\\d+)?', value: existing?.totalCost ?? '', placeholder: 'unknown' }),
         'Leave empty if unknown. Enter 0 if it was free.')),
     field('Notes', h('textarea', { name: 'notes', maxlength: 2000 }, existing?.notes ?? '')),
+    attach,
     h('div', { class: 'row' }, h('button', { type: 'submit' }, existing ? 'Save changes' : 'Add visit'), h('button', { type: 'button', class: 'secondary', onclick: () => done(false) }, 'Cancel')),
   ], async (x) => {
     const items = [...itemRows.querySelectorAll('.svc-item')].map((r) => {
@@ -77,8 +82,11 @@ export function visitForm(v, existing, done) {
       diy: x.diy === 'on', totalCost: x.totalCost.trim() || null, notes: x.notes.trim() || null, items,
     };
     if (existing) await patch(`/v1/vehicles/${v.id}/service-visits/${existing.id}`, body);
-    else await post(`/v1/vehicles/${v.id}/service-visits`, body);
+    let saved = existing;
+    if (!existing) saved = await post(`/v1/vehicles/${v.id}/service-visits`, body);
+    const failed = staged?.files.length ? await uploadStaged(v, saved.id, staged.files) : [];
     done(true);
+    if (failed.length) { toast(`Visit added, but ${failed.length === 1 ? 'a file was' : `${failed.length} files were`} not attached: ${failed.join(' ')} Open the visit to try again.`); return undefined; }
     return existing ? 'Service visit updated.' : 'Service visit added.';
   });
   return el;
@@ -92,7 +100,7 @@ export async function deleteVisit(v, visit) {
 }
 
 /** One visit as a card: date, provider/DIY, odometer, total, item chips, notes. */
-export function visitCard(v, visit, { onEdit, onDelete, mayChange }) {
+export function visitCard(v, visit, { onEdit, onDelete, mayChange, phone = false }) {
   const title = `${plainDate(visit.servicedOn)}`;
   const meta = [visit.diy ? 'DIY' : null, visit.provider, visit.odometer ? `${qty(visit.display.odometer ?? visit.odometer)}` : null].filter(Boolean).join(' · ');
   return h('article', { class: 'panel svc-visit', 'aria-label': `Service visit on ${title}` },
@@ -104,6 +112,7 @@ export function visitCard(v, visit, { onEdit, onDelete, mayChange }) {
       i.category !== 'other' ? h('span', { class: 'svc-chip-cat' }, CATEGORY_LABEL[i.category]) : null,
       i.cost !== null ? h('span', { class: 'svc-chip-cost' }, money(i.cost, visit.currency)) : null))),
     visit.notes ? h('p', { class: 'small muted svc-notes' }, visit.notes) : null,
+    visit.attachments?.length || mayChange ? attachmentsPanel(v, visit, { mayChange, phone }) : null,
     mayChange ? h('div', { class: 'row' },
       h('button', { class: 'ghost', 'aria-label': `Edit service visit of ${title}`, onclick: () => onEdit(visit) }, 'Edit'),
       h('button', { class: 'ghost', 'aria-label': `Delete service visit of ${title}`, onclick: () => onDelete(visit) }, 'Delete')) : null);

@@ -515,3 +515,15 @@ button.icon-only .icon { width: 22px; height: 22px; }
   .svc-head { flex-direction: column; }
   .svc-total { text-align: left; }
 }
+
+/* ---------- service attachments ---------- */
+.att { margin: 12px 0; }
+.att-h { margin: 0 0 8px; font-size: .95rem; }
+.att-list, .att-status { display: grid; gap: 6px; margin: 0 0 8px; padding: 0; list-style: none; }
+.att-item { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid var(--line); }
+.att-item > input { flex: 1 1 12rem; min-width: 0; }
+.att-name { flex: 1 1 8rem; min-width: 0; overflow-wrap: anywhere; font-weight: 500; }
+.att-pick { margin: 4px 0; }
+.att-bad { color: var(--bad); }
+.att-preview { max-width: min(92vw, 900px); }
+.att-preview img { display: block; max-width: 100%; max-height: 70vh; margin: 0 auto 12px; }

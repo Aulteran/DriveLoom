@@ -23,6 +23,9 @@ import { economy } from '../../src/units.ts';
 const skip = process.env['DATABASE_URL'] ? false : 'DATABASE_URL not set';
 const WEB = fileURLToPath(new URL('../../../web/', import.meta.url));
 const ADMIN = { email: 'admin@example.test', password: 'correct horse battery' };
+// A real 1x1 PNG and a minimal PDF, for the attachment journeys.
+const TINY_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+const TINY_PDF = Buffer.from('%PDF-1.1\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 10 10]>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n');
 const FRIEND = { email: 'friend@example.test', password: 'another long passphrase' };
 
 test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) => {
@@ -1340,6 +1343,14 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       await page.getByLabel(/^Cost \(.*optional\)$/).first().fill('0');
       await page.getByLabel(/^Total cost for the visit/).fill('89.50');
       assert.deepEqual(await axe('service form'), []);
+      // A receipt picked while adding is uploaded with the visit; an unsuitable file is explained, not sent.
+      await page.getByRole('button', { name: 'Choose files to attach to this service visit' }).waitFor();
+      assert.equal(await page.getByRole('button', { name: /^Take photo/ }).count(), 0, 'no camera button on desktop');
+      await page.locator('.svc-form input[type=file]').setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('hello') });
+      await page.getByText('"notes.txt" is not a PDF, JPEG or PNG file.').waitFor();
+      await page.locator('.svc-form input[type=file]').setInputFiles({ name: 'receipt.png', mimeType: 'image/png', buffer: TINY_PNG });
+      await page.getByRole('list', { name: 'Files to attach' }).getByText('receipt.png').waitFor();
+      assert.deepEqual(await axe('service form with a file'), []);
       await page.getByRole('button', { name: 'Add visit' }).click();
       const card = page.locator('article.svc-visit').first();
       await card.waitFor();
@@ -1348,6 +1359,27 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       assert.match(await card.innerText(), /89\.50/);
       assert.match(await card.innerText(), /Corner Garage/);
       assert.deepEqual(await axe('service list'), []);
+
+      // Attachments: the staged receipt arrived; add a PDF to the saved visit, preview, rename, remove.
+      await card.getByRole('list', { name: 'Attachments' }).getByText('receipt.png').waitFor();
+      await card.locator('input[type=file]').setInputFiles({ name: 'invoice.pdf', mimeType: 'application/pdf', buffer: TINY_PDF });
+      await card.getByText('invoice.pdf').waitFor();
+      await card.locator('input[type=file]').setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('hello') });
+      await card.getByText('"notes.txt" is not a PDF, JPEG or PNG file.').waitFor();
+      assert.deepEqual(await axe('service list with attachments'), []);
+      await card.getByRole('button', { name: 'Preview receipt.png' }).click();
+      const preview = page.getByRole('dialog', { name: 'Preview of receipt.png' });
+      await preview.locator('img').waitFor();
+      assert.deepEqual(await axe('attachment preview'), []);
+      await preview.getByRole('button', { name: 'Close' }).click();
+      await card.getByRole('button', { name: 'Rename invoice.pdf' }).click();
+      await card.getByLabel('New name for invoice.pdf').fill('March invoice.pdf');
+      await card.getByRole('button', { name: 'Save name' }).click();
+      await card.getByText('March invoice.pdf').waitFor();
+      await card.getByRole('button', { name: 'Remove receipt.png' }).click();
+      await page.getByRole('dialog').getByRole('button', { name: 'Remove' }).click();
+      await card.getByRole('button', { name: 'Preview receipt.png' }).waitFor({ state: 'detached' });
+      assert.deepEqual((await db.pool.query('SELECT file_name, content_type FROM service_attachments ORDER BY file_name')).rows, [{ file_name: 'March invoice.pdf', content_type: 'application/pdf' }]);
 
       // The visit lives in the API with exact strings: an item left empty stays unknown, a typed 0 stays zero.
       const stored = await db.pool.query("SELECT i.name, i.cost::text AS cost, v.visit_total_cost::text AS total, v.odometer_input::text AS odo FROM service_visits v JOIN service_items i ON i.visit_id = v.id ORDER BY i.position");
@@ -1385,10 +1417,18 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
         const sheet = p.getByRole('dialog');
         await sheet.getByLabel('Item', { exact: true }).first().fill('Brake pads');
         await sheet.getByLabel(/^Cost \(.*optional\)$/).first().fill('120.00');
+        await sheet.getByRole('button', { name: /^Take photo/ }).waitFor();
+        await sheet.locator('input[type=file][capture]').setInputFiles({ name: 'IMG_0001.png', mimeType: 'image/png', buffer: TINY_PNG });
+        await sheet.getByText('IMG_0001.png').waitFor();
+        await sheet.locator('input[type=file]:not([capture])').setInputFiles({ name: 'garage.pdf', mimeType: 'application/pdf', buffer: TINY_PDF });
+        await sheet.getByRole('list', { name: 'Files to attach' }).getByText('garage.pdf').waitFor();
         assert.deepEqual(await bothThemes(p, phoneAxe, 'service sheet'), []);
         await sheet.getByRole('button', { name: 'Add visit' }).click();
         await p.locator('article.svc-visit').first().waitFor();
         await p.locator('article.svc-visit').getByText('Brake pads').waitFor();
+        await p.locator('article.svc-visit').getByText('IMG_0001.png').waitFor();
+        await p.locator('article.svc-visit').getByText('garage.pdf').waitFor();
+        assert.equal((await db.pool.query("SELECT count(*)::int AS n FROM service_attachments WHERE file_name IN ('IMG_0001.png','garage.pdf')")).rows[0].n, 2);
         assert.equal(await overflows(p), false);
         assert.deepEqual(await bothThemes(p, phoneAxe, 'service list'), []);
         await p.emulateMedia({ colorScheme: 'light' });

@@ -42,6 +42,8 @@ async function snapshot(q: Pick<pg.Client, 'query'>): Promise<Record<string, str
   return out;
 }
 
+// Every byte value, including 0x00 and 0xff, to prove bytea survives the text dump.
+const RECEIPT = Buffer.concat([Buffer.from('%PDF-1.4\n'), Buffer.from(Array.from({ length: 2048 }, (_, i) => (i * 7) % 256))]);
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from(Array.from({ length: 4096 }, (_, i) => i % 256))]);
 
 async function seed(h: NonNullable<Awaited<ReturnType<typeof harness>>>) {
@@ -58,6 +60,9 @@ async function seed(h: NonNullable<Awaited<ReturnType<typeof harness>>>) {
   const service = new ServiceService(h.ctx.db, vehicles, h.ctx.now);
   await service.create(pb, v.id, { servicedOn: '2026-04-02', odometer: { value: '950.25', unit: 'mi' }, provider: 'Näïve Garage', totalCost: '0', notes: 'free ☃',
     items: [{ name: 'Oil change', category: 'scheduled', cost: '0.00' }, { name: 'Wipers', cost: null }] });
+  const visitId = (await h.ctx.db.query('SELECT id FROM service_visits')).rows[0].id;
+  await h.ctx.db.query('INSERT INTO service_attachments (id, visit_id, file_name, content_type, size_bytes, sha256, data, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
+    [uuidv7(), visitId, 'Quittung ☃.pdf', 'application/pdf', RECEIPT.length, createHash('sha256').update(RECEIPT).digest('hex'), RECEIPT, pb.userId]);
   await h.ctx.db.query('INSERT INTO vehicle_user_prefs (vehicle_id, user_id, show_service) VALUES ($1,$2,false)', [v.id, pa.userId]);
   return { a, b, pb, v, totp };
 }
@@ -79,6 +84,7 @@ test('full restore into an isolated instance preserves users, vehicles, records 
     assert.equal(info.tables['instance_modules'], 1);
     assert.equal(info.tables['service_visits'], 1);
     assert.equal(info.tables['service_items'], 2);
+    assert.equal(info.tables['service_attachments'], 1);
     assert.equal(info.tables['vehicle_user_prefs'], 1);
     for (const t of EPHEMERAL_TABLES) assert.ok(!(t in info.tables), `${t} is not archived`);
     assert.deepEqual(await verifyBackup(file), info);
@@ -88,6 +94,11 @@ test('full restore into an isolated instance preserves users, vehicles, records 
     const img = await target.client.query('SELECT data FROM vehicle_images WHERE vehicle_id = $1', [v.id]);
     assert.ok((img.rows[0].data as Buffer).equals(PNG), 'image bytes are identical');
     assert.deepEqual((await target.client.query('SELECT module, enabled FROM instance_modules')).rows, [{ module: 'service', enabled: true }]);
+    const att = await target.client.query('SELECT file_name, content_type, size_bytes, sha256, data FROM service_attachments');
+    assert.equal(att.rows.length, 1);
+    assert.ok((att.rows[0].data as Buffer).equals(RECEIPT), 'attachment bytes are identical');
+    assert.equal(att.rows[0].file_name, 'Quittung ☃.pdf');
+    assert.equal(att.rows[0].sha256, createHash('sha256').update(att.rows[0].data).digest('hex'));
     const sv = await target.client.query("SELECT v.serviced_on::text, v.odometer_input::text, v.visit_total_cost::text, v.provider, i.name, i.cost::text FROM service_visits v JOIN service_items i ON i.visit_id = v.id ORDER BY i.position");
     assert.deepEqual(sv.rows, [
       { serviced_on: '2026-04-02', odometer_input: '950.25', visit_total_cost: '0', provider: 'Näïve Garage', name: 'Oil change', cost: '0.00' },

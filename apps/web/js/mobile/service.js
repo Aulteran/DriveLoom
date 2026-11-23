@@ -27,7 +27,7 @@ export async function serviceScreen(id, query) {
   const open = (existing) => {
     const sheet = openSheet({
       title: existing ? 'Edit service visit' : 'Add a service visit', sub: vehicleTitle(v), className: 'm-form-sheet',
-      content: visitForm(v, existing, (changed) => { sheet.close(); if (changed) render(); }),
+      content: visitForm(v, existing, (changed) => { sheet.close(); if (changed) render(); }, { phone: true }),
     });
     sheet.dialog.querySelector('input:not([type=hidden]), select, textarea')?.focus();
   };
@@ -39,7 +39,7 @@ export async function serviceScreen(id, query) {
     });
     if (gone) { toast('Service visit deleted.'); render(); }
   };
-  const card = (visit) => h('li', {}, visitCard(v, visit, { mayChange: !v.archived && canChangeVisit(v, visit, state.account.id), onEdit: open, onDelete: remove }));
+  const card = (visit) => h('li', {}, visitCard(v, visit, { mayChange: !v.archived && canChangeVisit(v, visit, state.account.id), onEdit: open, onDelete: remove, phone: true }));
   const list = h('ul', { class: 'svc-list m-list-plain', 'aria-label': 'Service visits' }, first.items.map(card));
   let cursor = first.nextCursor;
   const more = h('button', { type: 'button', class: 'secondary m-wide', hidden: !cursor, onclick: async () => {

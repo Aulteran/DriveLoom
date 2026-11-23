@@ -997,6 +997,102 @@ paths:
         '403': { $ref: '#/components/responses/Problem' }
         '404': { $ref: '#/components/responses/Problem' }
         '409': { $ref: '#/components/responses/Problem' }
+  /v1/vehicles/{vehicleId}/service-visits/{visitId}/attachments:
+    parameters:
+      - { $ref: '#/components/parameters/VehicleId' }
+      - { name: visitId, in: path, required: true, schema: { $ref: '#/components/schemas/Id' } }
+    post:
+      operationId: addServiceAttachment
+      summary: Attach a receipt or invoice to a visit (owner or editor; a driver only on their own visits)
+      description: >
+        The request body is the raw file (no multipart). Limits: 10 MiB per file (413 when exceeded), 10 files per visit (422 `attachment_limit`),
+        PDF, JPEG or PNG only. The type is decided from the file's leading bytes (`%PDF-`, `FF D8 FF`, PNG signature); a file that is
+        none of these, or whose declared Content-Type disagrees with its bytes, is refused with 422. The Content-Type may also be
+        `application/octet-stream`. The display name comes from the `fileName` query parameter; it is reduced to a base name without
+        control characters and limited to 200 characters. Stored in the database, so backups and exports include it. Works while the
+        service module is on; when off every attachment route answers 404 `module_disabled`.
+      tags: [service]
+      parameters:
+        - { name: fileName, in: query, required: false, description: Display name. Defaults to attachment with the detected extension, schema: { type: string, maxLength: 1000 } }
+      requestBody:
+        required: true
+        content:
+          application/pdf: { schema: { type: string, format: binary } }
+          image/jpeg: { schema: { type: string, format: binary } }
+          image/png: { schema: { type: string, format: binary } }
+          application/octet-stream: { schema: { type: string, format: binary } }
+      responses:
+        '201':
+          description: Stored.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ServiceAttachment' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '413': { $ref: '#/components/responses/Problem' }
+        '415': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/vehicles/{vehicleId}/service-visits/{visitId}/attachments/{attachmentId}:
+    parameters:
+      - { $ref: '#/components/parameters/VehicleId' }
+      - { name: visitId, in: path, required: true, schema: { $ref: '#/components/schemas/Id' } }
+      - { name: attachmentId, in: path, required: true, schema: { $ref: '#/components/schemas/Id' } }
+    get:
+      operationId: getServiceAttachment
+      summary: Download one attachment (any member)
+      description: >
+        Sent with `content-disposition: attachment` (RFC 6266 `filename*`), `x-content-type-options: nosniff` and
+        `cache-control: private, no-store`. With `inline=1` the disposition is `inline` so images and PDFs can be previewed; the
+        response always carries `content-security-policy: default-src 'none'; sandbox`.
+      tags: [service]
+      parameters:
+        - { name: inline, in: query, required: false, schema: { type: string, enum: ['1'] } }
+      responses:
+        '200':
+          description: File bytes.
+          content:
+            application/pdf: { schema: { type: string, format: binary } }
+            image/jpeg: { schema: { type: string, format: binary } }
+            image/png: { schema: { type: string, format: binary } }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+    patch:
+      operationId: renameServiceAttachment
+      summary: Rename an attachment (same permissions as uploading)
+      tags: [service]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [fileName]
+              additionalProperties: false
+              properties:
+                fileName: { type: string }
+      responses:
+        '200':
+          description: Renamed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ServiceAttachment' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+    delete:
+      operationId: deleteServiceAttachment
+      summary: Remove an attachment (same permissions as uploading)
+      tags: [service]
+      responses:
+        '204': { description: Removed. }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
   /v1/vehicles/{vehicleId}/stats:
     parameters:
       - { $ref: '#/components/parameters/VehicleId' }
@@ -1220,7 +1316,7 @@ paths:
     get:
       operationId: exportVehicle
       summary: Download the vehicle's purchases as CSV or as a versioned JSON document
-      description: Contains no ids, members or users. The JSON document also carries the vehicle's service visits (`serviceVisits`) even while the Service module is off; CSV carries purchases only. Text cells that a spreadsheet could read as a formula are prefixed with an apostrophe.
+      description: Contains no ids, members or users. The JSON document also carries the vehicle's service visits (`serviceVisits`) even while the Service module is off, each with its `attachments` embedded as base64 (`fileName`, `contentType`, `sha256`, `data`); a vehicle with many receipts therefore produces a large file (up to 10 files of 10 MiB per visit, about 4/3 of the stored size). CSV carries purchases only. Text cells that a spreadsheet could read as a formula are prefixed with an apostrophe.
       tags: [portability]
       parameters:
         - { name: format, in: query, required: true, schema: { type: string, enum: [csv, json] } }
@@ -1243,7 +1339,9 @@ paths:
         `dryRun` defaults to true: the same statements run and are rolled back.
         A commit is all-or-nothing (`import_invalid` with the report when any
         row fails). Purchases that already exist are skipped, so importing the
-        same file twice changes nothing.
+        same file twice changes nothing. JSON imports accept bodies up to 96 MiB so that embedded
+        service attachments fit; each attachment is checked by magic bytes, `sha256` (when given),
+        size and the per-visit file limit, and identical files within a visit are stored once.
       tags: [portability]
       requestBody:
         required: true
@@ -2182,6 +2280,15 @@ components:
         category: { $ref: '#/components/schemas/ServiceCategory' }
         cost: { oneOf: [{ $ref: '#/components/schemas/Decimal' }, { type: 'null' }] }
         notes: { type: [string, 'null'] }
+    ServiceExportAttachment:
+      type: object
+      required: [fileName, data]
+      additionalProperties: false
+      properties:
+        fileName: { type: string }
+        contentType: { type: string, enum: [application/pdf, image/jpeg, image/png] }
+        sha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        data: { type: string, contentEncoding: base64 }
     ServiceVisitInput:
       type: object
       required: [servicedOn, items]
@@ -2194,6 +2301,20 @@ components:
         totalCost: { oneOf: [{ $ref: '#/components/schemas/Decimal' }, { type: 'null' }], description: Whole-visit cost in the vehicle's currency. Null or absent is unknown; "0" is a known zero. It is not checked against item costs. }
         notes: { type: [string, 'null'], maxLength: 2000 }
         items: { type: array, minItems: 1, maxItems: 50, items: { $ref: '#/components/schemas/ServiceItemInput' } }
+    ServiceVisitExport:
+      type: object
+      description: A ServiceVisitInput plus optional embedded attachments.
+      required: [servicedOn, items]
+      additionalProperties: false
+      properties:
+        servicedOn: { type: string, format: date, description: The day the work was done. }
+        odometer: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }], description: Optional; not required to fit between fuel readings. }
+        provider: { type: [string, 'null'], maxLength: 120 }
+        diy: { type: boolean, default: false, description: Done by the owner rather than a workshop. }
+        totalCost: { oneOf: [{ $ref: '#/components/schemas/Decimal' }, { type: 'null' }], description: Whole-visit cost in the vehicle's currency. Null or absent is unknown; "0" is a known zero. It is not checked against item costs. }
+        notes: { type: [string, 'null'], maxLength: 2000 }
+        items: { type: array, minItems: 1, maxItems: 50, items: { $ref: '#/components/schemas/ServiceItemInput' } }
+        attachments: { type: array, maxItems: 10, items: { $ref: '#/components/schemas/ServiceExportAttachment' } }
     ServiceVisitPatch:
       type: object
       additionalProperties: false
@@ -2206,9 +2327,19 @@ components:
         totalCost: { oneOf: [{ $ref: '#/components/schemas/Decimal' }, { type: 'null' }] }
         notes: { type: [string, 'null'], maxLength: 2000 }
         items: { type: array, minItems: 1, maxItems: 50, items: { $ref: '#/components/schemas/ServiceItemInput' } }
+    ServiceAttachment:
+      type: object
+      description: A receipt or invoice file. The bytes are only available through the download endpoint.
+      required: [id, fileName, contentType, sizeBytes, createdAt]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        fileName: { type: string, minLength: 1, maxLength: 200 }
+        contentType: { type: string, enum: [application/pdf, image/jpeg, image/png] }
+        sizeBytes: { type: integer, maximum: 10485760 }
+        createdAt: { $ref: '#/components/schemas/Timestamp' }
     ServiceVisit:
       type: object
-      required: [id, vehicleId, servicedOn, odometer, display, provider, diy, totalCost, currency, notes, items, createdBy, createdAt, updatedAt]
+      required: [id, vehicleId, servicedOn, odometer, display, provider, diy, totalCost, currency, notes, items, attachments, createdBy, createdAt, updatedAt]
       properties:
         id: { $ref: '#/components/schemas/Id' }
         vehicleId: { $ref: '#/components/schemas/Id' }
@@ -2225,6 +2356,7 @@ components:
         currency: { $ref: '#/components/schemas/CurrencyCode' }
         notes: { type: [string, 'null'] }
         items: { type: array, items: { $ref: '#/components/schemas/ServiceItem' } }
+        attachments: { type: array, maxItems: 10, items: { $ref: '#/components/schemas/ServiceAttachment' } }
         createdBy: { oneOf: [{ $ref: '#/components/schemas/Id' }, { type: 'null' }] }
         createdAt: { $ref: '#/components/schemas/Timestamp' }
         updatedAt: { $ref: '#/components/schemas/Timestamp' }
@@ -2364,7 +2496,7 @@ components:
             odometerUnit: { $ref: '#/components/schemas/DistanceUnit' }
             currency: { $ref: '#/components/schemas/CurrencyCode' }
         fillUps: { type: array, maxItems: 5000, items: { $ref: '#/components/schemas/FillUpInput' } }
-        serviceVisits: { type: array, maxItems: 5000, items: { $ref: '#/components/schemas/ServiceVisitInput' }, description: Optional, added without a version bump; older files lack it. Always exported, and imported when present, regardless of the Service module switch. }
+        serviceVisits: { type: array, maxItems: 5000, items: { $ref: '#/components/schemas/ServiceVisitExport' }, description: Optional, added without a version bump; older files lack it. Always exported, and imported when present, regardless of the Service module switch. }
     ImportReport:
       type: object
       required: [dryRun, committed, summary, errors]
