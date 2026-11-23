@@ -71,6 +71,13 @@ async function seed(h: NonNullable<Awaited<ReturnType<typeof harness>>>) {
   await h.ctx.db.query("UPDATE service_items SET task_id = $1 WHERE visit_id = $2 AND position = 0", [taskId, visitId]);
   await h.ctx.db.query("INSERT INTO task_snoozes (id, task_id, scope, user_id, snooze_until_date, snooze_until_odometer_km, reason, created_by) VALUES ($1,$2,'vehicle',NULL,'2026-10-01','5000.5','später',$3)", [uuidv7(), taskId, pb.userId]);
   await h.ctx.db.query("INSERT INTO task_snoozes (id, task_id, scope, user_id, snooze_until_date, created_by) VALUES ($1,$2,'personal',$3,'2026-10-05',$3)", [uuidv7(), taskId, pa.userId]);
+  // Reminder emails: settings, a selection, an opt-out, what was already told (kept) and a queued email (not kept).
+  await h.ctx.db.query('INSERT INTO vehicle_notification_settings (vehicle_id, email_enabled, follow_up_days, updated_by) VALUES ($1,true,14,$2)', [v.id, pb.userId]);
+  await h.ctx.db.query('INSERT INTO vehicle_notification_recipients (vehicle_id, user_id, selected_by) VALUES ($1,$2,$3)', [v.id, pa.userId, pb.userId]);
+  await h.ctx.db.query('INSERT INTO vehicle_notification_optouts (vehicle_id, user_id) VALUES ($1,$2)', [v.id, pa.userId]);
+  await h.ctx.db.query("INSERT INTO notification_task_log (user_id, task_id, vehicle_id, occurrence_key, level, first_notified_at, last_bucket, sends, muted) VALUES ($1,$2,$3,'2026-09-01|-','overdue','2026-09-02T08:00:00Z',2,3,true)", [pb.userId, taskId, v.id]);
+  await h.ctx.db.query(`INSERT INTO notification_outbox (id, vehicle_id, user_id, dedupe_key, payload, status, next_attempt_at, created_at)
+    VALUES ($1,$2,$3,'k1','{"tasks":[],"reading":null}','pending',now(),now())`, [uuidv7(), v.id, pb.userId]);
   return { a, b, pb, v, totp };
 }
 
@@ -93,6 +100,8 @@ test('full restore into an isolated instance preserves users, vehicles, records 
     assert.equal(info.tables['service_items'], 2);
     assert.equal(info.tables['service_attachments'], 1);
     assert.equal(info.tables['vehicle_user_prefs'], 1);
+    for (const t of ['vehicle_notification_settings', 'vehicle_notification_recipients', 'vehicle_notification_optouts', 'notification_task_log']) assert.equal(info.tables[t], 1, t);
+    assert.ok(EPHEMERAL_TABLES.includes('notification_outbox'));
     for (const t of EPHEMERAL_TABLES) assert.ok(!(t in info.tables), `${t} is not archived`);
     assert.deepEqual(await verifyBackup(file), info);
 
@@ -111,6 +120,11 @@ test('full restore into an isolated instance preserves users, vehicles, records 
       { serviced_on: '2026-04-02', odometer_input: '950.25', visit_total_cost: '0', provider: 'Näïve Garage', name: 'Oil change', cost: '0.00' },
       { serviced_on: '2026-04-02', odometer_input: '950.25', visit_total_cost: '0', provider: 'Näïve Garage', name: 'Wipers', cost: null },
     ], 'service visits and items round-trip, unknown stays null and zero stays zero');
+    // Queued emails never travel: the restored instance cannot send another instance's queue.
+    // What was already told is kept, so nothing is announced again either.
+    assert.equal((await target.client.query('SELECT count(*)::int AS n FROM notification_outbox')).rows[0].n, 0);
+    assert.deepEqual((await target.client.query('SELECT occurrence_key, level, last_bucket, sends, muted FROM notification_task_log')).rows, [{ occurrence_key: '2026-09-01|-', level: 'overdue', last_bucket: 2, sends: 3, muted: true }]);
+    assert.deepEqual((await target.client.query('SELECT email_enabled, follow_up_days FROM vehicle_notification_settings')).rows, [{ email_enabled: true, follow_up_days: 14 }]);
     assert.deepEqual((await target.client.query('SELECT show_service FROM vehicle_user_prefs')).rows, [{ show_service: false }]);
     assert.equal(info.tables['maintenance_tasks'], 1); assert.equal(info.tables['task_snoozes'], 2);
     assert.deepEqual((await target.client.query('SELECT name, catalog_key, recurring, interval_days, interval_distance_input::text, interval_distance_unit, interval_distance_km::text, first_due_on::text, notes FROM maintenance_tasks')).rows,

@@ -10,6 +10,7 @@ import { fuelRoutes } from '../src/fuel/routes.ts';
 import { serviceRoutes } from '../src/service/routes.ts';
 import { maintenanceRoutes } from '../src/service/maintenance-routes.ts';
 import { attachmentRoutes } from '../src/service/attachments.ts';
+import { notificationRoutes } from '../src/service/notification-settings.ts';
 import { imageRoutes } from '../src/vehicles/images.ts';
 import { portabilityRoutes } from '../src/portability/routes.ts';
 import { adminRoutes } from '../src/admin/routes.ts';
@@ -21,7 +22,7 @@ import { API_VERSION } from '../src/version.ts';
 const doc = parse(await readFile(new URL('../openapi/openapi.yaml', import.meta.url), 'utf8'));
 const key = (m: string, p: string) => `${m.toUpperCase()} ${p.replace(/:(\w+)/g, '{$1}')}`;
 import { systemRoutes } from '../src/application.ts';
-export const moduleRoutes: Route[] = [...systemRoutes({} as never), ...vehicleRoutes({} as never), ...fuelRoutes({} as never), ...serviceRoutes({} as never), ...attachmentRoutes({} as never), ...maintenanceRoutes({} as never), ...preferenceRoutes({} as never), ...vehiclePrefRoutes({} as never), ...friendRoutes({} as never),
+export const moduleRoutes: Route[] = [...systemRoutes({} as never), ...vehicleRoutes({} as never), ...fuelRoutes({} as never), ...serviceRoutes({} as never), ...attachmentRoutes({} as never), ...maintenanceRoutes({} as never), ...notificationRoutes({} as never), ...preferenceRoutes({} as never), ...vehiclePrefRoutes({} as never), ...friendRoutes({} as never),
   ...imageRoutes({} as never, {} as never), ...portabilityRoutes({} as never), ...adminRoutes({} as never)];
 const SYSTEM = new Set<string>();
 

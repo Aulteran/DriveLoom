@@ -1547,6 +1547,77 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       }
     });
 
+    await t.test('reminders by email on desktop: no-SMTP notice, owner settings and the personal switch', async () => {
+      await db.pool.query("INSERT INTO instance_modules (module, enabled) VALUES ('service', true) ON CONFLICT (module) DO UPDATE SET enabled = true");
+      const vid = vehicle.split('/')[1];
+      try {
+        await page.goto(`${base}/#/${vehicle}/service?view=maintenance`);
+        await page.reload();
+        const panel = page.getByRole('region', { name: 'Reminders by email' });
+        const notice = 'Ask your administrator to configure email; in-app reminders keep working.';
+        // An earlier step saved SMTP settings: no notice. Without SMTP the notice shows (and stays for the phone step).
+        await panel.getByText('Reminder emails are off for this vehicle.').waitFor();
+        assert.ok(integrations.mailer, 'SMTP configured by the administration step');
+        assert.equal(await panel.getByText(notice).count(), 0);
+        await integrations.clearSmtp();
+        await page.reload();
+        await panel.getByText(notice).waitFor();
+        assert.equal(await panel.getByRole('switch', { name: 'Email me about this vehicle' }).isChecked(), true);
+        assert.deepEqual(await axe('reminders by email'), []);
+        await panel.getByRole('button', { name: 'Change email settings' }).click();
+        await page.getByRole('heading', { name: 'Reminder email settings' }).waitFor();
+        const owner = page.getByRole('group', { name: 'Who gets the emails' }).getByRole('checkbox').first();
+        assert.equal(await owner.isChecked(), true); assert.equal(await owner.isDisabled(), true, 'the owner is always included');
+        assert.deepEqual(await axe('reminder email settings'), []);
+        await page.getByRole('switch', { name: 'Send reminder emails for this vehicle' }).check();
+        await page.getByLabel('Repeat while a task stays due').selectOption({ label: 'Every 2 weeks' });
+        await page.getByRole('button', { name: 'Save email settings' }).click();
+        await page.getByText('Reminder emails are on for this vehicle. While a task stays due, the reminder is repeated every 14 days.').waitFor();
+        assert.deepEqual((await db.pool.query('SELECT email_enabled, follow_up_days FROM vehicle_notification_settings WHERE vehicle_id = $1', [vid])).rows, [{ email_enabled: true, follow_up_days: 14 }]);
+        await page.getByRole('switch', { name: 'Email me about this vehicle' }).uncheck();
+        await page.getByText('You have turned off reminder emails for this vehicle.').waitFor();
+        assert.equal((await db.pool.query('SELECT count(*)::int AS n FROM vehicle_notification_optouts WHERE vehicle_id = $1', [vid])).rows[0].n, 1);
+        assert.deepEqual(await axe('reminders by email, opted out'), []);
+        await noErrorPage();
+      } finally {
+        await db.pool.query('DELETE FROM vehicle_notification_optouts');
+        await db.pool.query('DELETE FROM vehicle_notification_settings');
+        await db.pool.query("UPDATE instance_modules SET enabled = false WHERE module = 'service'");
+      }
+    });
+
+    await t.test('reminders by email on a phone: personal switch inline, settings in a sheet, bottom navigation untouched', async () => {
+      await db.pool.query("INSERT INTO instance_modules (module, enabled) VALUES ('service', true) ON CONFLICT (module) DO UPDATE SET enabled = true");
+      const vid = vehicle.split('/')[1];
+      const { ctx, p, phoneAxe, open } = await phonePage();
+      try {
+        await open(`${vehicle}/service?view=maintenance`);
+        const panel = p.getByRole('region', { name: 'Reminders by email' });
+        await panel.waitFor();
+        await panel.getByText('Ask your administrator to configure email; in-app reminders keep working.').waitFor();
+        assert.equal(await p.getByRole('navigation', { name: 'Main' }).getByRole('link').count(), 5, 'bottom navigation is unchanged');
+        assert.equal(await overflows(p), false, 'reminders panel overflows on a phone');
+        assert.deepEqual(await bothThemes(p, phoneAxe, 'reminders by email'), []);
+        await panel.getByRole('button', { name: 'Change email settings' }).click();
+        const sheet = p.getByRole('dialog');
+        await sheet.getByRole('switch', { name: 'Send reminder emails for this vehicle' }).waitFor();
+        assert.deepEqual(await bothThemes(p, phoneAxe, 'reminder email settings sheet'), []);
+        await sheet.getByRole('switch', { name: 'Send reminder emails for this vehicle' }).check();
+        await sheet.getByRole('button', { name: 'Save email settings' }).click();
+        await p.getByText(/Reminder emails are on for this vehicle\./).waitFor();
+        assert.equal((await db.pool.query('SELECT email_enabled FROM vehicle_notification_settings WHERE vehicle_id = $1', [vid])).rows[0].email_enabled, true);
+        await p.getByRole('switch', { name: 'Email me about this vehicle' }).uncheck();
+        await p.getByText('You have turned off reminder emails for this vehicle.').waitFor();
+        assert.equal((await db.pool.query('SELECT count(*)::int AS n FROM vehicle_notification_optouts WHERE vehicle_id = $1', [vid])).rows[0].n, 1);
+        await p.emulateMedia({ colorScheme: 'light' });
+      } finally {
+        await ctx.close();
+        await db.pool.query('DELETE FROM vehicle_notification_optouts');
+        await db.pool.query('DELETE FROM vehicle_notification_settings');
+        await db.pool.query("UPDATE instance_modules SET enabled = false WHERE module = 'service'");
+      }
+    });
+
     await t.test('signing out and back in, the request is accepted', async () => {
       await page.getByRole('button', { name: /sign out/i }).click();
       await page.getByRole('heading', { name: 'Sign in' }).waitFor();

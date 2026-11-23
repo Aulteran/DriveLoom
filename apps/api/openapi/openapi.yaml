@@ -1400,6 +1400,82 @@ paths:
         '404': { $ref: '#/components/responses/Problem' }
         '409': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
+  /v1/vehicles/{vehicleId}/notification-settings:
+    parameters:
+      - { $ref: '#/components/parameters/VehicleId' }
+    get:
+      operationId: getNotificationSettings
+      summary: Reminder emails for this vehicle (any member)
+      description: >
+        Maintenance reminder emails for tasks that are due soon or overdue, sent only through the administrator's
+        SMTP settings (`smtpConfigured` says whether any is configured; nothing else about SMTP is exposed). Off until
+        the owner or a manager turns them on. Recipients: the owner by default, plus managers and drivers they select;
+        never viewers. A person's own opt-out always wins. One email per person and vehicle groups every task that needs
+        a reminder; each due point and level is announced once, then repeated every `followUpDays` while the task stays
+        due (0 = never). Snoozed tasks are left out until the snooze ends; completed tasks stop. In-app status works the
+        same with or without email. `recipients` and `delivery` are only filled in for the owner and managers (null
+        otherwise). 404 `module_disabled` while the Service module is off, 404 to non-members.
+      tags: [service]
+      responses:
+        '200':
+          description: Settings and the caller's own state.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationSettings' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+    put:
+      operationId: updateNotificationSettings
+      summary: Change reminder emails for this vehicle (owner or editor)
+      description: >
+        Partial update. `recipientUserIds` replaces the selection; each must be an active member with role editor or
+        driver (the owner is always included and may be listed or not; a viewer is 422). Selecting someone never
+        overrides their own opt-out. Audited. 409 `vehicle_archived` on an archived vehicle.
+      tags: [service]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NotificationSettingsInput' }
+      responses:
+        '200':
+          description: The settings as they now are.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationSettings' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/vehicles/{vehicleId}/notification-preferences/me:
+    parameters:
+      - { $ref: '#/components/parameters/VehicleId' }
+    put:
+      operationId: setMyNotificationPreference
+      summary: Turn the caller's own reminder emails for this vehicle on or off (any member)
+      description: '`emailMe: false` opts out, which always wins over being selected, and cancels reminders already queued for the caller. Audited. 409 `vehicle_archived` on an archived vehicle.'
+      tags: [service]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [emailMe]
+              additionalProperties: false
+              properties:
+                emailMe: { type: boolean }
+      responses:
+        '200':
+          description: The settings as the caller now sees them.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationSettings' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
   /v1/vehicles/{vehicleId}/service-visibility:
     parameters:
       - { $ref: '#/components/parameters/VehicleId' }
@@ -2107,6 +2183,58 @@ components:
       required: [modules]
       properties:
         modules: { $ref: '#/components/schemas/Modules' }
+    NotificationSettings:
+      type: object
+      required: [emailEnabled, followUpDays, leadDays, leadDistance, smtpConfigured, canManage, me, recipients, delivery]
+      properties:
+        emailEnabled: { type: boolean, description: Off by default. }
+        followUpDays: { type: integer, minimum: 0, maximum: 90, description: 'Days between repeat reminders while a task stays due or overdue; 0 = no repeats. Default 7.' }
+        leadDays: { type: integer, description: '"Due soon" lead in days (the same illustrative default as the in-app status).' }
+        leadDistance: { $ref: '#/components/schemas/Distance' }
+        smtpConfigured: { type: boolean, description: Whether the administrator configured email. Without it nothing is sent and in-app reminders keep working. }
+        canManage: { type: boolean, description: The caller is the owner or a manager. }
+        me:
+          type: object
+          required: [eligible, selected, optedOut, receiving]
+          properties:
+            eligible: { type: boolean, description: 'The caller''s role can receive emails (owner, editor, driver).' }
+            selected: { type: boolean, description: Always true for the owner. }
+            optedOut: { type: boolean }
+            receiving: { type: boolean, description: '`emailEnabled && eligible && selected && !optedOut` (emails still need SMTP).' }
+        recipients:
+          description: Owner and managers only; null for other members. Members whose role can receive emails.
+          oneOf:
+            - type: array
+              items:
+                type: object
+                required: [userId, displayName, email, role, selected, optedOut, implicit]
+                properties:
+                  userId: { $ref: '#/components/schemas/Id' }
+                  displayName: { type: string }
+                  email: { type: string }
+                  role: { type: string, enum: [owner, editor, driver] }
+                  selected: { type: boolean }
+                  optedOut: { type: boolean }
+                  implicit: { type: boolean, description: The owner, who receives emails without being selected. }
+            - { type: 'null' }
+        delivery:
+          description: Owner and managers only; null for other members. Counts only, no addresses or error text.
+          oneOf:
+            - type: object
+              required: [lastSentAt, pending, failed]
+              properties:
+                lastSentAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
+                pending: { type: integer }
+                failed: { type: integer }
+            - { type: 'null' }
+    NotificationSettingsInput:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        emailEnabled: { type: boolean }
+        followUpDays: { type: integer, minimum: 0, maximum: 90 }
+        recipientUserIds: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/Id' } }
     ServiceVisibility:
       type: object
       description: 'Whether the caller sees this vehicle''s Service page. `visible` is `moduleEnabled && showService`: the server switch overrides the personal preference. Only menus are affected; permissions and stored data never change.'

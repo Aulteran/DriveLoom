@@ -10,6 +10,7 @@ import { get } from '../api.js';
 import { vehicleTitle, canAddService, canChangeVisit, canEditVehicle } from '../format.js';
 import { FILTER_CATEGORIES, SERVICE_EMPTY, attentionLine, deleteVisit, loadVisits, moduleOn, plainDate, sectionNav, visitCard, visitForm } from '../views/service.js';
 import { loadMaintenance, loadTaskChoices, maintenancePanel } from '../maintenance.js';
+import { loadNotificationSettings, notificationPanel } from '../notifications.js';
 import { openSheet } from './sheet.js';
 import { confirmSheet } from './confirm.js';
 
@@ -29,14 +30,14 @@ export async function serviceScreen(id, query) {
   };
 
   if (view === 'maintenance') {
-    const data = await loadMaintenance(v);
+    const [data, notify] = await Promise.all([loadMaintenance(v), loadNotificationSettings(v)]);
     const openVisit = (prefill) => sheetFor('Add a service visit', (close) => visitForm(v, null, (changed) => { close(); if (changed) render(); }, { phone: true, tasks: data.tasks, prefill }));
     const panel = maintenancePanel(v, data, {
       phone: true, present: sheetFor, openVisit, refresh: render,
       confirm: (message, confirmLabel) => confirmSheet({ title: 'Are you sure?', message, confirmLabel, action: async () => undefined }),
       mayRecord: canAdd, mayManage: canEditVehicle(v) && !v.archived, maySnooze: !v.archived,
     });
-    return { vehicle: v, view: h('div', { class: 'm-screen m-stack' }, back, title, sections, panel.add, panel.node) };
+    return { vehicle: v, view: h('div', { class: 'm-screen m-stack' }, back, title, sections, panel.add, panel.node, notificationPanel(v, notify, { phone: true, present: sheetFor, refresh: render })) };
   }
 
   const filters = { q: query.get('q') ?? '', category: query.get('category') ?? '' };

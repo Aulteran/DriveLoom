@@ -9,6 +9,7 @@ import { money, qty, canAddService, canChangeVisit, canEditVehicle, vehicleTitle
 import { icon } from '../icons.js';
 import { attachmentsPanel, stagedAttachments, uploadStaged } from '../attachments.js';
 import { loadMaintenance, loadTaskChoices, maintenancePanel } from '../maintenance.js';
+import { loadNotificationSettings, notificationPanel } from '../notifications.js';
 
 /** Suggestions only: any text up to 120 characters is accepted. */
 export const PRESETS = ['Oil change', 'Tyres rotated', 'Tyres replaced', 'Brake pads', 'Brake fluid', 'Air filter', 'Cabin filter', 'Battery', 'Spark plugs', 'Coolant', 'Wipers', 'Inspection', 'Alignment', 'Timing belt'];
@@ -170,13 +171,14 @@ export async function serviceTab(v, query, pageHead, meta) {
   const nav = sectionNav(v, view);
 
   if (view === 'maintenance') {
-    const data = await loadMaintenance(v);
+    const [data, notify] = await Promise.all([loadMaintenance(v), loadNotificationSettings(v)]);
     const openVisit = (prefill) => show(visitForm(v, null, (changed) => { slot.replaceChildren(); if (changed) render(); }, { tasks: data.tasks, prefill }));
+    const present = (_title, build) => show(build(() => slot.replaceChildren()));
     const panel = maintenancePanel(v, data, {
-      present: (_title, build) => show(build(() => slot.replaceChildren())), openVisit, refresh: render, confirm: confirmDialog,
+      present, openVisit, refresh: render, confirm: confirmDialog,
       mayRecord: canAdd, mayManage: canEditVehicle(v) && !v.archived, maySnooze: !v.archived,
     });
-    return h('div', {}, head(panel.add), nav, slot, panel.node);
+    return h('div', {}, head(panel.add), nav, slot, panel.node, notificationPanel(v, notify, { present, refresh: render }));
   }
 
   const filters = { q: query.get('q') ?? '', category: query.get('category') ?? '', from: query.get('from') ?? '', to: query.get('to') ?? '' };

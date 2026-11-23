@@ -1,11 +1,12 @@
 // Optional SMTP. Without a mailer, every email-based flow is simply off.
 import nodemailer from 'nodemailer';
 
-export interface Mailer { send(to: string, subject: string, text: string): Promise<void> }
+/** `html`, when given, is sent as the HTML alternative of the plain-text body. */
+export interface Mailer { send(to: string, subject: string, text: string, html?: string): Promise<void> }
 
 export function createSmtpMailer(url: string, from: string): Mailer {
   const transport = nodemailer.createTransport(url);
-  return { async send(to, subject, text) { await transport.sendMail({ from, to, subject, text }); } };
+  return { async send(to, subject, text, html) { await transport.sendMail({ from, to, subject, text, ...(html ? { html } : {}) }); } };
 }
 
 export type SmtpSecurity = 'tls' | 'starttls' | 'none';
@@ -18,16 +19,16 @@ export function createSmtpMailerFromOptions(o: SmtpOptions): Mailer {
     ...(o.username ? { auth: { user: o.username, pass: o.password ?? '' } } : {}),
     connectionTimeout: 10_000, greetingTimeout: 10_000, socketTimeout: 20_000,
   });
-  return { async send(to, subject, text) { await transport.sendMail({ from: o.from, to, subject, text }); } };
+  return { async send(to, subject, text, html) { await transport.sendMail({ from: o.from, to, subject, text, ...(html ? { html } : {}) }); } };
 }
 
 /** In-memory mailer for tests. */
 export class MemoryMailer implements Mailer {
-  readonly sent: { to: string; subject: string; text: string }[] = [];
+  readonly sent: { to: string; subject: string; text: string; html?: string }[] = [];
   fail = false;
-  async send(to: string, subject: string, text: string): Promise<void> {
+  async send(to: string, subject: string, text: string, html?: string): Promise<void> {
     if (this.fail) throw new Error('smtp down');
-    this.sent.push({ to, subject, text });
+    this.sent.push(html === undefined ? { to, subject, text } : { to, subject, text, html });
   }
   /** Most recent code (digits) sent to an address. */
   lastCode(to: string): string | undefined {

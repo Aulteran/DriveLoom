@@ -29,3 +29,8 @@ export const canManageComparison = (role: Role): boolean => role === 'owner';
 export const canTransferOwnership = (role: Role): boolean => role === 'owner';
 /** Creating, changing, archiving and deleting maintenance tasks, and snoozing one for the whole vehicle. Drivers and viewers read tasks and may snooze only for themselves. */
 export const canManageSchedules = (role: Role): boolean => role === 'owner' || role === 'editor';
+/** Roles that can be sent maintenance reminder emails: the owner by default, managers and drivers when selected. Viewers never. */
+export const EMAIL_RECIPIENT_ROLES: readonly Role[] = ['owner', 'editor', 'driver'];
+export const canReceiveServiceEmail = (role: Role): boolean => EMAIL_RECIPIENT_ROLES.includes(role);
+/** Turning a vehicle's reminder emails on or off, the follow-up cadence and who receives them. */
+export const canManageNotifications = (role: Role): boolean => role === 'owner' || role === 'editor';
