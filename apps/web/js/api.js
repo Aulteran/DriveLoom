@@ -45,6 +45,10 @@ export const post = (p, b, o) => api('POST', p, b ?? {}, o);
 export const put = (p, b, o) => api('PUT', p, b, o);
 export const patch = (p, b, o) => api('PATCH', p, b, o);
 export const del = (p, o) => api('DELETE', p, undefined, o);
+/** Send a File as raw bytes; the server decides the type from the bytes, so the browser's guess is not sent. */
+export const upload = (p, file, o) => api('POST', p, new Blob([file], { type: 'application/octet-stream' }), o);
+/** A protected file as a Blob (the cookie session authenticates it; a plain <img src> or link cannot carry the CSRF-free fetch semantics we want for no-store content). */
+export const fetchBlob = async (p) => (await api('GET', p, undefined, { raw: true })).blob();
 
 // --- WebAuthn JSON <-> browser objects (base64url) ---
 const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');

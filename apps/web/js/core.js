@@ -4,7 +4,7 @@
 // setRenderer() at start-up.
 import { get, setCsrf } from './api.js';
 
-export const state = { account: null, prefs: null, instance: null, vehicles: [] };
+export const state = { account: null, prefs: null, instance: null, modules: { service: false }, vehicles: [] };
 
 let renderer = async () => {};
 /** Register the active shell's render pipeline. */
@@ -18,6 +18,7 @@ export async function refreshSession() {
     const s = await get('/v1/auth/session', { quiet: true });
     setCsrf(s.csrf_token);
     state.account = s.account;
+    state.modules = s.modules ?? { service: false };
     state.prefs = await get('/v1/preferences');
     return true;
   } catch { state.account = null; setCsrf(null); return false; }
@@ -37,9 +38,16 @@ export function parse() {
 // The URL is the source of truth; storage only answers "which vehicle does #/ open?".
 const lastKey = () => `driveloom.vehicle.${state.account?.id ?? ''}`;
 export function rememberVehicle(id) { try { localStorage.setItem(lastKey(), id); } catch { /* not remembered */ } }
+export function forgetVehicle(id) { try { if (localStorage.getItem(lastKey()) === id) localStorage.removeItem(lastKey()); } catch { /* nothing to forget */ } }
 export function recalledVehicle() { try { return localStorage.getItem(lastKey()); } catch { return null; } }
 
 export function defaultVehicle() {
   const active = state.vehicles.filter((v) => !v.archived);
   return active.find((v) => v.id === recalledVehicle()) ?? active[0] ?? null;
+}
+
+/** Whether the vehicle's Service page belongs in menus: the instance module is on and this member has not hidden it. */
+export async function serviceVisible(vehicleId) {
+  if (!state.modules?.service || !vehicleId) return false;
+  try { return (await get(`/v1/vehicles/${vehicleId}/service-visibility`, { quiet: true })).visible === true; } catch { return false; }
 }

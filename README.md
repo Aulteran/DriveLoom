@@ -80,6 +80,7 @@ Add any of these under `app: environment:`.
 | `DRIVELOOM_REQUIRE_EMAIL_VERIFICATION` | `1` requires verified email (needs SMTP). |
 | `DRIVELOOM_EMAIL_SIGN_IN_CODES` | `1` emails a one-time code after the password (needs SMTP). |
 | `DRIVELOOM_SMTP_URL`, `DRIVELOOM_SMTP_FROM` | Outgoing email. |
+| `DRIVELOOM_DISABLE_SCHEDULER` | `1` stops the 15-minute background run that queues and sends maintenance reminder emails (Service module). |
 | `DRIVELOOM_OIDC_ISSUER`, `_CLIENT_ID`, `_CLIENT_SECRET` | OpenID Connect sign-in; callback `<origin>/v1/auth/oidc/callback`. |
 
 SMTP and OpenID Connect can also be configured from the administrator pages in the app, with no environment variables at all.

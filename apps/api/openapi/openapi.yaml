@@ -577,6 +577,17 @@ paths:
         '403': { $ref: '#/components/responses/Problem' }
         '404': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
+    delete:
+      operationId: deleteVehicle
+      summary: Permanently delete an archived vehicle (owner only)
+      description: 'Removes the vehicle with its members, fill-ups, service visits, items and attachments, maintenance tasks and snoozes, notification settings, photo and friend-comparison setting. Refused with `not_archived` (409) until the vehicle has been archived. This cannot be undone.'
+      tags: [vehicles]
+      responses:
+        '204': { description: Deleted. }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
   /v1/vehicles/{vehicleId}/archive:
     parameters:
         - { $ref: '#/components/parameters/VehicleId' }
@@ -696,7 +707,7 @@ paths:
         - { $ref: '#/components/parameters/VehicleId' }
     put:
       operationId: transferVehicleOwnership
-      summary: Transfer ownership to an existing member (owner only); the previous owner becomes an editor
+      summary: Transfer ownership to an existing active member (owner only); the previous owner becomes an editor (Authorized Manager)
       tags: [vehicles]
       requestBody:
         required: true
@@ -824,7 +835,7 @@ paths:
         '404': { $ref: '#/components/responses/Problem' }
     post:
       operationId: createFillUp
-      summary: Record a purchase (editor or owner)
+      summary: Record a purchase (owner, editor or driver)
       description: >
         Units are chosen explicitly. The odometer may not run backwards in time
         (`odometer_out_of_sequence`), the same instant and reading is a
@@ -865,7 +876,7 @@ paths:
         '404': { $ref: '#/components/responses/Problem' }
     patch:
       operationId: updateFillUp
-      summary: Correct a purchase; the merged record is validated again as a whole
+      summary: Correct a purchase (owner or editor; a driver only their own); the merged record is validated again as a whole
       tags: [fuel]
       requestBody:
         required: true
@@ -885,10 +896,210 @@ paths:
         '422': { $ref: '#/components/responses/Problem' }
     delete:
       operationId: deleteFillUp
-      summary: Delete a purchase
+      summary: Delete a purchase (owner or editor; a driver only their own)
       tags: [fuel]
       responses:
         '204': { description: Deleted. }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+  /v1/vehicles/{vehicleId}/service-visits:
+    parameters:
+      - { $ref: '#/components/parameters/VehicleId' }
+    get:
+      operationId: listServiceVisits
+      summary: Service visits, newest first (service date, then record creation)
+      description: >
+        Every service endpoint answers 404 `module_disabled` while the Service
+        module is off on this instance, and 404 to non-members. Any member may read.
+        Page with `cursor` (the `nextCursor` of the previous page).
+      tags: [service]
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: cursor, in: query, schema: { type: string } }
+        - { name: from, in: query, description: 'Service date, inclusive.', schema: { type: string, format: date } }
+        - { name: to, in: query, description: 'Service date, inclusive.', schema: { type: string, format: date } }
+        - { name: q, in: query, description: 'Case-insensitive text search over provider, notes and item names and notes.', schema: { type: string, maxLength: 100 } }
+        - { name: category, in: query, description: 'Visits having at least one item of this category.', schema: { $ref: '#/components/schemas/ServiceCategory' } }
+      responses:
+        '200':
+          description: A page of visits.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, nextCursor]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ServiceVisit' } }
+                  nextCursor: { type: [string, 'null'] }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: createServiceVisit
+      summary: Record a service visit (owner, editor or driver)
+      description: >
+        At least one item is required. `totalCost` and item `cost` are optional:
+        omitted or null means unknown, "0" means known to be free. The odometer
+        is optional, is never compared with fuel records and never changes them.
+        Costs are in the vehicle's currency.
+      tags: [service]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ServiceVisitInput' }
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ServiceVisit' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/vehicles/{vehicleId}/service-visits/{visitId}:
+    parameters:
+      - { $ref: '#/components/parameters/VehicleId' }
+      - { name: visitId, in: path, required: true, schema: { $ref: '#/components/schemas/Id' } }
+    get:
+      operationId: getServiceVisit
+      summary: One service visit
+      tags: [service]
+      responses:
+        '200':
+          description: The visit.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ServiceVisit' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+    patch:
+      operationId: updateServiceVisit
+      summary: Correct a visit (owner or editor; a driver only their own); the merged record is validated again as a whole
+      description: When `items` is sent it replaces the whole item list.
+      tags: [service]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ServiceVisitPatch' }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ServiceVisit' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+    delete:
+      operationId: deleteServiceVisit
+      summary: Delete a visit and its items (owner or editor; a driver only their own)
+      tags: [service]
+      responses:
+        '204': { description: Deleted. }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+  /v1/vehicles/{vehicleId}/service-visits/{visitId}/attachments:
+    parameters:
+      - { $ref: '#/components/parameters/VehicleId' }
+      - { name: visitId, in: path, required: true, schema: { $ref: '#/components/schemas/Id' } }
+    post:
+      operationId: addServiceAttachment
+      summary: Attach a receipt or invoice to a visit (owner or editor; a driver only on their own visits)
+      description: >
+        The request body is the raw file (no multipart). Limits: 10 MiB per file (413 when exceeded), 10 files per visit (422 `attachment_limit`),
+        PDF, JPEG or PNG only. The type is decided from the file's leading bytes (`%PDF-`, `FF D8 FF`, PNG signature); a file that is
+        none of these, or whose declared Content-Type disagrees with its bytes, is refused with 422. The Content-Type may also be
+        `application/octet-stream`. The display name comes from the `fileName` query parameter; it is reduced to a base name without
+        control characters and limited to 200 characters. Stored in the database, so backups and exports include it. Works while the
+        service module is on; when off every attachment route answers 404 `module_disabled`.
+      tags: [service]
+      parameters:
+        - { name: fileName, in: query, required: false, description: Display name. Defaults to attachment with the detected extension, schema: { type: string, maxLength: 1000 } }
+      requestBody:
+        required: true
+        content:
+          application/pdf: { schema: { type: string, format: binary } }
+          image/jpeg: { schema: { type: string, format: binary } }
+          image/png: { schema: { type: string, format: binary } }
+          application/octet-stream: { schema: { type: string, format: binary } }
+      responses:
+        '201':
+          description: Stored.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ServiceAttachment' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '413': { $ref: '#/components/responses/Problem' }
+        '415': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/vehicles/{vehicleId}/service-visits/{visitId}/attachments/{attachmentId}:
+    parameters:
+      - { $ref: '#/components/parameters/VehicleId' }
+      - { name: visitId, in: path, required: true, schema: { $ref: '#/components/schemas/Id' } }
+      - { name: attachmentId, in: path, required: true, schema: { $ref: '#/components/schemas/Id' } }
+    get:
+      operationId: getServiceAttachment
+      summary: Download one attachment (any member)
+      description: >
+        Sent with `content-disposition: attachment` (RFC 6266 `filename*`), `x-content-type-options: nosniff` and
+        `cache-control: private, no-store`. With `inline=1` the disposition is `inline` so images and PDFs can be previewed; the
+        response always carries `content-security-policy: default-src 'none'; sandbox`.
+      tags: [service]
+      parameters:
+        - { name: inline, in: query, required: false, schema: { type: string, enum: ['1'] } }
+      responses:
+        '200':
+          description: File bytes.
+          content:
+            application/pdf: { schema: { type: string, format: binary } }
+            image/jpeg: { schema: { type: string, format: binary } }
+            image/png: { schema: { type: string, format: binary } }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+    patch:
+      operationId: renameServiceAttachment
+      summary: Rename an attachment (same permissions as uploading)
+      tags: [service]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [fileName]
+              additionalProperties: false
+              properties:
+                fileName: { type: string }
+      responses:
+        '200':
+          description: Renamed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ServiceAttachment' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+    delete:
+      operationId: deleteServiceAttachment
+      summary: Remove an attachment (same permissions as uploading)
+      tags: [service]
+      responses:
+        '204': { description: Removed. }
         '401': { $ref: '#/components/responses/Problem' }
         '403': { $ref: '#/components/responses/Problem' }
         '404': { $ref: '#/components/responses/Problem' }
@@ -1006,6 +1217,316 @@ paths:
         '403': { $ref: '#/components/responses/Problem' }
         '404': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
+  /v1/maintenance-catalog:
+    get:
+      operationId: getMaintenanceCatalog
+      summary: Common service types (names only) and the illustrative reminder defaults
+      description: >
+        Names only: DriveLoom ships no manufacturer intervals. Answers 404 `module_disabled` while the
+        Service module is off. `defaults` are illustrative lead times used to mark a task "due soon";
+        they are not manufacturer or safety guidance. `leadDistance` is in the caller's distance unit.
+      tags: [service]
+      responses:
+        '200':
+          description: The catalog.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, defaults]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [key, name]
+                      properties:
+                        key: { type: string }
+                        name: { type: string }
+                  defaults: { $ref: '#/components/schemas/MaintenanceDefaults' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /v1/vehicles/{vehicleId}/maintenance-status:
+    parameters:
+      - { $ref: '#/components/parameters/VehicleId' }
+    get:
+      operationId: getMaintenanceStatus
+      summary: Counts of maintenance tasks by status, for the Service page header
+      description: >
+        Archived tasks are not counted. `reading` is the latest known odometer: the most recent
+        reading by date among fuel records and service visits that recorded an odometer. `stale` is
+        true when it is older than `defaults.staleReadingDays`. Counts reflect the caller's own
+        snoozes plus vehicle-wide ones.
+      tags: [service]
+      responses:
+        '200':
+          description: The summary.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MaintenanceSummary' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+  /v1/vehicles/{vehicleId}/maintenance-tasks:
+    parameters:
+      - { $ref: '#/components/parameters/VehicleId' }
+    get:
+      operationId: listMaintenanceTasks
+      summary: Maintenance tasks with their computed status (any member)
+      description: >
+        Every maintenance endpoint answers 404 `module_disabled` while the Service module is off, and 404 to
+        non-members. Status is computed on read from the task and the service items linked to it; see
+        `MaintenanceTask`. Snoozes in the response are the caller's personal one and the vehicle-wide one.
+      tags: [service]
+      parameters:
+        - { name: includeArchived, in: query, schema: { type: boolean, default: false } }
+      responses:
+        '200':
+          description: The tasks, oldest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/MaintenanceTask' } }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+    post:
+      operationId: createMaintenanceTask
+      summary: Add a maintenance task (owner or editor)
+      description: >
+        A repeating task (`recurring` true, the default) needs `intervalDays`, `intervalDistance`, or both;
+        whichever is reached first makes it due. A one-time task has no interval and needs `firstDueOn` or
+        `firstDueOdometer`. `name` may be omitted when `catalogKey` is given. At most 200 tasks per vehicle.
+      tags: [service]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MaintenanceTaskInput' }
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MaintenanceTask' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/vehicles/{vehicleId}/maintenance-tasks/{taskId}:
+    parameters:
+      - { $ref: '#/components/parameters/VehicleId' }
+      - { name: taskId, in: path, required: true, schema: { $ref: '#/components/schemas/Id' } }
+    get:
+      operationId: getMaintenanceTask
+      summary: One maintenance task (any member)
+      tags: [service]
+      responses:
+        '200':
+          description: The task.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MaintenanceTask' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+    patch:
+      operationId: updateMaintenanceTask
+      summary: Change or archive a task (owner or editor); the merged task is validated again as a whole
+      tags: [service]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MaintenanceTaskPatch' }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MaintenanceTask' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+    delete:
+      operationId: deleteMaintenanceTask
+      summary: Delete a task and its snoozes (owner or editor)
+      description: Service items that completed the task are kept; their `taskId` becomes null.
+      tags: [service]
+      responses:
+        '204': { description: Deleted. }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+  /v1/vehicles/{vehicleId}/maintenance-tasks/{taskId}/snooze:
+    parameters:
+      - { $ref: '#/components/parameters/VehicleId' }
+      - { name: taskId, in: path, required: true, schema: { $ref: '#/components/schemas/Id' } }
+      - { name: scope, in: query, description: "`personal` (default; any member, viewers included) or `vehicle` (owner or editor only; seen by every member).", schema: { type: string, enum: [personal, vehicle], default: personal } }
+    put:
+      operationId: setMaintenanceSnooze
+      summary: Snooze a task's reminders (replaces the snooze of that scope)
+      description: >
+        Snoozing only mutes reminders. It never reschedules or completes the task and never changes its
+        `status`, `dueOn` or `dueOdometer`; an overdue task stays overdue. A snooze is active until its
+        date has passed or the known odometer exceeds its target, whichever comes first. Give `until`,
+        `untilOdometer` (an absolute target) or `additionalDistance`, alone or `until` with a distance.
+        `additionalDistance` is converted once, at this call, to an absolute target using the latest known odometer
+        reading and the absolute target is stored; with no known reading the answer is 422 `no_odometer_reading`.
+        One snooze per task and scope (per person for `personal`).
+      tags: [service]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MaintenanceSnoozeInput' }
+      responses:
+        '200':
+          description: The task as the caller now sees it.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MaintenanceTask' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+    delete:
+      operationId: clearMaintenanceSnooze
+      summary: Clear the snooze of the given scope (nothing to clear is not an error)
+      tags: [service]
+      responses:
+        '200':
+          description: The task as the caller now sees it.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MaintenanceTask' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/vehicles/{vehicleId}/notification-settings:
+    parameters:
+      - { $ref: '#/components/parameters/VehicleId' }
+    get:
+      operationId: getNotificationSettings
+      summary: Reminder emails for this vehicle (any member)
+      description: >
+        Maintenance reminder emails for tasks that are due soon or overdue, sent only through the administrator's
+        SMTP settings (`smtpConfigured` says whether any is configured; nothing else about SMTP is exposed). Off until
+        the owner or a manager turns them on. Recipients: the owner by default, plus managers and drivers they select;
+        never viewers. A person's own opt-out always wins. One email per person and vehicle groups every task that needs
+        a reminder; each due point and level is announced once, then repeated every `followUpDays` while the task stays
+        due (0 = never). Snoozed tasks are left out until the snooze ends; completed tasks stop. In-app status works the
+        same with or without email. `recipients` and `delivery` are only filled in for the owner and managers (null
+        otherwise). 404 `module_disabled` while the Service module is off, 404 to non-members.
+      tags: [service]
+      responses:
+        '200':
+          description: Settings and the caller's own state.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationSettings' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+    put:
+      operationId: updateNotificationSettings
+      summary: Change reminder emails for this vehicle (owner or editor)
+      description: >
+        Partial update. `recipientUserIds` replaces the selection; each must be an active member with role editor or
+        driver (the owner is always included and may be listed or not; a viewer is 422). Selecting someone never
+        overrides their own opt-out. Audited. 409 `vehicle_archived` on an archived vehicle.
+      tags: [service]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NotificationSettingsInput' }
+      responses:
+        '200':
+          description: The settings as they now are.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationSettings' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/vehicles/{vehicleId}/notification-preferences/me:
+    parameters:
+      - { $ref: '#/components/parameters/VehicleId' }
+    put:
+      operationId: setMyNotificationPreference
+      summary: Turn the caller's own reminder emails for this vehicle on or off (any member)
+      description: '`emailMe: false` opts out, which always wins over being selected, and cancels reminders already queued for the caller. Audited. 409 `vehicle_archived` on an archived vehicle.'
+      tags: [service]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [emailMe]
+              additionalProperties: false
+              properties:
+                emailMe: { type: boolean }
+      responses:
+        '200':
+          description: The settings as the caller now sees them.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NotificationSettings' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
+  /v1/vehicles/{vehicleId}/service-visibility:
+    parameters:
+      - { $ref: '#/components/parameters/VehicleId' }
+    get:
+      operationId: getServiceVisibility
+      summary: Whether the caller shows the Service page for this vehicle
+      description: 'Any member. A personal preference (default on); the instance module switch overrides it.'
+      tags: [vehicles]
+      responses:
+        '200':
+          description: Preference and effective visibility.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ServiceVisibility' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+    put:
+      operationId: setServiceVisibility
+      summary: Show or hide the Service page for this vehicle (personal; any member)
+      description: 'Affects only the caller''s menus. Works whether or not the instance module is enabled, and never changes permissions or deletes data.'
+      tags: [vehicles]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [showService]
+              additionalProperties: false
+              properties:
+                showService: { type: boolean }
+      responses:
+        '200':
+          description: New state.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ServiceVisibility' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
   /v1/comparisons:
     get:
       operationId: compareWithFriends
@@ -1076,7 +1597,7 @@ paths:
     get:
       operationId: exportVehicle
       summary: Download the vehicle's purchases as CSV or as a versioned JSON document
-      description: Contains no ids, members or users. Text cells that a spreadsheet could read as a formula are prefixed with an apostrophe.
+      description: Contains no ids, members or users. The JSON document also carries the vehicle's maintenance tasks (`maintenanceTasks`, with only vehicle-wide snoozes; personal snoozes are never exported) and service visits (`serviceVisits`, whose items point at tasks with `taskRef`) even while the Service module is off, each with its `attachments` embedded as base64 (`fileName`, `contentType`, `sha256`, `data`); a vehicle with many receipts therefore produces a large file (up to 10 files of 10 MiB per visit, about 4/3 of the stored size). CSV carries purchases only. Text cells that a spreadsheet could read as a formula are prefixed with an apostrophe.
       tags: [portability]
       parameters:
         - { name: format, in: query, required: true, schema: { type: string, enum: [csv, json] } }
@@ -1099,7 +1620,9 @@ paths:
         `dryRun` defaults to true: the same statements run and are rolled back.
         A commit is all-or-nothing (`import_invalid` with the report when any
         row fails). Purchases that already exist are skipped, so importing the
-        same file twice changes nothing.
+        same file twice changes nothing. JSON imports accept bodies up to 96 MiB so that embedded
+        service attachments fit; each attachment is checked by magic bytes, `sha256` (when given),
+        size and the per-visit file limit, and identical files within a visit are stored once.
       tags: [portability]
       requestBody:
         required: true
@@ -1307,6 +1830,47 @@ paths:
         '401': { $ref: '#/components/responses/Problem' }
         '403': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
+  /v1/admin/settings/modules:
+    get:
+      operationId: adminGetModules
+      summary: Opt-in modules and whether each is enabled on this instance
+      tags: [admin]
+      responses:
+        '200':
+          description: Module flags (all false until enabled).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModulesResponse' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+  /v1/admin/settings/modules/{module}:
+    parameters:
+      - { name: module, in: path, required: true, schema: { type: string, enum: [service] } }
+    put:
+      operationId: adminSetModule
+      summary: Turn a module on or off for the whole instance
+      description: 'Turning a module off hides it and makes its endpoints return 404 `module_disabled`; stored data and personal preferences are kept. Audited as `admin.module_changed`.'
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              additionalProperties: false
+              properties:
+                enabled: { type: boolean }
+      responses:
+        '200':
+          description: The updated flags.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ModulesResponse' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '404': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
   /v1/admin/settings/smtp:
     get:
       operationId: adminGetSmtpSettings
@@ -1500,10 +2064,17 @@ components:
       enum: [l, gal_us, gal_imp]
     Role:
       type: string
-      enum: [owner, editor, viewer]
+      description: >
+        The caller's or a member's role on a vehicle. `editor` is presented as
+        "Authorized Manager": edits details, photo, imports and every fill-up.
+        `driver` reads everything and adds fill-ups and service visits, changing or deleting only
+        the ones they recorded. `viewer` only reads. Only the `owner` manages
+        members, transfers ownership, archives and opts into comparisons.
+      enum: [owner, editor, driver, viewer]
     GrantableRole:
       type: string
-      enum: [editor, viewer]
+      description: Roles the owner can grant. `owner` moves only through ownership transfer.
+      enum: [editor, driver, viewer]
     VehicleInput:
       type: object
       additionalProperties: false
@@ -1611,13 +2182,86 @@ components:
       properties:
         password: { type: string }
         code: { type: string }
+    Modules:
+      type: object
+      description: 'Opt-in feature modules and whether the instance administrator has enabled each. All are off by default.'
+      required: [service]
+      additionalProperties: false
+      properties:
+        service: { type: boolean }
+    ModulesResponse:
+      type: object
+      required: [modules]
+      properties:
+        modules: { $ref: '#/components/schemas/Modules' }
+    NotificationSettings:
+      type: object
+      required: [emailEnabled, followUpDays, leadDays, leadDistance, smtpConfigured, canManage, me, recipients, delivery]
+      properties:
+        emailEnabled: { type: boolean, description: Off by default. }
+        followUpDays: { type: integer, minimum: 0, maximum: 90, description: 'Days between repeat reminders while a task stays due or overdue; 0 = no repeats. Default 7.' }
+        leadDays: { type: integer, description: '"Due soon" lead in days (the same illustrative default as the in-app status).' }
+        leadDistance: { $ref: '#/components/schemas/Distance' }
+        smtpConfigured: { type: boolean, description: Whether the administrator configured email. Without it nothing is sent and in-app reminders keep working. }
+        canManage: { type: boolean, description: The caller is the owner or a manager. }
+        me:
+          type: object
+          required: [eligible, selected, optedOut, receiving]
+          properties:
+            eligible: { type: boolean, description: 'The caller''s role can receive emails (owner, editor, driver).' }
+            selected: { type: boolean, description: Always true for the owner. }
+            optedOut: { type: boolean }
+            receiving: { type: boolean, description: '`emailEnabled && eligible && selected && !optedOut` (emails still need SMTP).' }
+        recipients:
+          description: Owner and managers only; null for other members. Members whose role can receive emails.
+          oneOf:
+            - type: array
+              items:
+                type: object
+                required: [userId, displayName, email, role, selected, optedOut, implicit]
+                properties:
+                  userId: { $ref: '#/components/schemas/Id' }
+                  displayName: { type: string }
+                  email: { type: string }
+                  role: { type: string, enum: [owner, editor, driver] }
+                  selected: { type: boolean }
+                  optedOut: { type: boolean }
+                  implicit: { type: boolean, description: The owner, who receives emails without being selected. }
+            - { type: 'null' }
+        delivery:
+          description: Owner and managers only; null for other members. Counts only, no addresses or error text.
+          oneOf:
+            - type: object
+              required: [lastSentAt, pending, failed]
+              properties:
+                lastSentAt: { oneOf: [{ type: string, format: date-time }, { type: 'null' }] }
+                pending: { type: integer }
+                failed: { type: integer }
+            - { type: 'null' }
+    NotificationSettingsInput:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        emailEnabled: { type: boolean }
+        followUpDays: { type: integer, minimum: 0, maximum: 90 }
+        recipientUserIds: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/Id' } }
+    ServiceVisibility:
+      type: object
+      description: 'Whether the caller sees this vehicle''s Service page. `visible` is `moduleEnabled && showService`: the server switch overrides the personal preference. Only menus are affected; permissions and stored data never change.'
+      required: [showService, moduleEnabled, visible]
+      properties:
+        showService: { type: boolean, description: 'The caller''s own preference (true when never set).' }
+        moduleEnabled: { type: boolean }
+        visible: { type: boolean }
     AccountSession:
       type: object
-      required: [csrf_token, session_id, account]
+      required: [csrf_token, session_id, account, modules]
       properties:
         csrf_token: { type: string }
         session_id: { $ref: '#/components/schemas/Id' }
         account: { $ref: '#/components/schemas/Account' }
+        modules: { $ref: '#/components/schemas/Modules' }
     Account:
       type: object
       required: [id, email, instanceRole, emailVerified, credentials]
@@ -1948,6 +2592,279 @@ components:
             odometer: { $ref: '#/components/schemas/Distance' }
             volume: { $ref: '#/components/schemas/Volume' }
         interval: { oneOf: [{ $ref: '#/components/schemas/FillUpInterval' }, { type: 'null' }] }
+    ServiceCategory:
+      type: string
+      enum: [scheduled, repair, inspection, other]
+    ServiceItemInput:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120, description: Free text. Clients may offer presets such as "Oil change" but any text is accepted. }
+        category: { $ref: '#/components/schemas/ServiceCategory', description: Defaults to `other`. }
+        cost: { oneOf: [{ $ref: '#/components/schemas/Decimal' }, { type: 'null' }], description: In the vehicle's currency. Null or absent is unknown; "0" is a known zero. }
+        notes: { type: [string, 'null'], maxLength: 500 }
+        taskId: { oneOf: [{ $ref: '#/components/schemas/Id' }, { type: 'null' }], description: The maintenance task of this vehicle that this item completes. Chosen by a person; never inferred from the name. }
+    ServiceItem:
+      type: object
+      required: [id, name, category, cost, notes, taskId]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        name: { type: string }
+        category: { $ref: '#/components/schemas/ServiceCategory' }
+        cost: { oneOf: [{ $ref: '#/components/schemas/Decimal' }, { type: 'null' }] }
+        notes: { type: [string, 'null'] }
+        taskId: { oneOf: [{ $ref: '#/components/schemas/Id' }, { type: 'null' }], description: The maintenance task this item completes; null when none, or when the task was deleted. }
+    ServiceExportAttachment:
+      type: object
+      required: [fileName, data]
+      additionalProperties: false
+      properties:
+        fileName: { type: string }
+        contentType: { type: string, enum: [application/pdf, image/jpeg, image/png] }
+        sha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        data: { type: string, contentEncoding: base64 }
+    ServiceVisitInput:
+      type: object
+      required: [servicedOn, items]
+      additionalProperties: false
+      properties:
+        servicedOn: { type: string, format: date, description: The day the work was done. }
+        odometer: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }], description: Optional; not required to fit between fuel readings. }
+        provider: { type: [string, 'null'], maxLength: 120 }
+        diy: { type: boolean, default: false, description: Done by the owner rather than a workshop. }
+        totalCost: { oneOf: [{ $ref: '#/components/schemas/Decimal' }, { type: 'null' }], description: Whole-visit cost in the vehicle's currency. Null or absent is unknown; "0" is a known zero. It is not checked against item costs. }
+        notes: { type: [string, 'null'], maxLength: 2000 }
+        items: { type: array, minItems: 1, maxItems: 50, items: { $ref: '#/components/schemas/ServiceItemInput' } }
+    ServiceVisitExport:
+      type: object
+      description: A ServiceVisitInput plus optional embedded attachments.
+      required: [servicedOn, items]
+      additionalProperties: false
+      properties:
+        servicedOn: { type: string, format: date, description: The day the work was done. }
+        odometer: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }], description: Optional; not required to fit between fuel readings. }
+        provider: { type: [string, 'null'], maxLength: 120 }
+        diy: { type: boolean, default: false, description: Done by the owner rather than a workshop. }
+        totalCost: { oneOf: [{ $ref: '#/components/schemas/Decimal' }, { type: 'null' }], description: Whole-visit cost in the vehicle's currency. Null or absent is unknown; "0" is a known zero. It is not checked against item costs. }
+        notes: { type: [string, 'null'], maxLength: 2000 }
+        items: { type: array, minItems: 1, maxItems: 50, items: { $ref: '#/components/schemas/ServiceItemExport' } }
+        attachments: { type: array, maxItems: 10, items: { $ref: '#/components/schemas/ServiceExportAttachment' } }
+    ServiceVisitPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        servicedOn: { type: string, format: date }
+        odometer: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }] }
+        provider: { type: [string, 'null'], maxLength: 120 }
+        diy: { type: boolean }
+        totalCost: { oneOf: [{ $ref: '#/components/schemas/Decimal' }, { type: 'null' }] }
+        notes: { type: [string, 'null'], maxLength: 2000 }
+        items: { type: array, minItems: 1, maxItems: 50, items: { $ref: '#/components/schemas/ServiceItemInput' } }
+    ServiceAttachment:
+      type: object
+      description: A receipt or invoice file. The bytes are only available through the download endpoint.
+      required: [id, fileName, contentType, sizeBytes, createdAt]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        fileName: { type: string, minLength: 1, maxLength: 200 }
+        contentType: { type: string, enum: [application/pdf, image/jpeg, image/png] }
+        sizeBytes: { type: integer, maximum: 10485760 }
+        createdAt: { $ref: '#/components/schemas/Timestamp' }
+    ServiceVisit:
+      type: object
+      required: [id, vehicleId, servicedOn, odometer, display, provider, diy, totalCost, currency, notes, items, attachments, createdBy, createdAt, updatedAt]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        vehicleId: { $ref: '#/components/schemas/Id' }
+        servicedOn: { type: string, format: date }
+        odometer: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }], description: Exactly as entered. }
+        display:
+          type: object
+          required: [odometer]
+          properties:
+            odometer: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }], description: Converted to the vehicle's odometer unit. }
+        provider: { type: [string, 'null'] }
+        diy: { type: boolean }
+        totalCost: { oneOf: [{ $ref: '#/components/schemas/Decimal' }, { type: 'null' }] }
+        currency: { $ref: '#/components/schemas/CurrencyCode' }
+        notes: { type: [string, 'null'] }
+        items: { type: array, items: { $ref: '#/components/schemas/ServiceItem' } }
+        attachments: { type: array, maxItems: 10, items: { $ref: '#/components/schemas/ServiceAttachment' } }
+        createdBy: { oneOf: [{ $ref: '#/components/schemas/Id' }, { type: 'null' }] }
+        createdAt: { $ref: '#/components/schemas/Timestamp' }
+        updatedAt: { $ref: '#/components/schemas/Timestamp' }
+    MaintenanceDefaults:
+      type: object
+      description: Illustrative defaults for "due soon" and for a reading being too old to trust. Not manufacturer or safety guidance.
+      required: [leadDays, leadDistance, staleReadingDays]
+      properties:
+        leadDays: { type: integer, description: A task due within this many days is `due_soon`. }
+        leadDistance: { $ref: '#/components/schemas/Distance' }
+        staleReadingDays: { type: integer, description: An odometer reading older than this is stale; a stale or missing reading never shows a distance as `ok`. }
+    MaintenanceTaskState:
+      type: string
+      enum: [ok, due_soon, overdue, no_baseline, unknown_reading, completed]
+      description: >
+        `overdue` and `due_soon` come from the date, the odometer, or both (the worse wins). `no_baseline`: nothing
+        to count from (no linked completion and no first-due point, or the last completion lacked the odometer a
+        distance interval needs); nothing is assumed. `unknown_reading`: a distance is involved and there is no
+        recent odometer reading to say it is ok. `completed`: a one-time task with a linked completion. A task is
+        `ok` only when every dimension it has is known and not near.
+    MaintenanceSnooze:
+      type: object
+      required: [scope, until, untilOdometer, reason, createdBy, createdAt]
+      properties:
+        scope: { type: string, enum: [personal, vehicle] }
+        until: { oneOf: [{ type: string, format: date }, { type: 'null' }], description: Last day the snooze is active. }
+        untilOdometer: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }], description: Absolute odometer target in the vehicle's unit; the snooze ends once the known odometer exceeds it. }
+        reason: { type: [string, 'null'] }
+        createdBy: { oneOf: [{ $ref: '#/components/schemas/Id' }, { type: 'null' }] }
+        createdAt: { $ref: '#/components/schemas/Timestamp' }
+    MaintenanceTaskInput:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120, description: Required unless `catalogKey` is given. }
+        catalogKey: { oneOf: [{ type: string }, { type: 'null' }], description: A key from the catalog; a label only, it brings no interval. }
+        recurring: { type: boolean, default: true }
+        intervalDays: { oneOf: [{ type: integer, minimum: 1, maximum: 36500 }, { type: 'null' }] }
+        intervalDistance: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }], description: Greater than zero. }
+        firstDueOn: { oneOf: [{ type: string, format: date }, { type: 'null' }], description: Used until the task is first completed. }
+        firstDueOdometer: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }], description: Used until the task is first completed. }
+        notes: { type: [string, 'null'], maxLength: 500 }
+    MaintenanceTaskPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        catalogKey: { oneOf: [{ type: string }, { type: 'null' }] }
+        recurring: { type: boolean }
+        intervalDays: { oneOf: [{ type: integer, minimum: 1, maximum: 36500 }, { type: 'null' }] }
+        intervalDistance: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }] }
+        firstDueOn: { oneOf: [{ type: string, format: date }, { type: 'null' }] }
+        firstDueOdometer: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }] }
+        notes: { type: [string, 'null'], maxLength: 500 }
+        archived: { type: boolean, description: Hide the task without deleting it or its history. }
+    MaintenanceSnoozeInput:
+      type: object
+      additionalProperties: false
+      properties:
+        until: { type: string, format: date, description: Today or later, at most 3650 days ahead. }
+        untilOdometer: { $ref: '#/components/schemas/Distance' }
+        additionalDistance: { $ref: '#/components/schemas/Distance' }
+        reason: { type: [string, 'null'], maxLength: 200 }
+    MaintenanceTask:
+      type: object
+      description: >
+        A task and its status, computed on read (never stored). The next due point comes from the most recent
+        service item linked to the task (that visit's date and, when recorded, odometer) plus the interval; without
+        a linked completion, from `firstDueOn` / `firstDueOdometer`. Distance uses only the latest known odometer
+        and never extrapolates. Dates are compared in UTC; due today is `due_soon`, past is `overdue`.
+      required: [id, vehicleId, name, catalogKey, recurring, intervalDays, intervalDistance, firstDueOn, firstDueOdometer, notes, archived, createdBy, createdAt, updatedAt,
+        status, dueOn, dueOdometer, daysUntilDue, distanceUntilDue, baseline, distanceBaselineMissing, readingStale, lastCompleted, snoozed, snoozes, reminderSuppressed, needsAttention]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        vehicleId: { $ref: '#/components/schemas/Id' }
+        name: { type: string }
+        catalogKey: { type: [string, 'null'] }
+        recurring: { type: boolean }
+        intervalDays: { type: [integer, 'null'] }
+        intervalDistance: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }], description: Exactly as entered. }
+        firstDueOn: { oneOf: [{ type: string, format: date }, { type: 'null' }] }
+        firstDueOdometer: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }], description: Exactly as entered. }
+        notes: { type: [string, 'null'] }
+        archived: { type: boolean }
+        createdBy: { oneOf: [{ $ref: '#/components/schemas/Id' }, { type: 'null' }] }
+        createdAt: { $ref: '#/components/schemas/Timestamp' }
+        updatedAt: { $ref: '#/components/schemas/Timestamp' }
+        status: { $ref: '#/components/schemas/MaintenanceTaskState' }
+        dueOn: { oneOf: [{ type: string, format: date }, { type: 'null' }] }
+        dueOdometer: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }], description: In the vehicle's odometer unit, rounded to whole units. }
+        daysUntilDue: { type: [integer, 'null'], description: Negative when past. }
+        distanceUntilDue: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }], description: From the latest known reading to `dueOdometer`; negative when past. Null without a reading. }
+        baseline: { type: string, enum: [completion, first_due, none] }
+        distanceBaselineMissing: { type: boolean, description: A distance interval exists but the last completion recorded no odometer. }
+        readingStale: { type: boolean, description: The task has an odometer due point and the latest reading is missing or older than `staleReadingDays`. Time-only tasks are never stale. }
+        lastCompleted:
+          oneOf:
+            - type: 'null'
+            - type: object
+              required: [visitId, servicedOn, odometer]
+              properties:
+                visitId: { $ref: '#/components/schemas/Id' }
+                servicedOn: { type: string, format: date }
+                odometer: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }] }
+        snoozed: { oneOf: [{ $ref: '#/components/schemas/MaintenanceSnoozeView' }, { type: 'null' }], description: The active snooze that applies to the caller (personal first, else vehicle-wide). The status above is unchanged. }
+        snoozes: { type: array, items: { $ref: '#/components/schemas/MaintenanceSnoozeView' }, description: All active snoozes that apply to the caller. }
+        reminderSuppressed: { type: boolean, description: True while any snooze is active. Muting reminders does not make delaying safe. }
+        needsAttention: { type: boolean, description: Status is `due_soon` or `overdue`. }
+    MaintenanceSnoozeView:
+      allOf: [{ $ref: '#/components/schemas/MaintenanceSnooze' }]
+    MaintenanceSummary:
+      type: object
+      required: [counts, reading, defaults]
+      properties:
+        counts:
+          type: object
+          required: [total, overdue, due_soon, ok, no_baseline, unknown_reading, completed, snoozed, needsAttention, remindersActive]
+          properties:
+            total: { type: integer }
+            overdue: { type: integer }
+            due_soon: { type: integer }
+            ok: { type: integer }
+            no_baseline: { type: integer }
+            unknown_reading: { type: integer }
+            completed: { type: integer }
+            snoozed: { type: integer, description: Tasks with an active snooze for the caller. }
+            needsAttention: { type: integer, description: Overdue plus due soon, snoozed or not. }
+            remindersActive: { type: integer, description: Needing attention and not snoozed. }
+        reading:
+          oneOf:
+            - type: 'null'
+            - type: object
+              required: [odometer, on, source, stale]
+              properties:
+                odometer: { $ref: '#/components/schemas/Distance' }
+                on: { type: string, format: date }
+                source: { type: string, enum: [fuel, service] }
+                stale: { type: boolean }
+        defaults: { $ref: '#/components/schemas/MaintenanceDefaults' }
+    MaintenanceTaskExport:
+      type: object
+      description: A task as exported; `ref` labels it for `taskRef` on service items. Vehicle-wide snooze only, and only while active; personal snoozes are never exported.
+      required: [ref, name]
+      additionalProperties: false
+      properties:
+        ref: { type: string, pattern: '^[A-Za-z0-9_-]{1,40}$' }
+        name: { type: string, minLength: 1, maxLength: 120 }
+        catalogKey: { type: [string, 'null'] }
+        recurring: { type: boolean, default: true }
+        intervalDays: { type: [integer, 'null'] }
+        intervalDistance: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }] }
+        firstDueOn: { oneOf: [{ type: string, format: date }, { type: 'null' }] }
+        firstDueOdometer: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }] }
+        notes: { type: [string, 'null'], maxLength: 500 }
+        archived: { type: boolean, default: false }
+        snooze:
+          type: object
+          additionalProperties: false
+          properties:
+            until: { oneOf: [{ type: string, format: date }, { type: 'null' }] }
+            untilOdometer: { oneOf: [{ $ref: '#/components/schemas/Distance' }, { type: 'null' }] }
+            reason: { type: [string, 'null'], maxLength: 200 }
+    ServiceItemExport:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        category: { $ref: '#/components/schemas/ServiceCategory' }
+        cost: { oneOf: [{ $ref: '#/components/schemas/Decimal' }, { type: 'null' }] }
+        notes: { type: [string, 'null'], maxLength: 500 }
+        taskRef: { type: string, description: The `ref` of an entry of `maintenanceTasks` that this item completes. }
     VehicleStats:
       type: object
       required: [vehicleId, window, fillCount, intervalCount, unavailableIntervalCount, distance, volume, economy, spend, costPerDistance, series]
@@ -2084,6 +3001,8 @@ components:
             odometerUnit: { $ref: '#/components/schemas/DistanceUnit' }
             currency: { $ref: '#/components/schemas/CurrencyCode' }
         fillUps: { type: array, maxItems: 5000, items: { $ref: '#/components/schemas/FillUpInput' } }
+        maintenanceTasks: { type: array, maxItems: 200, items: { $ref: '#/components/schemas/MaintenanceTaskExport' }, description: Optional, added without a version bump; older files lack it. Always exported, and imported when present, regardless of the Service module switch. An identical task already on the vehicle is skipped and reused for `taskRef` links. }
+        serviceVisits: { type: array, maxItems: 5000, items: { $ref: '#/components/schemas/ServiceVisitExport' }, description: Optional, added without a version bump; older files lack it. Always exported, and imported when present, regardless of the Service module switch. }
     ImportReport:
       type: object
       required: [dryRun, committed, summary, errors]
@@ -2109,6 +3028,24 @@ components:
               code: { type: string }
               message: { type: string }
         vehicle: { $ref: '#/components/schemas/Vehicle' }
+        serviceVisits:
+          type: object
+          description: Present when the JSON file carried `serviceVisits`; failures are also counted in `summary.invalid`.
+          required: [total, created, duplicates, invalid]
+          properties:
+            total: { type: integer }
+            created: { type: integer }
+            duplicates: { type: integer }
+            invalid: { type: integer }
+        maintenanceTasks:
+          type: object
+          description: Present when the JSON file carried `maintenanceTasks`; failures are also counted in `summary.invalid`.
+          required: [total, created, duplicates, invalid]
+          properties:
+            total: { type: integer }
+            created: { type: integer }
+            duplicates: { type: integer }
+            invalid: { type: integer }
     AdminUser:
       type: object
       required: [id, email, displayName, instanceRole, status, createdAt, ownedVehicleCount]

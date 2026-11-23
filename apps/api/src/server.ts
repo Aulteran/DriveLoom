@@ -10,6 +10,7 @@ import { configFromEnv, oidcFromEnv, secretKeyFromEnv, smtpFromEnv } from './aut
 import { Integrations } from './admin/integrations.ts';
 import type { AuthContext } from './auth/context.ts';
 import { createApplication, SERVER_VERSION } from './application.ts';
+import { Notifier, SCHEDULER_INTERVAL_MS } from './service/notifications.ts';
 
 const env = process.env;
 if (!env['DATABASE_URL']) { console.error('DATABASE_URL is required'); process.exit(2); }
@@ -43,7 +44,12 @@ try {
 const ctx: AuthContext = { db: pool, config, integrations, get mailer() { return integrations.mailer; }, get oidc() { return integrations.oidc; }, now: () => new Date() };
 const defaultWeb = fileURLToPath(new URL('../../web/', import.meta.url));
 const webDir = env['DRIVELOOM_WEB_DIR'] ?? (existsSync(defaultWeb) ? defaultWeb : null);
-const app = createApplication(ctx, { webDir });
+// Maintenance reminder emails: evaluated every 15 minutes and after odometer
+// changes. DRIVELOOM_DISABLE_SCHEDULER=1 (or NODE_ENV=test) turns the periodic run off.
+const notifier = new Notifier({ db: pool, mailer: () => integrations.mailer, publicOrigin: config.publicOrigin });
+const scheduler = env['DRIVELOOM_DISABLE_SCHEDULER'] !== '1' && env['NODE_ENV'] !== 'test';
+if (scheduler) notifier.start(SCHEDULER_INTERVAL_MS);
+const app = createApplication(ctx, { webDir, notifier });
 const server = createServer((req, res) => void app(req, res));
 server.requestTimeout = 60_000;
 server.headersTimeout = 20_000;
@@ -52,7 +58,7 @@ server.listen(port, host, () => console.log(`driveloom ${SERVER_VERSION} listeni
 
 const stop = (signal: string) => {
   console.log(`${signal}: shutting down`);
-  server.close(() => void pool.end().then(() => process.exit(0)));
+  server.close(() => void notifier.stop().then(() => pool.end()).then(() => process.exit(0)));
   setTimeout(() => process.exit(1), 10_000).unref();
 };
 process.on('SIGTERM', () => stop('SIGTERM'));

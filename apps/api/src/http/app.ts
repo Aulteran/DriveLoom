@@ -108,6 +108,9 @@ export interface RawBody { type: string; data: Buffer }
 
 async function readBody(req: IncomingMessage, max: number, raw?: Route['rawBody']): Promise<unknown> {
   const limit = raw ? raw.maxBytes : max;
+  // A declared length far past the limit is refused before reading anything.
+  const declared = Number(req.headers['content-length']);
+  if (Number.isFinite(declared) && declared > limit + DISCARD_BYTES) throw new HttpProblem(413, 'body_too_large', 'Request body too large', undefined, {}, { connection: 'close' });
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const c of req) {

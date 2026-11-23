@@ -28,9 +28,11 @@ export const BACKUP_VERSION = 1;
 /**
  * Short-lived state that must not outlive the instance it was made on: live
  * sessions, rate limits, pending challenges and emailed codes. Everyone signs
- * in again after a restore.
+ * in again after a restore. The email outbox too: a restored instance never
+ * sends (or re-sends) another instance's queue. What each person was already
+ * told (notification_task_log) is kept, so nothing is announced again either.
  */
-export const EPHEMERAL_TABLES: readonly string[] = ['sessions', 'rate_limits', 'auth_challenges', 'one_time_codes'];
+export const EPHEMERAL_TABLES: readonly string[] = ['sessions', 'rate_limits', 'auth_challenges', 'one_time_codes', 'notification_outbox'];
 
 export class BackupError extends Error {
   readonly code: string;

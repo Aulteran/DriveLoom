@@ -1,5 +1,7 @@
 // Fuel purchases, odometer history and economy (milestone 1.4). Authorization
-// goes through VehicleService.access: viewers read, editors and owners write.
+// goes through VehicleService.access and vehicles/permissions.ts: every member
+// reads; owners and editors change any record; drivers add records and change
+// only the ones they recorded.
 // Nothing derived is stored: intervals are recomputed from the ordered records
 // on every read, so a backdate, correction or deletion repairs its neighbours.
 import type pg from 'pg';
@@ -15,6 +17,7 @@ import {
 } from '../units.ts';
 import type { VehicleService } from '../vehicles/service.ts';
 import type { VehicleAccess } from '../vehicles/types.ts';
+import { canChangeFill, canWriteFuel } from '../vehicles/permissions.ts';
 import { aggregate, intervals, inWindow, type Fill, type Interval, type Window } from './economy.ts';
 
 export interface FillUpRow {
@@ -53,6 +56,7 @@ export interface IntervalView {
 }
 
 const notFound = () => new HttpProblem(404, 'fill_up_not_found', 'Fill-up not found');
+const forbiddenFuel = (detail = 'Your role does not allow changing fuel records.') => new HttpProblem(403, 'forbidden', 'Forbidden', detail);
 
 export interface ParsedFillUp {
   occurredAt: Date; odometer: string; odometerUnit: DistanceUnit; odometerKm: Dec; volume: string; volumeUnit: VolumeUnit; volumeL: Dec;
@@ -60,7 +64,7 @@ export interface ParsedFillUp {
   cost: { amount: string; currency: string; exchangeRate: string | null; reportingAmount: string } | null;
 }
 
-function quantity<U>(v: unknown, field: string, isUnit: (u: unknown) => u is U, units: string, o: { maxScale: number; max: string; positive?: boolean }): { value: string; unit: U; dec: Dec } {
+export function quantity<U>(v: unknown, field: string, isUnit: (u: unknown) => u is U, units: string, o: { maxScale: number; max: string; positive?: boolean }): { value: string; unit: U; dec: Dec } {
   const q = obj(v, ['value', 'unit'], field);
   if (!isUnit(q['unit'])) throw invalid(`${field}.unit must be one of ${units}. Choose the unit explicitly.`);
   return { value: q['value'] as string, unit: q['unit'], dec: decimal(q['value'], `${field}.value`, o) };
@@ -193,7 +197,7 @@ export class FuelService {
     try {
       await c.query('BEGIN');
       const v = await this.#vehicles.access(c, p, vehicleId, true); // row lock: serialises with every other change to this vehicle
-      if (v.role === 'viewer') throw new HttpProblem(403, 'forbidden', 'Forbidden', 'Your role does not allow changing fuel records.');
+      if (!canWriteFuel(v.role)) throw forbiddenFuel();
       if (v.archived) throw new HttpProblem(409, 'vehicle_archived', 'Conflict', 'This vehicle is archived. Unarchive it to change its records.');
       const out = await fn(c, v);
       await c.query('COMMIT');
@@ -255,6 +259,7 @@ export class FuelService {
       if (!isUuid(fillUpId)) throw notFound();
       const cur = (await c.query<FillUpRow>(`SELECT ${COLS} FROM fill_ups WHERE id = $1 AND vehicle_id = $2`, [fillUpId, v.id])).rows[0];
       if (!cur) throw notFound();
+      if (!canChangeFill(v.role, cur.created_by, p.userId)) throw forbiddenFuel('Drivers can change only the fill-ups they recorded.');
       const f = parseFillUp({ ...rowToBody(cur), ...patch }, v.currency, this.#now());
       await this.#checkSequence(c, v.id, f, cur.id);
       await c.query(
@@ -271,8 +276,10 @@ export class FuelService {
   async remove(p: Principal, vehicleId: unknown, fillUpId: unknown): Promise<void> {
     await this.#write(p, vehicleId, async (c, v) => {
       if (!isUuid(fillUpId)) throw notFound();
-      const r = await c.query('DELETE FROM fill_ups WHERE id = $1 AND vehicle_id = $2', [fillUpId, v.id]);
-      if (!r.rowCount) throw notFound();
+      const cur = await c.query<{ created_by: Id | null }>('SELECT created_by FROM fill_ups WHERE id = $1 AND vehicle_id = $2', [fillUpId, v.id]);
+      if (!cur.rows[0]) throw notFound();
+      if (!canChangeFill(v.role, cur.rows[0].created_by, p.userId)) throw forbiddenFuel('Drivers can delete only the fill-ups they recorded.');
+      await c.query('DELETE FROM fill_ups WHERE id = $1', [fillUpId]);
       await this.#audit(c, p, 'fill_up.delete', v.id, fillUpId);
     });
   }

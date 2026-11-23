@@ -7,7 +7,7 @@ import { withFreshSignIn } from './settings.js';
 import { unitFields } from '../units.js';
 import { icon } from '../icons.js';
 
-export const SECTIONS = [['users', 'Accounts', 'users'], ['invites', 'Invitations', 'mail'], ['units', 'Default units', 'sliders'], ['email', 'Email', 'mail'], ['signin', 'Single sign-on', 'key'], ['audit', 'Audit log', 'list']];
+export const SECTIONS = [['users', 'Accounts', 'users'], ['invites', 'Invitations', 'mail'], ['units', 'Default units', 'sliders'], ['modules', 'Modules', 'sliders'], ['email', 'Email', 'mail'], ['signin', 'Single sign-on', 'key'], ['audit', 'Audit log', 'list']];
 
 const act = (label, fn, cls = 'secondary') => h('button', { class: cls, onclick: async (e) => {
   const btn = e.currentTarget; btn.disabled = true;
@@ -133,6 +133,18 @@ async function units() {
   });
 }
 
+async function modules() {
+  const { modules: m } = await get('/v1/admin/settings/modules');
+  return h('section', { class: 'panel' },
+    h('h2', {}, 'Modules'),
+    h('p', { class: 'muted' }, 'Optional features, off until you turn them on for the whole server.'),
+    h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: m.service, onchange: async (e) => {
+      const on = e.target.checked;
+      try { const r = await put('/v1/admin/settings/modules/service', { enabled: on }); state.modules = r.modules; toast(on ? 'Service module enabled.' : 'Service module disabled.'); } catch (err) { e.target.checked = !on; toast(err.message); }
+    } }), 'Service module'),
+    h('p', { class: 'small muted' }, 'Adds a Service page to vehicles for maintenance history. Each member can still hide it for a vehicle in that vehicle\'s settings. Turning it off only hides the page: service data and everyone\'s choices are kept and return when you turn it back on.'));
+}
+
 // The sign-in screen and Security page read these public facts once; refresh them after a change here.
 export const refreshInstance = async () => { state.instance = await get('/v1/auth/instance').catch(() => state.instance); };
 
@@ -254,7 +266,7 @@ async function signin() {
 export async function adminView(section, query) {
   if (state.account?.instanceRole !== 'admin') return h('div', { class: 'panel empty' }, h('h1', {}, 'Administrators only'), h('p', {}, h('a', { href: '#/' }, 'Back to your dashboard')));
   if (!SECTIONS.some(([k]) => k === section)) section = 'users';
-  const body = section === 'invites' ? await invites() : section === 'units' ? await units() : section === 'email' ? await email() : section === 'signin' ? await signin() : section === 'audit' ? await audit(query) : await users();
+  const body = section === 'invites' ? await invites() : section === 'units' ? await units() : section === 'modules' ? await modules() : section === 'email' ? await email() : section === 'signin' ? await signin() : section === 'audit' ? await audit(query) : await users();
   return h('div', {},
     h('h1', {}, 'Administration'),
     h('nav', { class: 'tabs', 'aria-label': 'Administration sections' }, SECTIONS.map(([k, label, ic]) => h('a', { href: `#/admin/${k}`, 'aria-current': k === section ? 'page' : undefined }, icon(ic), label))),

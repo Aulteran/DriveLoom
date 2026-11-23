@@ -122,6 +122,93 @@ test('archive hides from default list and is owner-only', { skip }, async () => 
   assert.equal((await svc.setArchived(o, v.id, false)).archived, false);
 });
 
+test('delete is owner-only, needs an archived vehicle, and audits', { skip }, async () => {
+  const o = await user(), e = await user(), w = await user(), stranger = await user();
+  const v = await svc.create(o, { name: 'Scrap' });
+  await svc.addMember(o, v.id, e.userId, 'editor');
+  await svc.addMember(o, v.id, w.userId, 'viewer');
+  await svc.setArchived(o, v.id, true);
+  await rejects(svc.delete(e, v.id), 403, 'forbidden');
+  await rejects(svc.delete(w, v.id), 403, 'forbidden');
+  await rejects(svc.delete(stranger, v.id), 404, 'vehicle_not_found');
+  await rejects(svc.delete(o, 'not-a-uuid'), 404);
+  assert.equal((await svc.get(o, v.id)).archived, true, 'refused deletes leave the vehicle in place');
+
+  await svc.delete(o, v.id);
+  await rejects(svc.get(o, v.id), 404, 'vehicle_not_found');
+  await rejects(svc.get(e, v.id), 404);
+  assert.deepEqual(await svc.list(o, { includeArchived: true }), []);
+  await rejects(svc.delete(o, v.id), 404); // already gone
+  const last = (await audit(v.id)).at(-1);
+  assert.equal(last.action, 'vehicle.delete');
+  assert.equal(last.actor_id, o.userId);
+});
+
+test('delete refuses an unarchived vehicle until it is archived, and restoring cancels it', { skip }, async () => {
+  const o = await user();
+  const v = await svc.create(o, { name: 'Keep' });
+  await rejects(svc.delete(o, v.id), 409, 'not_archived');
+  assert.equal((await svc.get(o, v.id)).name, 'Keep');
+  await svc.setArchived(o, v.id, true);
+  await svc.setArchived(o, v.id, false);
+  await rejects(svc.delete(o, v.id), 409, 'not_archived');
+  assert.ok(!(await audit(v.id)).some((r) => r.action === 'vehicle.delete'));
+  await svc.setArchived(o, v.id, true);
+  await svc.delete(o, v.id);
+  await rejects(svc.get(o, v.id), 404);
+});
+
+test('delete cascades to everything the vehicle owns and nothing else', { skip }, async () => {
+  const o = await user(), m = await user();
+  const v = await svc.create(o, { name: 'Cascade' });
+  const other = await svc.create(o, { name: 'Bystander' });
+  await svc.addMember(o, v.id, m.userId, 'viewer');
+  const sql = (t: string, args: unknown[] = []) => pool.query(t, args);
+  const seed = async (vid: string) => {
+    const visit = uuidv7(), task = uuidv7();
+    await sql("INSERT INTO fill_ups (id, vehicle_id, occurred_at, odometer_input, odometer_unit, odometer_km, volume_input, volume_unit, volume_l) VALUES ($1,$2,'2024-01-01T00:00:00Z',1000,'km',1000,40,'l',40)", [uuidv7(), vid]);
+    await sql("INSERT INTO vehicle_images (vehicle_id, content_type, data) VALUES ($1,'image/png',$2)", [vid, Buffer.from([1, 2, 3])]);
+    await sql("INSERT INTO service_visits (id, vehicle_id, serviced_on, currency) VALUES ($1,$2,'2024-02-01','USD')", [visit, vid]);
+    await sql("INSERT INTO service_items (id, visit_id, position, name) VALUES ($1,$2,0,'Oil change')", [uuidv7(), visit]);
+    await sql("INSERT INTO service_attachments (id, visit_id, file_name, content_type, size_bytes, sha256, data) VALUES ($1,$2,'r.pdf','application/pdf',3,$3,$4)", [uuidv7(), visit, 'a'.repeat(64), Buffer.from([1, 2, 3])]);
+    await sql("INSERT INTO maintenance_tasks (id, vehicle_id, name, interval_days) VALUES ($1,$2,'Rotate tyres',180)", [task, vid]);
+    await sql("INSERT INTO task_snoozes (id, task_id, scope, snooze_until_date) VALUES ($1,$2,'vehicle','2030-01-01')", [uuidv7(), task]);
+    await sql('INSERT INTO vehicle_notification_settings (vehicle_id) VALUES ($1)', [vid]);
+    await sql('INSERT INTO vehicle_comparison_optins (vehicle_id, enabled_by) VALUES ($1,$2)', [vid, o.userId]);
+  };
+  await seed(v.id);
+  await seed(other.id);
+  const tables: Array<[string, string]> = [
+    ['vehicle_members', 'vehicle_id'], ['fill_ups', 'vehicle_id'], ['vehicle_images', 'vehicle_id'], ['service_visits', 'vehicle_id'],
+    ['service_items', 'visit_id IN (SELECT id FROM service_visits WHERE vehicle_id = $1)'],
+    ['maintenance_tasks', 'vehicle_id'], ['vehicle_notification_settings', 'vehicle_id'], ['vehicle_comparison_optins', 'vehicle_id'],
+  ];
+  const counts = async (vid: string) => {
+    const out: Record<string, number> = {};
+    for (const [t, col] of tables) {
+      const where = col.includes('$1') ? col : `${col} = $1`;
+      out[t] = (await sql(`SELECT count(*)::int AS n FROM ${t} WHERE ${where}`, [vid])).rows[0].n;
+    }
+    out['service_attachments'] = (await sql('SELECT count(*)::int AS n FROM service_attachments WHERE visit_id IN (SELECT id FROM service_visits WHERE vehicle_id = $1)', [vid])).rows[0].n;
+    out['task_snoozes'] = (await sql('SELECT count(*)::int AS n FROM task_snoozes WHERE task_id IN (SELECT id FROM maintenance_tasks WHERE vehicle_id = $1)', [vid])).rows[0].n;
+    return out;
+  };
+  const before = await counts(v.id);
+  const otherBefore = await counts(other.id);
+  assert.ok(Object.values(before).every((n) => n > 0), `seed missed a table: ${JSON.stringify(before)}`);
+  assert.equal(before['vehicle_members'], 2);
+
+  await svc.setArchived(o, v.id, true);
+  await svc.delete(o, v.id);
+
+  assert.ok(Object.values(await counts(v.id)).every((n) => n === 0), JSON.stringify(await counts(v.id)));
+  assert.equal((await sql('SELECT count(*)::int AS n FROM vehicles WHERE id = $1', [v.id])).rows[0].n, 0);
+  assert.deepEqual(await counts(other.id), otherBefore, 'other vehicles are untouched');
+  assert.equal((await svc.get(o, other.id)).name, 'Bystander');
+  // Users survive; only the membership goes.
+  assert.equal((await sql('SELECT count(*)::int AS n FROM users WHERE id = ANY($1)', [[o.userId, m.userId]])).rows[0].n, 2);
+});
+
 test('ownership transfer swaps roles atomically and audits', { skip }, async () => {
   const o = await user(), m = await user(), stranger = await user();
   const v = await svc.create(o, { name: 'Hand over' });

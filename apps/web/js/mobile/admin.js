@@ -130,6 +130,20 @@ function units(current) {
   }));
 }
 
+// ---------- modules ----------
+function modules({ modules: m }) {
+  const id = 'm-mod-service';
+  return h('div', { class: 'm-group m-pad m-stack-s' },
+    h('p', { class: 'm-note m-flush' }, 'Optional features, off until you turn them on for the whole server.'),
+    h('div', { class: 'm-switch-row' },
+      h('label', { for: id }, 'Service module'),
+      h('input', { id, type: 'checkbox', role: 'switch', class: 'm-toggle', checked: m.service, onchange: async (e) => {
+        const on = e.target.checked;
+        try { const r = await put('/v1/admin/settings/modules/service', { enabled: on }); state.modules = r.modules; toast(on ? 'Service module enabled.' : 'Service module disabled.'); } catch (err) { e.target.checked = !on; toast(err.message); }
+      } })),
+    h('p', { class: 'm-note' }, 'Adds a Service page to vehicles for maintenance history. Each member can still hide it for a vehicle in that vehicle’s settings. Turning it off only hides the page: service data and everyone’s choices are kept and return when you turn it back on.'));
+}
+
 // ---------- email and sign-on ----------
 const status = (on, label) => pill(label, on ? 'good' : 'warn');
 const envNotice = (what, vars) => h('div', { class: 'notice' },
@@ -230,6 +244,7 @@ const LOAD = {
   users: [() => get('/v1/admin/users'), users, 'accounts'],
   invites: [() => get('/v1/admin/invites'), invites, 'invitations'],
   units: [() => get('/v1/admin/settings/units'), units, 'default units'],
+  modules: [() => get('/v1/admin/settings/modules'), modules, 'modules'],
   email: [() => get('/v1/admin/settings/smtp'), email, 'email settings'],
   signin: [() => get('/v1/admin/settings/oidc'), signin, 'sign-on settings'],
 };

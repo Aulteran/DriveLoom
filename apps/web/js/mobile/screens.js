@@ -15,6 +15,7 @@ import { settingsScreen, profileScreen, securityScreen } from './account.js';
 import { adminScreen } from './admin.js';
 import { homeScreen } from './home.js';
 import { historyScreen } from './history.js';
+import { serviceScreen } from './service.js';
 import { garageScreen, detailScreen, sectionScreen } from './vehicles.js';
 
 // Tabs: home, history, fill, vehicles, more.
@@ -40,6 +41,10 @@ export async function screen({ parts, query, active, requests, friends, signOut 
       // Home and History make the vehicle the context; browsing its detail and sections does not.
       if (!third || third === 'stats') return { view: await homeScreen(second, { query, friends }), title: `Home${name}`, tab: 'home', vehicle: known };
       if (third === 'log') return { view: await historyScreen(second, query), title: `History${name}`, tab: 'history', vehicle: known };
+      if (third === 'service') {
+        const r = await serviceScreen(second, query);
+        return { view: r.view, title: `Service · ${vehicleTitle(r.vehicle)}`, tab: 'vehicles' };
+      }
       if (SECTIONS.has(third)) {
         const r = await sectionScreen(second, third);
         return { view: r.view, title: `${r.title} · ${vehicleTitle(r.vehicle)}`, tab: 'vehicles' };

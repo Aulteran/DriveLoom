@@ -2,7 +2,7 @@
 // and the render pipeline. Routing and state live in core.js; hash routes keep
 // the server simple: every non-API path serves index.html.
 import { get, post, setCsrf, whenSignedOut } from './api.js';
-import { state, refreshSession, go, render, setRenderer, parse, PUBLIC, rememberVehicle, defaultVehicle } from './core.js';
+import { state, refreshSession, go, render, setRenderer, parse, PUBLIC, rememberVehicle, defaultVehicle, serviceVisible } from './core.js';
 import { mount, h, toast } from './ui.js';
 import { icon } from './icons.js';
 import { vehicleLabel, vehicleTitle } from './format.js';
@@ -15,7 +15,7 @@ import { settingsView } from './views/settings.js';
 import { adminView } from './views/admin.js';
 
 // ---------- shell ----------
-const VEHICLE_NAV = [['', 'Dashboard', 'gauge'], ['log', 'Fuel log', 'fuel'], ['members', 'Members', 'users'], ['data', 'Import & export', 'swap'], ['settings', 'Vehicle settings', 'gear']];
+const VEHICLE_NAV = [['', 'Dashboard', 'gauge'], ['log', 'Fuel log', 'fuel'], ['service', 'Service', 'wrench'], ['members', 'Members', 'users'], ['data', 'Import & export', 'swap'], ['settings', 'Vehicle settings', 'gear']];
 const ACCOUNT_NAV = [['garage', 'Garage', 'garage'], ['friends', 'Friends', 'user'], ['settings', 'Settings', 'sliders'], ['admin', 'Administration', 'shield']];
 const mobile = matchMedia('(max-width: 900px)');
 
@@ -43,7 +43,7 @@ function buildSidebar(route) {
     switcher(vehicle),
     vehicle ? h('nav', { class: 'side-nav', 'aria-label': 'Vehicle' },
       h('div', { class: 'side-label' }, 'This vehicle'),
-      VEHICLE_NAV.map(([key, label, ic]) => navLink(`#/vehicles/${vehicle.id}${key ? `/${key}` : ''}`, label, ic, section === 'vehicle' && tab === (key || 'overview')))) : null,
+      VEHICLE_NAV.filter(([key]) => key !== 'service' || route.serviceVisible).map(([key, label, ic]) => navLink(`#/vehicles/${vehicle.id}${key ? `/${key}` : ''}`, label, ic, section === 'vehicle' && tab === (key || 'overview')))) : null,
     h('nav', { class: 'side-nav', 'aria-label': 'Account' },
       h('div', { class: 'side-label' }, 'Account'),
       ACCOUNT_NAV.filter(([key]) => key !== 'admin' || admin).map(([key, label, ic]) => navLink(`#/${key}`, label, ic, section === key))),
@@ -141,6 +141,8 @@ async function renderDesktop() {
     if (ticket !== rendering) return;
     // Keep the vehicle switcher meaningful outside vehicle pages too.
     if (!route.vehicle) route.vehicle = defaultVehicle();
+    route.serviceVisible = await serviceVisible(route.vehicle?.id);
+    if (ticket !== rendering) return;
     chrome(true, route);
     mount(view, title);
   } catch (err) {

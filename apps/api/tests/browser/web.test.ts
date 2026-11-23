@@ -23,6 +23,9 @@ import { economy } from '../../src/units.ts';
 const skip = process.env['DATABASE_URL'] ? false : 'DATABASE_URL not set';
 const WEB = fileURLToPath(new URL('../../../web/', import.meta.url));
 const ADMIN = { email: 'admin@example.test', password: 'correct horse battery' };
+// A real 1x1 PNG and a minimal PDF, for the attachment journeys.
+const TINY_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+const TINY_PDF = Buffer.from('%PDF-1.1\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 10 10]>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n');
 const FRIEND = { email: 'friend@example.test', password: 'another long passphrase' };
 
 test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) => {
@@ -1309,6 +1312,317 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
           await desk.p.locator('#sidebar .side-nav').first().waitFor({ state: 'attached' });
           assert.equal(await inPhoneShell(desk.p), false, 'a short window with a mouse keeps the desktop shell');
         } finally { await desk.ctx.close(); }
+      }
+    });
+
+    await t.test('service history: off by default, then a desktop visit is added, corrected and deleted', async () => {
+      // Off: no menu entry, and the page says so instead of failing.
+      await page.goto(`${base}/#/${vehicle}`);
+      await page.getByRole('heading', { name: 'At a glance' }).waitFor();
+      assert.equal(await page.getByRole('navigation', { name: 'Vehicle' }).getByRole('link', { name: 'Service' }).count(), 0);
+      await page.goto(`${base}/#/${vehicle}/service`);
+      await page.getByText('The Service module is not enabled on this server.').waitFor();
+
+      await db.pool.query("INSERT INTO instance_modules (module, enabled) VALUES ('service', true) ON CONFLICT (module) DO UPDATE SET enabled = true");
+      await page.goto(`${base}/#/${vehicle}`);
+      await page.reload();
+      await page.getByRole('heading', { name: 'At a glance' }).waitFor();
+      await page.getByRole('navigation', { name: 'Vehicle' }).getByRole('link', { name: 'Service' }).click();
+      await page.getByRole('heading', { name: 'Service', level: 1 }).waitFor();
+      await page.getByText('Start from today. Adding past service is optional.').waitFor();
+      assert.deepEqual(await axe('service empty'), []);
+
+      await page.getByRole('button', { name: 'Add service visit' }).click();
+      await page.getByLabel('Date of service').waitFor();
+      await page.getByLabel('Date of service').fill('2026-03-14');
+      await page.getByLabel('Odometer reading').fill('45210');
+      await page.getByLabel('Provider (optional)').fill('Corner Garage');
+      await page.getByLabel('Item', { exact: true }).first().fill('Oil change');
+      await page.getByRole('button', { name: 'Add another item' }).click();
+      await page.getByLabel('Item', { exact: true }).nth(1).fill('Wipers');
+      await page.getByLabel(/^Cost \(.*optional\)$/).first().fill('0');
+      await page.getByLabel(/^Total cost for the visit/).fill('89.50');
+      assert.deepEqual(await axe('service form'), []);
+      // A receipt picked while adding is uploaded with the visit; an unsuitable file is explained, not sent.
+      await page.getByRole('button', { name: 'Choose files to attach to this service visit' }).waitFor();
+      assert.equal(await page.getByRole('button', { name: /^Take photo/ }).count(), 0, 'no camera button on desktop');
+      await page.locator('.svc-form input[type=file]').setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('hello') });
+      await page.getByText('"notes.txt" is not a PDF, JPEG or PNG file.').waitFor();
+      await page.locator('.svc-form input[type=file]').setInputFiles({ name: 'receipt.png', mimeType: 'image/png', buffer: TINY_PNG });
+      await page.getByRole('list', { name: 'Files to attach' }).getByText('receipt.png').waitFor();
+      assert.deepEqual(await axe('service form with a file'), []);
+      await page.getByRole('button', { name: 'Add visit' }).click();
+      const card = page.locator('article.svc-visit').first();
+      await card.waitFor();
+      await card.getByText('Oil change').waitFor();
+      await card.getByText('Wipers').waitFor();
+      assert.match(await card.innerText(), /89\.50/);
+      assert.match(await card.innerText(), /Corner Garage/);
+      assert.deepEqual(await axe('service list'), []);
+
+      // Attachments: the staged receipt arrived; add a PDF to the saved visit, preview, rename, remove.
+      await card.getByRole('list', { name: 'Attachments' }).getByText('receipt.png').waitFor();
+      // The history card never offers adding; files are added from the edit form only.
+      assert.equal(await card.locator('input[type=file]').count(), 0, 'no file picker on the history card');
+      assert.equal(await card.getByRole('button', { name: /^Choose files/ }).count(), 0);
+      assert.doesNotMatch(await card.innerText(), /null/, 'no stray null text on the card');
+      await card.getByRole('button', { name: /^Edit service visit/ }).click();
+      await page.getByRole('button', { name: 'Choose files to attach to this service visit' }).waitFor();
+      await page.locator('.svc-form input[type=file]').setInputFiles({ name: 'invoice.pdf', mimeType: 'application/pdf', buffer: TINY_PDF });
+      await page.locator('.svc-form').getByText('invoice.pdf').waitFor();
+      await page.locator('.svc-form input[type=file]').setInputFiles({ name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('hello') });
+      await page.getByText('"notes.txt" is not a PDF, JPEG or PNG file.').waitFor();
+      await page.getByRole('button', { name: 'Save changes' }).click();
+      await card.getByText('invoice.pdf').waitFor();
+      assert.deepEqual(await axe('service list with attachments'), []);
+      await card.getByRole('button', { name: 'Preview receipt.png' }).click();
+      const preview = page.getByRole('dialog', { name: 'Preview of receipt.png' });
+      await preview.locator('img').waitFor();
+      assert.deepEqual(await axe('attachment preview'), []);
+      await preview.getByRole('button', { name: 'Close' }).click();
+      await card.getByRole('button', { name: 'Rename invoice.pdf' }).click();
+      await card.getByLabel('New name for invoice.pdf').fill('March invoice.pdf');
+      await card.getByRole('button', { name: 'Save name' }).click();
+      await card.getByText('March invoice.pdf').waitFor();
+      await card.getByRole('button', { name: 'Remove receipt.png' }).click();
+      await page.getByRole('dialog').getByRole('button', { name: 'Remove' }).click();
+      await card.getByRole('button', { name: 'Preview receipt.png' }).waitFor({ state: 'detached' });
+      assert.deepEqual((await db.pool.query('SELECT file_name, content_type FROM service_attachments ORDER BY file_name')).rows, [{ file_name: 'March invoice.pdf', content_type: 'application/pdf' }]);
+
+      // The visit lives in the API with exact strings: an item left empty stays unknown, a typed 0 stays zero.
+      const stored = await db.pool.query("SELECT i.name, i.cost::text AS cost, v.visit_total_cost::text AS total, v.odometer_input::text AS odo FROM service_visits v JOIN service_items i ON i.visit_id = v.id ORDER BY i.position");
+      assert.deepEqual(stored.rows, [{ name: 'Oil change', cost: '0', total: '89.50', odo: '45210' }, { name: 'Wipers', cost: null, total: '89.50', odo: '45210' }]);
+      assert.equal((await db.pool.query('SELECT count(*)::int AS n FROM fill_ups')).rows[0].n, 3, 'fuel records are untouched');
+
+      // Search narrows the list.
+      await page.getByLabel('Search').fill('nothing like this');
+      await page.getByRole('button', { name: 'Apply' }).click();
+      await page.getByText('No service visits match these filters.').waitFor();
+      await page.getByRole('link', { name: 'Clear' }).click();
+      await card.waitFor();
+
+      // Correct, then delete with confirmation.
+      await card.getByRole('button', { name: /^Edit service visit/ }).click();
+      await page.getByLabel('Provider (optional)').fill('Main Street Garage');
+      await page.getByRole('button', { name: 'Save changes' }).click();
+      await page.getByText('Main Street Garage').waitFor();
+      await page.locator('article.svc-visit').first().getByRole('button', { name: /^Delete service visit/ }).click();
+      await page.getByRole('dialog').getByRole('button', { name: 'Delete' }).click();
+      await page.getByText('Start from today. Adding past service is optional.').waitFor();
+      await noErrorPage();
+    });
+
+    await t.test('service history on a phone: reachable from the vehicle screen, add sheet, list, hidden by preference', async () => {
+      const { ctx, p, phoneAxe, open } = await phonePage();
+      try {
+        await open(`${vehicle}/overview`);
+        await p.getByRole('link', { name: /^Service/ }).click();
+        await p.getByRole('heading', { name: 'Service', level: 1 }).waitFor();
+        await p.getByText('Start from today. Adding past service is optional.').first().waitFor();
+        assert.equal(await overflows(p), false, 'service overflows on a phone');
+        assert.equal(await p.getByRole('navigation', { name: 'Main' }).getByRole('link').count(), 5, 'bottom navigation is unchanged');
+        await p.getByRole('button', { name: 'Add service visit' }).click();
+        const sheet = p.getByRole('dialog');
+        await sheet.getByLabel('Item', { exact: true }).first().fill('Brake pads');
+        await sheet.getByLabel(/^Cost \(.*optional\)$/).first().fill('120.00');
+        await sheet.getByRole('button', { name: /^Take photo/ }).waitFor();
+        await sheet.locator('input[type=file][capture]').setInputFiles({ name: 'IMG_0001.png', mimeType: 'image/png', buffer: TINY_PNG });
+        await sheet.getByText('IMG_0001.png').waitFor();
+        await sheet.locator('input[type=file]:not([capture])').setInputFiles({ name: 'garage.pdf', mimeType: 'application/pdf', buffer: TINY_PDF });
+        await sheet.getByRole('list', { name: 'Files to attach' }).getByText('garage.pdf').waitFor();
+        assert.deepEqual(await bothThemes(p, phoneAxe, 'service sheet'), []);
+        await sheet.getByRole('button', { name: 'Add visit' }).click();
+        await p.locator('article.svc-visit').first().waitFor();
+        await p.locator('article.svc-visit').getByText('Brake pads').waitFor();
+        await p.locator('article.svc-visit').getByText('IMG_0001.png').waitFor();
+        await p.locator('article.svc-visit').getByText('garage.pdf').waitFor();
+        assert.equal((await db.pool.query("SELECT count(*)::int AS n FROM service_attachments WHERE file_name IN ('IMG_0001.png','garage.pdf')")).rows[0].n, 2);
+        assert.equal(await overflows(p), false);
+        assert.deepEqual(await bothThemes(p, phoneAxe, 'service list'), []);
+        await p.emulateMedia({ colorScheme: 'light' });
+        // More leads to it as well.
+        await open('more');
+        await p.getByRole('link', { name: /^Service/ }).waitFor();
+        // Hiding the page for this vehicle removes the entries but not the data.
+        const who = (await db.pool.query('SELECT id FROM users WHERE email = $1', [ADMIN.email])).rows[0].id;
+        await db.pool.query('INSERT INTO vehicle_user_prefs (vehicle_id, user_id, show_service) VALUES ($1,$2,false)', [vehicle.split('/')[1], who]);
+        await open(`${vehicle}/overview`);
+        assert.equal(await p.getByRole('link', { name: /^Service/ }).count(), 0);
+        await open('more');
+        assert.equal(await p.getByRole('link', { name: /^Service/ }).count(), 0);
+      } finally { await ctx.close(); }
+      assert.equal((await db.pool.query('SELECT count(*)::int AS n FROM service_visits')).rows[0].n, 1, 'data kept while hidden');
+      // Restore: module off and nothing hidden, so the rest of the journey is as before.
+      await db.pool.query("DELETE FROM vehicle_user_prefs");
+      await db.pool.query("UPDATE instance_modules SET enabled = false WHERE module = 'service'");
+      await page.goto(`${base}/#/${vehicle}`);
+      await page.reload();
+      await page.getByRole('heading', { name: 'At a glance' }).waitFor();
+    });
+
+    await t.test('maintenance planning on desktop: add a task, mark it done through a linked visit, snooze', async () => {
+      await db.pool.query("INSERT INTO instance_modules (module, enabled) VALUES ('service', true) ON CONFLICT (module) DO UPDATE SET enabled = true");
+      try {
+        await page.goto(`${base}/#/${vehicle}/service?view=maintenance`);
+        await page.reload();
+        await page.getByRole('heading', { name: 'Service', level: 1 }).waitFor();
+        await page.getByText('Add what you want to keep track of.').waitFor();
+        await page.getByText("DriveLoom does not ship manufacturer schedules.").waitFor();
+        assert.equal(await page.getByRole('navigation', { name: 'Service sections' }).getByRole('link', { name: 'Maintenance' }).getAttribute('aria-current'), 'page');
+        assert.deepEqual(await axe('maintenance empty'), []);
+
+        await page.getByRole('button', { name: 'Add maintenance task' }).click();
+        await page.getByLabel('Common service types').selectOption({ label: 'Oil change' });
+        assert.equal(await page.getByLabel('Task name').inputValue(), 'Oil change');
+        await page.getByLabel('Every how many days (optional)').fill('365');
+        await page.getByLabel('Interval distance').fill('15000');
+        assert.deepEqual(await axe('maintenance form'), []);
+        await page.getByRole('button', { name: 'Add task' }).click();
+        const card = page.locator('article.mt-task').first();
+        await card.getByRole('heading', { name: 'Oil change' }).waitFor();
+        await card.getByText('No starting point', { exact: true }).waitFor();
+        await card.getByText('Repeats every 365 days or 15,000 km, whichever comes first').waitFor();
+        assert.deepEqual(await axe('maintenance list'), []);
+
+        // "Mark done" opens the visit form with the item linked; nothing is linked automatically.
+        await card.getByRole('button', { name: 'Mark done: Oil change' }).click();
+        assert.equal(await page.getByLabel('Item', { exact: true }).first().inputValue(), 'Oil change');
+        assert.equal(await page.getByLabel('Completes maintenance task (optional)').inputValue() !== '', true);
+        await page.getByLabel('Odometer reading').fill('42000');
+        await page.getByRole('button', { name: 'Add visit' }).click();
+        await page.locator('article.mt-task').first().getByText('On track', { exact: true }).waitFor();
+        await page.locator('article.mt-task').first().getByText(/Last done .* at 42,000 km/).waitFor();
+        assert.equal((await db.pool.query('SELECT count(*)::int AS n FROM service_items WHERE task_id IS NOT NULL')).rows[0].n, 1);
+
+        // Snooze mutes reminders only; the status stays visible.
+        await page.locator('article.mt-task').first().getByRole('button', { name: 'Snooze reminders for Oil change' }).click();
+        await page.getByText('Snoozing only mutes reminders.').waitFor();
+        assert.deepEqual(await axe('snooze form'), []);
+        await page.getByLabel('Reason (optional)').fill('next week');
+        await page.getByRole('button', { name: 'Snooze', exact: true }).click();
+        await page.locator('article.mt-task').first().getByText(/Reminders muted for you until/).waitFor();
+        await page.locator('article.mt-task').first().getByText('On track', { exact: true }).waitFor();
+        assert.equal((await db.pool.query("SELECT count(*)::int AS n FROM task_snoozes WHERE scope = 'personal'")).rows[0].n, 1);
+
+        // The History section links the task by name and points at what needs attention.
+        await page.getByRole('navigation', { name: 'Service sections' }).getByRole('link', { name: 'History' }).click();
+        await page.locator('article.svc-visit').getByText('completes Oil change').waitFor();
+        assert.deepEqual(await axe('service history with a linked item'), []);
+        await noErrorPage();
+      } finally {
+        await db.pool.query('DELETE FROM service_visits');
+        await db.pool.query('DELETE FROM maintenance_tasks');
+        await db.pool.query("UPDATE instance_modules SET enabled = false WHERE module = 'service'");
+      }
+    });
+
+    await t.test('maintenance planning on a phone: section in the Service screen, add and snooze in sheets, bottom navigation untouched', async () => {
+      await db.pool.query("INSERT INTO instance_modules (module, enabled) VALUES ('service', true) ON CONFLICT (module) DO UPDATE SET enabled = true");
+      const { ctx, p, phoneAxe, open } = await phonePage();
+      try {
+        await open(`${vehicle}/overview`);
+        await p.getByRole('link', { name: /^Service/ }).click();
+        await p.getByRole('heading', { name: 'Service', level: 1 }).waitFor();
+        await p.getByRole('navigation', { name: 'Service sections' }).getByRole('link', { name: 'Maintenance' }).click();
+        await p.getByText('Add what you want to keep track of.').waitFor();
+        assert.equal(await p.getByRole('navigation', { name: 'Main' }).getByRole('link').count(), 5, 'bottom navigation is unchanged');
+        assert.deepEqual(await bothThemes(p, phoneAxe, 'maintenance empty'), []);
+        await p.getByRole('button', { name: 'Add maintenance task' }).click();
+        const sheet = p.getByRole('dialog');
+        await sheet.getByLabel('Task name').fill('Tyre rotation');
+        await sheet.getByLabel('Interval distance').fill('10000');
+        assert.deepEqual(await bothThemes(p, phoneAxe, 'maintenance sheet'), []);
+        await sheet.getByRole('button', { name: 'Add task' }).click();
+        const card = p.locator('article.mt-task').first();
+        await card.getByRole('heading', { name: 'Tyre rotation' }).waitFor();
+        assert.equal(await overflows(p), false, 'maintenance overflows on a phone');
+        assert.deepEqual(await bothThemes(p, phoneAxe, 'maintenance list'), []);
+        await card.getByRole('button', { name: 'Snooze reminders for Tyre rotation' }).click();
+        const snooze = p.getByRole('dialog');
+        await snooze.getByText('Snoozing only mutes reminders.').waitFor();
+        assert.equal(await snooze.getByLabel('Additional distance', { exact: true }).isDisabled(), false, 'the vehicle has fuel records, so a distance snooze can be worked out');
+        await snooze.getByText('Counted from the latest odometer reading, once, when you save.').waitFor();
+        assert.deepEqual(await bothThemes(p, phoneAxe, 'snooze sheet'), []);
+        await snooze.getByRole('radio', { name: '1 month' }).check();
+        await snooze.getByRole('button', { name: 'Snooze', exact: true }).click();
+        await p.locator('article.mt-task').first().getByText(/Reminders muted for you until/).waitFor();
+        assert.equal((await db.pool.query("SELECT count(*)::int AS n FROM task_snoozes WHERE scope = 'personal'")).rows[0].n, 1);
+        await p.emulateMedia({ colorScheme: 'light' });
+      } finally {
+        await ctx.close();
+        await db.pool.query('DELETE FROM maintenance_tasks');
+        await db.pool.query("UPDATE instance_modules SET enabled = false WHERE module = 'service'");
+      }
+    });
+
+    await t.test('reminders by email on desktop: no-SMTP notice, owner settings and the personal switch', async () => {
+      await db.pool.query("INSERT INTO instance_modules (module, enabled) VALUES ('service', true) ON CONFLICT (module) DO UPDATE SET enabled = true");
+      const vid = vehicle.split('/')[1];
+      try {
+        await page.goto(`${base}/#/${vehicle}/service?view=maintenance`);
+        await page.reload();
+        const panel = page.getByRole('region', { name: 'Reminders by email' });
+        const notice = 'Ask your administrator to configure email; in-app reminders keep working.';
+        // An earlier step saved SMTP settings: no notice. Without SMTP the notice shows (and stays for the phone step).
+        await panel.getByText('Reminder emails are off for this vehicle.').waitFor();
+        assert.ok(integrations.mailer, 'SMTP configured by the administration step');
+        assert.equal(await panel.getByText(notice).count(), 0);
+        await integrations.clearSmtp();
+        await page.reload();
+        await panel.getByText(notice).waitFor();
+        assert.equal(await panel.getByRole('switch', { name: 'Email me about this vehicle' }).isChecked(), true);
+        assert.deepEqual(await axe('reminders by email'), []);
+        await panel.getByRole('button', { name: 'Change email settings' }).click();
+        await page.getByRole('heading', { name: 'Reminder email settings' }).waitFor();
+        const owner = page.getByRole('group', { name: 'Who gets the emails' }).getByRole('checkbox').first();
+        assert.equal(await owner.isChecked(), true); assert.equal(await owner.isDisabled(), true, 'the owner is always included');
+        assert.deepEqual(await axe('reminder email settings'), []);
+        await page.getByRole('switch', { name: 'Send reminder emails for this vehicle' }).check();
+        await page.getByLabel('Repeat while a task stays due').selectOption({ label: 'Every 2 weeks' });
+        await page.getByRole('button', { name: 'Save email settings' }).click();
+        await page.getByText('Reminder emails are on for this vehicle. While a task stays due, the reminder is repeated every 14 days.').waitFor();
+        assert.deepEqual((await db.pool.query('SELECT email_enabled, follow_up_days FROM vehicle_notification_settings WHERE vehicle_id = $1', [vid])).rows, [{ email_enabled: true, follow_up_days: 14 }]);
+        await page.getByRole('switch', { name: 'Email me about this vehicle' }).uncheck();
+        await page.getByText('You have turned off reminder emails for this vehicle.').waitFor();
+        assert.equal((await db.pool.query('SELECT count(*)::int AS n FROM vehicle_notification_optouts WHERE vehicle_id = $1', [vid])).rows[0].n, 1);
+        assert.deepEqual(await axe('reminders by email, opted out'), []);
+        await noErrorPage();
+      } finally {
+        await db.pool.query('DELETE FROM vehicle_notification_optouts');
+        await db.pool.query('DELETE FROM vehicle_notification_settings');
+        await db.pool.query("UPDATE instance_modules SET enabled = false WHERE module = 'service'");
+      }
+    });
+
+    await t.test('reminders by email on a phone: personal switch inline, settings in a sheet, bottom navigation untouched', async () => {
+      await db.pool.query("INSERT INTO instance_modules (module, enabled) VALUES ('service', true) ON CONFLICT (module) DO UPDATE SET enabled = true");
+      const vid = vehicle.split('/')[1];
+      const { ctx, p, phoneAxe, open } = await phonePage();
+      try {
+        await open(`${vehicle}/service?view=maintenance`);
+        const panel = p.getByRole('region', { name: 'Reminders by email' });
+        await panel.waitFor();
+        await panel.getByText('Ask your administrator to configure email; in-app reminders keep working.').waitFor();
+        assert.equal(await p.getByRole('navigation', { name: 'Main' }).getByRole('link').count(), 5, 'bottom navigation is unchanged');
+        assert.equal(await overflows(p), false, 'reminders panel overflows on a phone');
+        assert.deepEqual(await bothThemes(p, phoneAxe, 'reminders by email'), []);
+        await panel.getByRole('button', { name: 'Change email settings' }).click();
+        const sheet = p.getByRole('dialog');
+        await sheet.getByRole('switch', { name: 'Send reminder emails for this vehicle' }).waitFor();
+        assert.deepEqual(await bothThemes(p, phoneAxe, 'reminder email settings sheet'), []);
+        await sheet.getByRole('switch', { name: 'Send reminder emails for this vehicle' }).check();
+        await sheet.getByRole('button', { name: 'Save email settings' }).click();
+        await p.getByText(/Reminder emails are on for this vehicle\./).waitFor();
+        assert.equal((await db.pool.query('SELECT email_enabled FROM vehicle_notification_settings WHERE vehicle_id = $1', [vid])).rows[0].email_enabled, true);
+        await p.getByRole('switch', { name: 'Email me about this vehicle' }).uncheck();
+        await p.getByText('You have turned off reminder emails for this vehicle.').waitFor();
+        assert.equal((await db.pool.query('SELECT count(*)::int AS n FROM vehicle_notification_optouts WHERE vehicle_id = $1', [vid])).rows[0].n, 1);
+        await p.emulateMedia({ colorScheme: 'light' });
+      } finally {
+        await ctx.close();
+        await db.pool.query('DELETE FROM vehicle_notification_optouts');
+        await db.pool.query('DELETE FROM vehicle_notification_settings');
+        await db.pool.query("UPDATE instance_modules SET enabled = false WHERE module = 'service'");
       }
     });
 
