@@ -1670,12 +1670,13 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       await dlg.getByRole('button', { name: 'Next' }).click();
       // 2: trust wording, an edited interval, a deselected task; there is no way to add a task.
       await step(2, 'Review the tasks');
-      assert.equal(await dlg.getByText('Community suggestion — not an official manufacturer requirement').count(), 4, 'every task carries its trust label');
+      assert.equal(await dlg.getByText('Community suggestion — not an official manufacturer requirement').count(), 14, 'every community task carries its trust label');
+      assert.equal(await dlg.getByText('Manufacturer information', { exact: true }).count(), 3, 'every manufacturer task carries its trust label');
       assert.equal(await dlg.getByRole('button', { name: /add/i }).count(), 0, 'the flow never adds tasks');
       await dlg.getByLabel('Engine oil and filter: every how many months (optional)').fill('12');
       await dlg.getByText('Every 12 months or 5,000 mi, whichever comes first').waitFor();
       await dlg.getByText(/You changed this interval/).waitFor();
-      await dlg.getByLabel('Include Transmission fluid').uncheck();
+      for (const name of ['Transmission fluid', 'Tire rotation', 'Brake inspection', 'Engine air filter', 'Dust and pollen (cabin) filter', 'Drive belt inspection', 'Engine coolant', 'Spark plugs', 'Water pump inspection', 'Valve clearance inspection', 'Idle speed inspection', 'Battery terminal check', 'Wiper blades', 'General inspection']) await dlg.getByLabel(`Include ${name}`, { exact: true }).uncheck();
       await check('step 2');
       await dlg.getByRole('button', { name: 'Next' }).click();
       // 3: a starting point per selected task. Only these three are listed.
@@ -1723,16 +1724,16 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       assert.equal(await card('Engine oil and filter').getByText('No starting point').count(), 0, 'a tracking point is not "No starting point"');
       await card('Engine oil and filter').getByText(/Tracking since .* not a completed service/).first().waitFor();
       await card('Engine oil and filter').getByText('Originally suggested by the preset. The interval is now your own.').waitFor();
-      await card('Brake fluid').getByText(/^Originally suggested by the preset \(community suggestion\)/).waitFor();
+      await card('Brake fluid').getByText(/^Originally suggested by the preset \(manufacturer information\)/).waitFor();
       await card('Brake fluid').getByText(/Last done .*2024.*as you reported/).waitFor();
       const rows = (await db.pool.query('SELECT name, reminders_enabled, baseline_kind, source_trust, interval_months FROM maintenance_tasks ORDER BY name')).rows;
       assert.deepEqual(rows, [
-        { name: 'Brake fluid', reminders_enabled: false, baseline_kind: 'reported', source_trust: 'community', interval_months: 36 },
+        { name: 'Brake fluid', reminders_enabled: false, baseline_kind: 'reported', source_trust: 'manufacturer', interval_months: 36 },
         { name: 'Engine oil and filter', reminders_enabled: false, baseline_kind: 'tracking', source_trust: null, interval_months: 12 },
         { name: 'Timing belt', reminders_enabled: false, baseline_kind: null, source_trust: 'community', interval_months: 84 },
       ]);
       assert.equal((await db.pool.query('SELECT count(*)::int AS n FROM service_visits')).rows[0].n, 0, 'no service record is invented');
-      // One task is still on offer, so the banner stays; the three imported ones are not offered again.
+      // Fourteen tasks are still on offer, so the banner stays; the three imported ones are not offered again.
       await p.getByText('Maintenance recommendations available').waitFor();
       await p.getByRole('button', { name: 'Review maintenance recommendations' }).click();
       await dlg.getByLabel('This vehicle is a US-market vehicle').check();

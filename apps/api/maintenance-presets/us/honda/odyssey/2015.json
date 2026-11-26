@@ -1,13 +1,20 @@
 {
   "schemaVersion": 1,
   "id": "us-honda-odyssey-2015",
-  "version": 1,
+  "version": 2,
   "market": "us",
   "make": "honda",
   "model": "odyssey",
   "year": 2015,
-  "reviewedOn": "2026-11-23",
-  "sources": [],
+  "reviewedOn": "2026-11-26",
+  "sources": [
+    {
+      "title": "2015 Honda Odyssey Owner's Guide (U.S.)",
+      "url": "https://techinfo.honda.com/rjanisis/pubs/QS/AH/AK81515OG/enu/AK81515OG.pdf",
+      "kind": "manufacturer",
+      "note": "Read 2026-11-26. Maintenance section, pp. 122-123 (maintenance schedule notes) and p. 128 (battery)."
+    }
+  ],
   "tasks": [
     {
       "id": "engine-oil",
@@ -16,7 +23,7 @@
       "description": "Change the engine oil and filter.",
       "rule": { "months": 6, "distance": { "value": "5000", "unit": "mi" } },
       "trust": "community",
-      "sourceNote": "Community-suggested, editable interval. Not an official Honda requirement; check your owner's guide and adjust to how you drive.",
+      "sourceNote": "Community-suggested, editable interval. Not an official Honda requirement. The Owner's Guide (p. 122-123) says to change the oil at least once a year.",
       "severity": "info"
     },
     {
@@ -25,18 +32,18 @@
       "catalogKey": "brake_fluid",
       "description": "Replace the brake fluid, which absorbs moisture over time.",
       "rule": { "months": 36 },
-      "trust": "community",
-      "sourceNote": "Community-suggested time interval of 3 years, editable. Not verified against the Honda owner's guide; check it and adjust.",
+      "trust": "manufacturer",
+      "sourceNote": "Owner's Guide p. 122-123: replace the brake fluid every 3 years.",
       "severity": "caution"
     },
     {
       "id": "timing-belt",
       "name": "Timing belt",
       "catalogKey": "timing_belt",
-      "description": "Replace the timing belt (the 3.5L V6 is generally reported to use a belt). A failed belt can cause severe engine damage.",
+      "description": "Replace the timing belt. The Owner's Guide confirms the 3.5L V6 uses a timing belt. A failed belt can cause severe engine damage.",
       "rule": { "months": 84, "distance": { "value": "100000", "unit": "mi" } },
       "trust": "community",
-      "sourceNote": "Community-suggested, editable interval, deliberately conservative. Not an official Honda requirement; confirm with your owner's guide or a Honda technician.",
+      "sourceNote": "Community-suggested, editable interval. Not an official Honda requirement. The Owner's Guide (p. 122-123) says to replace the belt every 60,000 mi if you regularly drive in very high (over 110°F) or very low (under -20°F) temperatures.",
       "severity": "caution"
     },
     {
@@ -46,6 +53,132 @@
       "rule": { "months": 36, "distance": { "value": "30000", "unit": "mi" } },
       "trust": "community",
       "sourceNote": "Community-suggested, editable interval. Not an official Honda requirement; check your owner's guide and adjust to how you drive.",
+      "severity": "info"
+    },
+    {
+      "id": "tire-rotation",
+      "name": "Tire rotation",
+      "catalogKey": "tyre_rotation",
+      "description": "Rotate the tires to even out wear.",
+      "rule": { "months": 12, "distance": { "value": "7500", "unit": "mi" } },
+      "trust": "community",
+      "sourceNote": "Community-suggested, editable value. Not an official Honda requirement.",
+      "severity": "info"
+    },
+    {
+      "id": "brake-inspection",
+      "name": "Brake inspection",
+      "catalogKey": "brake_inspection",
+      "description": "Inspect the front and rear brakes, parking brake, and brake hoses and lines.",
+      "rule": { "months": 12, "distance": { "value": "15000", "unit": "mi" } },
+      "trust": "community",
+      "sourceNote": "Community-suggested, editable value. Not an official Honda requirement.",
+      "severity": "caution"
+    },
+    {
+      "id": "engine-air-filter",
+      "name": "Engine air filter",
+      "catalogKey": "air_filter",
+      "description": "Replace the engine air filter.",
+      "rule": { "months": 36, "distance": { "value": "30000", "unit": "mi" } },
+      "trust": "community",
+      "sourceNote": "Community-suggested, editable value. Not an official Honda requirement. The Owner's Guide (p. 122-123) says to replace it every 15,000 mi in dusty conditions.",
+      "severity": "info"
+    },
+    {
+      "id": "cabin-filter",
+      "name": "Dust and pollen (cabin) filter",
+      "catalogKey": "cabin_filter",
+      "description": "Replace the dust and pollen filter that cleans the cabin air.",
+      "rule": { "months": 12, "distance": { "value": "15000", "unit": "mi" } },
+      "trust": "community",
+      "sourceNote": "Community-suggested, editable value. Not an official Honda requirement. The Owner's Guide (p. 122-123) says to replace it every 15,000 mi if you drive mainly in urban areas with heavy soot or diesel pollution.",
+      "severity": "info"
+    },
+    {
+      "id": "drive-belt-inspection",
+      "name": "Drive belt inspection",
+      "description": "Inspect the drive belt for wear and cracks.",
+      "rule": { "months": 36, "distance": { "value": "30000", "unit": "mi" } },
+      "trust": "community",
+      "sourceNote": "Community-suggested, editable value. Not an official Honda requirement.",
+      "severity": "info"
+    },
+    {
+      "id": "engine-coolant",
+      "name": "Engine coolant",
+      "catalogKey": "coolant",
+      "description": "Replace the engine coolant. The Owner's Guide recommends Honda Long Life Antifreeze/Coolant Type 2.",
+      "rule": { "months": 60, "distance": { "value": "60000", "unit": "mi" } },
+      "trust": "community",
+      "sourceNote": "Community-suggested, deliberately conservative, editable value. Not an official Honda requirement.",
+      "severity": "info"
+    },
+    {
+      "id": "spark-plugs",
+      "name": "Spark plugs",
+      "catalogKey": "spark_plugs",
+      "description": "Replace the spark plugs.",
+      "rule": { "distance": { "value": "100000", "unit": "mi" } },
+      "trust": "community",
+      "sourceNote": "Community-suggested, editable value. Not an official Honda requirement.",
+      "severity": "info"
+    },
+    {
+      "id": "water-pump-inspection",
+      "name": "Water pump inspection",
+      "description": "Inspect the water pump when the timing belt is replaced; the Owner's Guide pairs them.",
+      "rule": { "months": 84, "distance": { "value": "100000", "unit": "mi" } },
+      "trust": "community",
+      "sourceNote": "Community-suggested, editable value. Not an official Honda requirement.",
+      "severity": "caution"
+    },
+    {
+      "id": "valve-clearance",
+      "name": "Valve clearance inspection",
+      "description": "Inspect the valve clearance. The Owner's Guide also advises adjusting the valves if they are noisy.",
+      "rule": { "distance": { "value": "100000", "unit": "mi" } },
+      "trust": "community",
+      "sourceNote": "Community-suggested, editable value. Not an official Honda requirement.",
+      "severity": "info"
+    },
+    {
+      "id": "idle-speed-inspection",
+      "name": "Idle speed inspection",
+      "description": "Inspect the engine idle speed.",
+      "rule": { "distance": { "value": "160000", "unit": "mi" } },
+      "trust": "manufacturer",
+      "sourceNote": "Owner's Guide p. 122-123: inspect idle speed every 160,000 miles.",
+      "severity": "info"
+    },
+    {
+      "id": "battery-terminals",
+      "name": "Battery terminal check",
+      "catalogKey": "battery",
+      "description": "Check the battery terminals for corrosion.",
+      "rule": { "months": 1 },
+      "trust": "manufacturer",
+      "sourceNote": "Owner's Guide p. 128: check the battery terminals for corrosion monthly.",
+      "severity": "info"
+    },
+    {
+      "id": "wiper-blades",
+      "name": "Wiper blades",
+      "catalogKey": "wipers",
+      "description": "Replace the front and rear wiper blade rubber when it streaks or deteriorates.",
+      "rule": { "months": 12 },
+      "trust": "community",
+      "sourceNote": "Community-suggested, editable value. Not an official Honda requirement.",
+      "severity": "info"
+    },
+    {
+      "id": "general-inspection",
+      "name": "General inspection",
+      "catalogKey": "general_inspection",
+      "description": "Inspect steering (tie rod ends, gearbox, boots), suspension, driveshaft boots, exhaust, fuel lines, and fluid levels.",
+      "rule": { "months": 12, "distance": { "value": "15000", "unit": "mi" } },
+      "trust": "community",
+      "sourceNote": "Community-suggested, editable value. Not an official Honda requirement.",
       "severity": "info"
     }
   ]

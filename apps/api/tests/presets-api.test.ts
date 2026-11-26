@@ -33,7 +33,8 @@ import { startApp, type TestApp } from './helpers/http.ts';
 const skip = process.env['DATABASE_URL'] ? false : 'DATABASE_URL not set';
 const day = (n: number) => addDays(utcDate(new Date()), n);
 const ODY = 'us-honda-odyssey-2015';
-const ALL = ['engine-oil', 'brake-fluid', 'timing-belt', 'transmission-fluid'];
+const ALL = ['engine-oil', 'brake-fluid', 'timing-belt', 'transmission-fluid', 'tire-rotation', 'brake-inspection', 'engine-air-filter', 'cabin-filter', 'drive-belt-inspection', 'engine-coolant', 'spark-plugs', 'water-pump-inspection', 'valve-clearance', 'idle-speed-inspection', 'battery-terminals', 'wiper-blades', 'general-inspection'];
+const MANUFACTURER = ['brake-fluid', 'idle-speed-inspection', 'battery-terminals'];
 const preset = (over: Partial<Preset> = {}): Preset => ({
   schemaVersion: 1, id: 'us-acme-roadster-2020', version: 1, market: 'us', make: 'acme', model: 'roadster', year: 2020, reviewedOn: '2026-01-01', sources: [],
   tasks: [{ id: 'oil', name: 'Oil', catalogKey: 'oil_change', description: 'd', rule: { months: 12 }, trust: 'community', sourceNote: 'n' }], ...over,
@@ -142,7 +143,7 @@ test('list: a matching vehicle sees the preset with trust labels; others see not
   const p = r.json.items[0];
   assert.equal(p.id, ODY); assert.deepEqual(p.needsQualifier, []);
   assert.deepEqual(p.tasks.map((t: any) => t.id), ALL);
-  assert.ok(p.tasks.every((t: any) => t.trust === 'community' && t.alreadyImported === null && t.existingTaskMatch === null));
+  assert.ok(p.tasks.every((t: any) => t.trust === (MANUFACTURER.includes(t.id) ? 'manufacturer' : 'community') && t.alreadyImported === null && t.existingTaskMatch === null));
   assert.deepEqual(p.tasks[0].rule, { months: 6, distance: { value: '5000', unit: 'mi' } });
   assert.equal((await app.call(owner, 'GET', P(v))).json.canApply, true);
 
@@ -167,14 +168,14 @@ test('acceptance 1: no history -> tasks imported needing a baseline, nothing ove
   const before = await counts(v);
   const r = await apply(v, { tasks: sel() });
   assert.equal(r.preview, false);
-  assert.deepEqual(r.results.map((x: any) => x.result), ['created', 'created', 'created', 'created']);
+  assert.deepEqual(r.results.map((x: any) => x.result), ALL.map(() => 'created'));
   assert.ok(r.results.every((x: any) => x.status === 'no_baseline' && x.baseline === 'none' && x.dueOn === null && x.remindersEnabled === false));
   assert.deepEqual(r.reading.odometer, { value: '120000', unit: 'mi' });
   const ts = await tasks(v);
-  assert.equal(ts.length, 4);
+  assert.equal(ts.length, ALL.length);
   for (const t of ts) {
     assert.equal(t.status, 'no_baseline'); assert.equal(t.needsAttention, false);
-    assert.equal(t.presetId, ODY); assert.equal(t.presetVersion, 1); assert.equal(t.remindersEnabled, false); assert.equal(t.sourceTrust, 'community');
+    assert.equal(t.presetId, ODY); assert.equal(t.presetVersion, 2); assert.equal(t.remindersEnabled, false); assert.equal(t.sourceTrust, MANUFACTURER.includes(t.presetTaskId) ? 'manufacturer' : 'community');
     assert.ok(t.sourceNote.length > 0); assert.equal(t.notes, null); assert.equal(t.createdBy, owner.id);
   }
   assert.equal(byPreset(ts, 'engine-oil').intervalMonths, 6);
@@ -185,7 +186,7 @@ test('acceptance 1: no history -> tasks imported needing a baseline, nothing ove
   const afterCounts = await counts(v);
   assert.deepEqual(afterCounts, { ...before, o: 0, l: 0 }, 'no fill-ups, visits, outbox or ledger rows were added');
   const audit = (await db!.pool.query("SELECT details FROM audit_events WHERE subject_id = $1 AND action = 'maintenance_preset.apply'", [v])).rows;
-  assert.equal(audit.length, 1); assert.equal(audit[0].details.presetId, ODY); assert.equal(audit[0].details.results.length, 4);
+  assert.equal(audit.length, 1); assert.equal(audit[0].details.presetId, ODY); assert.equal(audit[0].details.results.length, ALL.length);
 });
 
 test('acceptance 2/3/5 via apply: reported baselines, a linked visit, then a real completion moves the due point', { skip }, async () => {
@@ -269,7 +270,7 @@ test('acceptance 6: re-applying with customised intervals and linked history -> 
   assert.deepEqual(again.results.map((x: any) => [x.result, x.reason]), ALL.map(() => ['skipped', 'already_imported']));
   assert.equal(again.results[0].taskId, oil);
   const now = await tasks(v);
-  assert.equal(now.length, 4);
+  assert.equal(now.length, ALL.length);
   assert.deepEqual(now.map((t) => ({ ...t, updatedAt: null })), snapshot.map((t) => ({ ...t, updatedAt: null })), 'nothing changed');
   assert.equal(byPreset(now, 'engine-oil').intervalMonths, 12); assert.equal(byPreset(now, 'engine-oil').lastCompleted.servicedOn, day(-10));
 });
@@ -292,7 +293,7 @@ test('similar typed-in task: reported in the list, skipped by default, or linked
   const linked = await apply(v, { tasks: [{ presetTaskId: 'engine-oil', onDuplicate: 'link', overrides: { intervalMonths: 1 }, baseline: { kind: 'tracking' } }] });
   assert.deepEqual(linked.results.map((x: any) => [x.result, x.taskId]), [['linked', mine.id]]);
   const after = (await app.call(owner, 'GET', T(v, mine.id))).json;
-  assert.equal(after.presetId, ODY); assert.equal(after.presetTaskId, 'engine-oil'); assert.equal(after.presetVersion, 1);
+  assert.equal(after.presetId, ODY); assert.equal(after.presetTaskId, 'engine-oil'); assert.equal(after.presetVersion, 2);
   const keep = (t: any) => ({ ...t, presetId: null, presetVersion: null, presetTaskId: null, updatedAt: null });
   assert.deepEqual(keep(after), keep(before), 'interval, baseline, reminders, labels, notes and snoozes unchanged');
   assert.equal(after.remindersEnabled, true); assert.equal(after.sourceTrust, null); assert.equal(after.snoozed.scope, 'vehicle');
@@ -420,9 +421,9 @@ test('export and import carry imported tasks; the new vehicle sees them as alrea
   const strip = (t: any) => ({ ...t, id: null, vehicleId: null, createdAt: null, updatedAt: null });
   assert.deepEqual((await tasks(nv)).map(strip), (await tasks(v)).map(strip));
   const brake = byPreset(await tasks(nv), 'brake-fluid');
-  assert.equal(brake.remindersEnabled, false); assert.equal(brake.dueOn, '2027-05-10'); assert.equal(brake.sourceTrust, 'community');
+  assert.equal(brake.remindersEnabled, false); assert.equal(brake.dueOn, '2027-05-10'); assert.equal(brake.sourceTrust, 'manufacturer');
   const list = (await app.call(owner, 'GET', P(nv))).json.items[0].tasks;
-  assert.deepEqual(list.map((t: any) => t.alreadyImported !== null), [true, true, false, false]);
+  assert.deepEqual(list.map((t: any) => t.alreadyImported !== null), ALL.map((id) => id === 'brake-fluid' || id === 'engine-oil'));
   const again = await app.call(owner, 'POST', `/v1/vehicles/${nv}/import`, { format: 'json', data: doc, dryRun: false });
   assert.equal(again.json.maintenanceTasks.duplicates, 2);
   assert.equal((await apply(nv, { tasks: sel(['brake-fluid']) })).results[0].reason, 'already_imported');
