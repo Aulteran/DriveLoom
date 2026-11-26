@@ -423,7 +423,7 @@ test('export and import carry imported tasks; the new vehicle sees them as alrea
   const brake = byPreset(await tasks(nv), 'brake-fluid');
   assert.equal(brake.remindersEnabled, false); assert.equal(brake.dueOn, '2027-05-10'); assert.equal(brake.sourceTrust, 'manufacturer');
   const list = (await app.call(owner, 'GET', P(nv))).json.items[0].tasks;
-  assert.deepEqual(list.map((t: any) => t.alreadyImported !== null), [true, true, false, false]);
+  assert.deepEqual(list.map((t: any) => t.alreadyImported !== null), ALL.map((id) => id === 'brake-fluid' || id === 'engine-oil'));
   const again = await app.call(owner, 'POST', `/v1/vehicles/${nv}/import`, { format: 'json', data: doc, dryRun: false });
   assert.equal(again.json.maintenanceTasks.duplicates, 2);
   assert.equal((await apply(nv, { tasks: sel(['brake-fluid']) })).results[0].reason, 'already_imported');
