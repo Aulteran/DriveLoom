@@ -48,11 +48,12 @@ test('the shipped schema file names the same keys as the validator', async () =>
   assert.deepEqual(Object.keys(s.properties).sort(), [...PRESET_KEYS.top].sort());
   assert.deepEqual(Object.keys(s.properties.tasks.items.properties).sort(), [...PRESET_KEYS.task].sort());
 });
-test('the shipped 2015 Odyssey preset validates with exactly four tasks', async () => {
+test('the shipped 2015 Odyssey preset validates with the full task list', async () => {
   const text = await readFile(new URL(`../maintenance-presets/${PATH}`, import.meta.url), 'utf8');
   const { preset, errors } = validatePresetText(text, PATH);
   assert.deepEqual(errors, []);
   const p = preset as { tasks: { id: string; trust: string }[] };
-  assert.deepEqual(p.tasks.map((t) => t.id), ['engine-oil', 'brake-fluid', 'timing-belt', 'transmission-fluid']);
-  assert.ok(p.tasks.every((t) => t.trust === 'community'));
+  assert.deepEqual(p.tasks.map((t) => t.id), ['engine-oil', 'brake-fluid', 'timing-belt', 'transmission-fluid', 'tire-rotation', 'brake-inspection', 'engine-air-filter', 'cabin-filter', 'drive-belt-inspection', 'engine-coolant', 'spark-plugs', 'water-pump-inspection', 'valve-clearance', 'idle-speed-inspection', 'battery-terminals', 'wiper-blades', 'general-inspection']);
+  assert.deepEqual(p.tasks.filter((t) => t.trust === 'manufacturer').map((t) => t.id), ['brake-fluid', 'idle-speed-inspection', 'battery-terminals']);
+  assert.ok(p.tasks.every((t) => t.trust === 'community' || t.trust === 'manufacturer'));
 });
