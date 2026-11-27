@@ -5,6 +5,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
 import type { Id } from '../types.ts';
 import type { Principal, RequestContext } from '../identity.ts';
+import type { KeyPolicy } from '../auth/api-key-policy.ts';
 import { HttpProblem, problemBody, toProblem } from './problem.ts';
 import { clientIp, type IpTrust } from './ip.ts';
 
@@ -54,6 +55,12 @@ export interface Route {
   /** e.g. `/v1/vehicles/:id` */
   path: string;
   auth?: AuthMode;
+  /**
+   * How API keys may use this route (auth/api-key-policy.ts). Declared in
+   * auth/api-key-route-policies.ts and attached by allRoutes(); absent means
+   * session_only. Not read by the router yet: bearer authentication is not implemented.
+   */
+  key?: KeyPolicy;
   /** Overrides the app-wide JSON body limit for this route (imports). */
   maxBodyBytes?: number;
   /** Accept a binary body of one of these media types; `req.body` is then `{ type, data: Buffer }`. */

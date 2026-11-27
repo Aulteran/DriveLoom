@@ -28,6 +28,7 @@ import { friendRoutes } from './friends/routes.ts';
 import { PortabilityService } from './portability/service.ts';
 import { portabilityRoutes } from './portability/routes.ts';
 import { staticFiles } from './http/static.ts';
+import { withKeyPolicies } from './auth/api-key-route-policies.ts';
 import { API_VERSION } from './version.ts';
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
@@ -89,7 +90,7 @@ export function allRoutes(ctx: AuthContext, notifier: Notifier | null = null): R
     ...friendRoutes(new FriendService(ctx.db, vehicles, fuel, ctx.now)),
     ...portabilityRoutes(new PortabilityService(ctx.db, vehicles, fuel, service, ctx.now)),
   ];
-  return notifier ? withOdometerTrigger(routes, notifier) : routes;
+  return withKeyPolicies(notifier ? withOdometerTrigger(routes, notifier) : routes);
 }
 
 export interface ApplicationOptions {
