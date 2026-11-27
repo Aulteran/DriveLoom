@@ -12,6 +12,7 @@ import * as acct from './accounts.ts';
 import * as sess from './sessions.ts';
 import * as pk from './passkeys.ts';
 import * as oidc from './oidc.ts';
+import { apiKeyRoutes } from './api-key-routes.ts';
 
 const OIDC_BINDING_COOKIE = 'dl_oidc';
 
@@ -175,5 +176,7 @@ export function authRoutes(ctx: AuthContext): Route[] {
       return res;
     }),
     r('DELETE', '/v1/auth/oidc/identities/:id', 'required', async (req) => { await oidc.unlink(ctx, requirePrincipal(req.ctx), idParam(req)); return ok(); }),
+    // --- API keys (session-only management) ---
+    ...apiKeyRoutes(ctx),
   ];
 }

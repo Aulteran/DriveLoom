@@ -31,8 +31,13 @@ export const BACKUP_VERSION = 1;
  * in again after a restore. The email outbox too: a restored instance never
  * sends (or re-sends) another instance's queue. What each person was already
  * told (notification_task_log) is kept, so nothing is announced again either.
+ * API-key credentials (the keys, their grants and vehicle bindings, and the
+ * idempotency records) are never archived: a restored instance has no keys, and
+ * an archive that contains them is rejected. api_key_activity is history, like
+ * audit_events: it is archived, has no foreign keys and never authenticates.
  */
-export const EPHEMERAL_TABLES: readonly string[] = ['sessions', 'rate_limits', 'auth_challenges', 'one_time_codes', 'notification_outbox'];
+export const EPHEMERAL_TABLES: readonly string[] = ['sessions', 'rate_limits', 'auth_challenges', 'one_time_codes', 'notification_outbox',
+  'api_keys', 'api_key_permissions', 'api_key_vehicles', 'api_key_idempotency'];
 
 export class BackupError extends Error {
   readonly code: string;

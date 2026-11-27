@@ -55,9 +55,9 @@ export async function revokeSession(ctx: AuthContext, userId: Id, sessionId: Id)
 }
 
 /** Revoke every session of a user, optionally keeping one. Returns the number revoked. */
-export async function revokeAll(ctx: AuthContext, userId: Id, except: Id | null, reason: string): Promise<number> {
-  const r = await ctx.db.query('UPDATE sessions SET revoked_at = $3 WHERE user_id = $1 AND revoked_at IS NULL AND ($2::uuid IS NULL OR id <> $2)', [userId, except, ctx.now()]);
-  if (r.rowCount) await audit(ctx.db, userId, 'session.revoked_all', userId, { reason, count: r.rowCount }, ctx.now());
+export async function revokeAll(ctx: AuthContext, userId: Id, except: Id | null, reason: string, q: Pick<AuthContext['db'], 'query'> = ctx.db): Promise<number> {
+  const r = await q.query('UPDATE sessions SET revoked_at = $3 WHERE user_id = $1 AND revoked_at IS NULL AND ($2::uuid IS NULL OR id <> $2)', [userId, except, ctx.now()]);
+  if (r.rowCount) await audit(q, userId, 'session.revoked_all', userId, { reason, count: r.rowCount }, ctx.now());
   return r.rowCount ?? 0;
 }
 

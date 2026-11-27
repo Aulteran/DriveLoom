@@ -11,6 +11,7 @@ import {
 } from './crypto.ts';
 import { createSession, requireFresh, revokeAll, touchReauth, type NewSession } from './sessions.ts';
 import { applySignupUnits, parseUnits } from '../preferences.ts';
+import { deleteApiKeysForUser, revokeApiKeysForUser } from './api-keys.ts';
 
 const BOOTSTRAP_LOCK = 7_165_202;
 const TEN_MIN = 10 * 60_000, HOUR = 3_600_000;
@@ -287,10 +288,14 @@ export async function recoveryComplete(ctx: AuthContext, input: { email: unknown
   if (!u || u.status !== 'active') throw problem.invalidCode();
   await consumeCode(ctx, u.id, 'recover_account', input.code);
   const hash = await hashPassword(next);
-  await ctx.db.query('INSERT INTO password_credentials (user_id, hash, updated_at) VALUES ($1,$2,$3) ON CONFLICT (user_id) DO UPDATE SET hash = $2, updated_at = $3', [u.id, hash, ctx.now()]);
-  await ctx.db.query('UPDATE users SET email_verified_at = COALESCE(email_verified_at, $2) WHERE id = $1', [u.id, ctx.now()]);
-  await revokeAll(ctx, u.id, null, 'account_recovery');
-  await audit(ctx.db, u.id, 'recovery.completed', u.id, {}, ctx.now());
+  // The new password, the end of every session and the revocation of every API key commit together.
+  await withTx(ctx.db, async (tx) => {
+    await tx.query('INSERT INTO password_credentials (user_id, hash, updated_at) VALUES ($1,$2,$3) ON CONFLICT (user_id) DO UPDATE SET hash = $2, updated_at = $3', [u.id, hash, ctx.now()]);
+    await tx.query('UPDATE users SET email_verified_at = COALESCE(email_verified_at, $2) WHERE id = $1', [u.id, ctx.now()]);
+    await revokeAll(ctx, u.id, null, 'account_recovery', tx);
+    await revokeApiKeysForUser(tx, u.id, 'account_recovery', ctx.now(), { actor: u.id });
+    await audit(tx, u.id, 'recovery.completed', u.id, {}, ctx.now());
+  });
 }
 
 /** Operator recovery (CLI): set a new password without email. Always audited, revokes every session. */
@@ -300,9 +305,12 @@ export async function adminResetPassword(ctx: AuthContext, emailRaw: string, new
   const u = await findUser(ctx.db, email);
   if (!u) throw new HttpProblem(404, 'not_found', 'No such account');
   const hash = await hashPassword(next);
-  await ctx.db.query('INSERT INTO password_credentials (user_id, hash, updated_at) VALUES ($1,$2,$3) ON CONFLICT (user_id) DO UPDATE SET hash = $2, updated_at = $3', [u.id, hash, ctx.now()]);
-  await revokeAll(ctx, u.id, null, 'operator_recovery');
-  await audit(ctx.db, null, 'recovery.operator_password_reset', u.id, {}, ctx.now());
+  await withTx(ctx.db, async (tx) => {
+    await tx.query('INSERT INTO password_credentials (user_id, hash, updated_at) VALUES ($1,$2,$3) ON CONFLICT (user_id) DO UPDATE SET hash = $2, updated_at = $3', [u.id, hash, ctx.now()]);
+    await revokeAll(ctx, u.id, null, 'operator_recovery', tx);
+    await revokeApiKeysForUser(tx, u.id, 'operator_recovery', ctx.now());
+    await audit(tx, null, 'recovery.operator_password_reset', u.id, {}, ctx.now());
+  });
 }
 
 // ---------- TOTP ----------
@@ -400,6 +408,7 @@ export async function deleteAccount(ctx: AuthContext, p: Principal): Promise<voi
     }
     await tx.query('DELETE FROM friendships WHERE requester_id = $1 OR addressee_id = $1', [p.userId]);
     await tx.query('UPDATE sessions SET revoked_at = $2 WHERE user_id = $1 AND revoked_at IS NULL', [p.userId, ctx.now()]);
+    await deleteApiKeysForUser(tx, p.userId, ctx.now()); // keys, grants and bindings go; their history keeps only ids
     await tx.query("UPDATE users SET status = 'deleted', email = $2, display_name = '', email_verified_at = NULL WHERE id = $1", [p.userId, `deleted-${p.userId}@deleted.invalid`]);
     await audit(tx, p.userId, 'account.deleted', p.userId, {}, ctx.now());
   });

@@ -13,6 +13,7 @@ import { randomToken, sha256Hex } from '../auth/crypto.ts';
 import { requireFresh, revokeAll } from '../auth/sessions.ts';
 import { getInstanceDefaults, parseUnits, setInstanceDefaults } from '../preferences.ts';
 import { getModules, isModuleName, setModule } from '../modules.ts';
+import { getApiKeysEnabled, revokeApiKeysForUser, setApiKeysEnabled } from '../auth/api-keys.ts';
 
 const ADMIN_LOCK = 7_165_202; // same key as the bootstrap lock: serialises every change to the set of admins
 const notFound = () => new HttpProblem(404, 'user_not_found', 'User not found');
@@ -79,8 +80,12 @@ export function adminRoutes(ctx: AuthContext): Route[] {
       await change(r, async (tx, u) => {
         await tx.query('UPDATE users SET status = $2 WHERE id = $1', [u.id, status]);
         await audit(tx, admin(r).userId, status === 'disabled' ? 'admin.user_disabled' : 'admin.user_enabled', u.id, {}, ctx.now());
+        // Sessions and API keys end in the same transaction as the status change. Re-enabling never reactivates a key.
+        if (status === 'disabled') {
+          await revokeAll(ctx, u.id, null, 'account_disabled', tx);
+          await revokeApiKeysForUser(tx, u.id, 'account_disabled', ctx.now(), { actor: admin(r).userId });
+        }
       });
-      if (status === 'disabled') await revokeAll(ctx, target(r), null, 'account_disabled');
       return { status: 204 };
     } },
     { method: 'PUT', path: '/v1/admin/users/:userId/role', async handler(r) {
@@ -147,6 +152,23 @@ export function adminRoutes(ctx: AuthContext): Route[] {
         await audit(tx, p.userId, 'admin.module_changed', null, { module: name, from: was, to: enabled }, ctx.now());
       });
       return { status: 200, body: { modules: await getModules(ctx.db) } };
+    } },
+    // API keys: instance-wide switch, on unless an administrator turns it off. Turning it off blocks key sign-in, creation,
+    // rotation and broadening edits; owners can still list and revoke. Turning it back on resumes only keys that are still valid.
+    { method: 'GET', path: '/v1/admin/settings/api-keys', async handler(r) {
+      admin(r);
+      return { status: 200, body: { enabled: await getApiKeysEnabled(ctx.db) } };
+    } },
+    { method: 'PUT', path: '/v1/admin/settings/api-keys', async handler(r) {
+      const p = admin(r);
+      const { enabled } = obj(r.body, ['enabled']);
+      if (typeof enabled !== 'boolean') throw invalid('enabled must be a boolean.');
+      await withTx(ctx.db, async (tx) => {
+        const was = await getApiKeysEnabled(tx);
+        await setApiKeysEnabled(tx, enabled);
+        await audit(tx, p.userId, 'admin.api_keys_changed', null, { from: was, to: enabled }, ctx.now());
+      });
+      return { status: 200, body: { enabled } };
     } },
     // SMTP and OIDC. Secrets are write-only: the views say only whether one is stored.
     { method: 'GET', path: '/v1/admin/settings/smtp', async handler(r) { admin(r); return { status: 200, body: integ().smtpView() }; } },

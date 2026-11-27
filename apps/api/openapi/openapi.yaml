@@ -273,6 +273,136 @@ paths:
               schema: { $ref: '#/components/schemas/RevokedCount' }
         default:
           $ref: '#/components/responses/Problem'
+  /v1/auth/api-keys:
+    get:
+      operationId: listApiKeys
+      tags: [auth]
+      summary: 'List the caller''s API keys'
+      description: >
+        Metadata only: never the secret or its hash. `status` is `active`, `expired` or `revoked`; expired keys stay listed until removed.
+        `apiKeysEnabled` is false while an administrator has turned API keys off for the instance. Session only: an API key can never call this.
+      responses:
+        '200':
+          description: The keys, newest first.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiKeyList' }
+        default:
+          $ref: '#/components/responses/Problem'
+    post:
+      operationId: createApiKey
+      tags: [auth]
+      summary: 'Create an API key'
+      description: >
+        Needs a recent sign-in (`reauth_required` otherwise). Defaults: no module access, vehicle mode `selected` with no vehicles, expiry 30 days (computed by the server, UTC).
+        The token is returned once, in this response, and is never shown again. Errors: `too_many_api_keys` (409, at most 25 active keys), `api_keys_disabled` (403),
+        `validation_failed` (422, including unknown modules and levels a module does not offer, and vehicles the caller cannot access).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateApiKeyRequest' }
+      responses:
+        '201':
+          description: The key and its one-time token.
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiKeyWithToken' }
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/auth/api-keys/revoke-all:
+    post:
+      operationId: revokeAllApiKeys
+      tags: [auth]
+      summary: 'Revoke every active API key (lockdown)'
+      description: 'Immediate and without fresh authentication. History is kept.'
+      responses:
+        '200':
+          description: How many keys were revoked.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RevokedCount' }
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/auth/api-keys/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { $ref: '#/components/schemas/Id' } }
+    patch:
+      operationId: updateApiKey
+      tags: [auth]
+      summary: 'Edit an active API key'
+      description: >
+        Changes name, expiry, grants or vehicle scope; fields not sent are unchanged and `permissions`, when sent, replaces all module levels.
+        The server compares old and new: broadening (a higher level, a vehicle outside the old scope, a wider vehicle mode, vehicle creation, a later or no expiry)
+        needs a recent sign-in (`reauth_required`); renames and reductions need only the session. `all_current` takes a new snapshot only when the mode is switched to it.
+        Expired and revoked keys answer `api_key_not_active` (409) and are never reactivated. While API keys are disabled, a broadening edit answers `api_keys_disabled` (403).
+        Another user's key is 404 `api_key_not_found`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateApiKeyRequest' }
+      responses:
+        '200':
+          description: The updated key.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiKey' }
+        default:
+          $ref: '#/components/responses/Problem'
+    delete:
+      operationId: revokeApiKey
+      tags: [auth]
+      summary: 'Revoke an API key, or remove an expired or revoked one'
+      description: 'An active key is revoked immediately (no fresh sign-in). An expired or revoked key is removed from the list. Its activity history is kept either way.'
+      responses:
+        '204':
+          description: Done.
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/auth/api-keys/{id}/rotate:
+    parameters:
+      - { name: id, in: path, required: true, schema: { $ref: '#/components/schemas/Id' } }
+    post:
+      operationId: rotateApiKey
+      tags: [auth]
+      summary: 'Replace an API key''s secret'
+      description: >
+        Needs a recent sign-in. Atomically replaces the secret; id, grants and expiry are kept; the old token stops working at once (no grace period).
+        The new token is returned once. Blocked with `api_keys_disabled` while the instance switch is off; `api_key_not_active` (409) for expired or revoked keys.
+      responses:
+        '200':
+          description: The key and its new one-time token.
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiKeyWithToken' }
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/auth/api-keys/{id}/activity:
+    parameters:
+      - { name: id, in: path, required: true, schema: { $ref: '#/components/schemas/Id' } }
+    get:
+      operationId: listApiKeyActivity
+      tags: [auth]
+      summary: 'History of one API key'
+      description: >
+        Owner only, newest first, also for a removed key. Records key management (created, updated, rotated, revoked, revoked_all, removed) and, later, writes made with the key.
+        Events about a vehicle the caller can no longer access are returned with `redacted: true` and without vehicle or target ids. Reads are never logged.
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: before, in: query, required: false, description: 'Return events older than this activity id (use `nextBefore`).', schema: { $ref: '#/components/schemas/Id' } }
+      responses:
+        '200':
+          description: A page of events.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiKeyActivityPage' }
+        default:
+          $ref: '#/components/responses/Problem'
   /v1/auth/password:
     put:
       operationId: setPassword
@@ -1962,6 +2092,46 @@ paths:
         '403': { $ref: '#/components/responses/Problem' }
         '404': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
+  /v1/admin/settings/api-keys:
+    get:
+      operationId: adminGetApiKeysSetting
+      summary: Whether API keys are enabled on this instance
+      description: 'Enabled by default (also on existing installs).'
+      tags: [admin]
+      responses:
+        '200':
+          description: The setting.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiKeysSetting' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+    put:
+      operationId: adminSetApiKeysSetting
+      summary: Turn API keys on or off for the whole instance
+      description: >
+        Off blocks API-key authentication, creation, rotation and edits that broaden a key; owners can still list, review activity, revoke and reduce.
+        Turning it on again resumes only keys that are still valid. Audited as `admin.api_keys_changed`.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              additionalProperties: false
+              properties:
+                enabled: { type: boolean }
+      responses:
+        '200':
+          description: The updated setting.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiKeysSetting' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
   /v1/admin/settings/smtp:
     get:
       operationId: adminGetSmtpSettings
@@ -2384,6 +2554,109 @@ components:
               last_seen_at: { $ref: '#/components/schemas/Timestamp' }
               user_agent: { type: string }
               current: { type: boolean }
+    ApiKeyModuleLevels:
+      type: object
+      description: >
+        A level per module; a module not listed is `none`. Only levels a module offers are accepted: `vehicle_info` and `statistics` read; `vehicle_settings` read_write or full;
+        `notifications` read or read_write; `fuel`, `service` and `maintenance` read, read_write or full. read_write covers read, create and update; full adds delete.
+        Vehicle creation is the separate boolean `vehicleCreate`.
+      additionalProperties: false
+      properties:
+        vehicle_info: { type: string, enum: [none, read] }
+        vehicle_settings: { type: string, enum: [none, read_write, full] }
+        fuel: { type: string, enum: [none, read, read_write, full] }
+        service: { type: string, enum: [none, read, read_write, full] }
+        maintenance: { type: string, enum: [none, read, read_write, full] }
+        notifications: { type: string, enum: [none, read, read_write] }
+        statistics: { type: string, enum: [none, read] }
+    ApiKeyExpiry:
+      type: string
+      enum: ['24h', '7d', '30d', '90d', '365d', never]
+      description: 'Computed by the server from now, in UTC. Default 30d.'
+    ApiKeyVehicleMode:
+      type: string
+      enum: [selected, all_current, all_current_future]
+      description: >
+        `selected`: only the listed vehicles. `all_current`: a snapshot of the vehicles the caller can access when granted. `all_current_future`: every vehicle the caller can
+        access, now and in the future (dynamic; broad). Current roles always apply.
+    CreateApiKeyRequest:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 60, description: 'Trimmed.' }
+        expiresIn: { $ref: '#/components/schemas/ApiKeyExpiry' }
+        permissions: { $ref: '#/components/schemas/ApiKeyModuleLevels' }
+        vehicleCreate: { type: boolean, default: false }
+        vehicleMode: { $ref: '#/components/schemas/ApiKeyVehicleMode' }
+        vehicleIds: { type: array, maxItems: 200, items: { $ref: '#/components/schemas/Id' }, description: 'Only with `selected`; vehicles the caller can currently access.' }
+    UpdateApiKeyRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 60 }
+        expiresIn: { $ref: '#/components/schemas/ApiKeyExpiry' }
+        permissions: { $ref: '#/components/schemas/ApiKeyModuleLevels' }
+        vehicleCreate: { type: boolean }
+        vehicleMode: { $ref: '#/components/schemas/ApiKeyVehicleMode' }
+        vehicleIds: { type: array, maxItems: 200, items: { $ref: '#/components/schemas/Id' } }
+    ApiKey:
+      type: object
+      required: [id, name, prefix, status, createdAt, updatedAt, lastUsedAt, expiresAt, rotatedAt, revokedAt, vehicleMode, vehicleIds, permissions, vehicleCreate]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        name: { type: string }
+        prefix: { type: string, description: 'The first 12 characters of the token, for recognising it. Not a secret.' }
+        status: { type: string, enum: [active, expired, revoked] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        lastUsedAt: { type: [string, 'null'], format: date-time }
+        expiresAt: { type: [string, 'null'], format: date-time, description: 'null means the key never expires.' }
+        rotatedAt: { type: [string, 'null'], format: date-time }
+        revokedAt: { type: [string, 'null'], format: date-time }
+        vehicleMode: { $ref: '#/components/schemas/ApiKeyVehicleMode' }
+        vehicleIds: { type: array, items: { $ref: '#/components/schemas/Id' }, description: 'The selection or snapshot; always empty for `all_current_future`.' }
+        permissions: { $ref: '#/components/schemas/ApiKeyModuleLevels' }
+        vehicleCreate: { type: boolean }
+    ApiKeyWithToken:
+      allOf:
+        - { $ref: '#/components/schemas/ApiKey' }
+        - type: object
+          required: [token]
+          properties:
+            token: { type: string, description: 'The secret, `dlk_` followed by 43 characters. Shown only in this response; store it now.' }
+    ApiKeyList:
+      type: object
+      required: [items, apiKeysEnabled, maxActiveKeys]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/ApiKey' } }
+        apiKeysEnabled: { type: boolean, description: 'False while an administrator has turned API keys off.' }
+        maxActiveKeys: { type: integer, examples: [25] }
+    ApiKeyActivity:
+      type: object
+      required: [id, occurredAt, action, keyName, targetType, targetIds, vehicleId, requestId, metadata, redacted]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        occurredAt: { type: string, format: date-time }
+        action: { type: string, description: 'created, updated, rotated, revoked, revoked_all, removed, or a write made with the key.' }
+        keyName: { type: string, description: 'The key''s name when the event happened.' }
+        targetType: { type: [string, 'null'] }
+        targetIds: { type: array, items: { $ref: '#/components/schemas/Id' } }
+        vehicleId: { type: [string, 'null'], format: uuid }
+        requestId: { type: [string, 'null'] }
+        metadata: { type: object, additionalProperties: true, description: 'Small, safe outcome details. Never tokens or payloads.' }
+        redacted: { type: boolean }
+    ApiKeyActivityPage:
+      type: object
+      required: [items, nextBefore]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/ApiKeyActivity' } }
+        nextBefore: { type: [string, 'null'], format: uuid, description: 'Pass as `before` for the next page; null at the end.' }
+    ApiKeysSetting:
+      type: object
+      required: [enabled]
+      properties:
+        enabled: { type: boolean }
     RevokedCount:
       type: object
       required: [revoked]
