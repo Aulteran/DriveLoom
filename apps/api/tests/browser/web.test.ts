@@ -46,12 +46,16 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
 
   const browser = await chromium.launch();
   const problems: string[] = [];
+  let currentTest = '';
+  const tt = (name: string, fn: () => Promise<void>) => { currentTest = name; return t.test(name, fn); };
+  const failed: string[] = [];
   const watch = (p: Page) => {
     p.on('console', (m) => {
       // The signed-out session probe is an expected 401.
       // A 403 is expected only while the clock is moved forward to force a fresh-sign-in prompt (reauth_required).
-      if (m.type() === 'error' && !/status of 401/.test(m.text()) && !(skewMs > 0 && /status of 403/.test(m.text()))) problems.push(`console: ${m.text()}`);
+      if (m.type() === 'error' && !/status of 401/.test(m.text()) && !(skewMs > 0 && /status of 403/.test(m.text()))) problems.push(`console: ${m.text()} [${m.location().url}] (during: ${currentTest})`);
     });
+    p.on('response', (r) => { if (r.status() >= 400) failed.push(`${r.status()} ${r.request().method()} ${r.url()} (during: ${currentTest})`); });
     p.on('pageerror', (e) => problems.push(`page error: ${e.message}`));
     return p;
   };
@@ -65,7 +69,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
     return r.violations.map((v) => `${label}: ${v.id} (${v.impact}) ${v.nodes.slice(0, 3).map((n) => n.target.join(' ')).join(' | ')}`);
   };
   try {
-    await t.test('first account registers and lands on the welcome screen', async () => {
+    await tt('first account registers and lands on the welcome screen', async () => {
       await page.goto(`${base}/`);
       await page.getByLabel('Email').waitFor();
       assert.deepEqual(await axe('register'), []);
@@ -79,7 +83,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       assert.deepEqual(await axe('welcome'), []);
     });
 
-    await t.test('a vehicle is added and fill-ups produce economy', async () => {
+    await tt('a vehicle is added and fill-ups produce economy', async () => {
       await page.getByLabel('Nickname (optional)').fill('Golf');
       await page.getByLabel('Make').fill('VW');
       await page.getByRole('button', { name: 'Add vehicle' }).click();
@@ -109,7 +113,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       await page.getByText('7.00 L/100 km').first().waitFor();
     });
 
-    await t.test('the dashboard shows charts and reports', async () => {
+    await tt('the dashboard shows charts and reports', async () => {
       const vehicleNav = page.getByRole('navigation', { name: 'Vehicle' });
       await vehicleNav.getByRole('link', { name: 'Dashboard' }).click();
       await page.getByRole('heading', { name: 'Golf', level: 1 }).waitFor();
@@ -126,7 +130,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       await page.getByRole('heading', { name: 'At a glance' }).waitFor();
     });
 
-    await t.test('every vehicle section renders from the sidebar', async () => {
+    await tt('every vehicle section renders from the sidebar', async () => {
       const vehicleNav = page.getByRole('navigation', { name: 'Vehicle' });
       for (const [link, heading] of [['Members', 'Members'], ['Import & export', 'Import & export'], ['Vehicle settings', 'Vehicle settings']] as const) {
         await vehicleNav.getByRole('link', { name: link, exact: true }).click();
@@ -137,7 +141,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       await page.waitForLoadState('networkidle');
     });
 
-    await t.test('the garage adds a second vehicle and the switcher changes vehicle', async () => {
+    await tt('the garage adds a second vehicle and the switcher changes vehicle', async () => {
       await page.getByRole('navigation', { name: 'Account' }).getByRole('link', { name: 'Garage' }).click();
       await page.getByRole('heading', { name: 'Garage', level: 1 }).waitFor();
       await page.getByRole('button', { name: 'Add vehicle' }).first().click();
@@ -152,7 +156,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       assert.equal(await page.getByRole('combobox', { name: 'Vehicle' }).inputValue(), vehicle.split('/')[1]);
     });
 
-    await t.test('make and model suggest but never constrain: custom text saves verbatim, a suggestion fills its name, a failed lookup changes nothing', async () => {
+    await tt('make and model suggest but never constrain: custom text saves verbatim, a suggestion fills its name, a failed lookup changes nothing', async () => {
       const api = (call: string) => page.evaluate(`import('/js/api.js').then((m) => m.${call})`) as Promise<any>;
       const made: string[] = [];
       const add = async () => {
@@ -210,7 +214,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
         assert.deepEqual([offline.make, offline.model], ['Ren', 'Clio V']);
         await page.unroute('**/v1/vehicle-identities*');
         // The aborted lookups are expected to log failed loads; nothing else may.
-        for (let i = problems.length - 1; i >= 0; i--) if (problems[i] === 'console: Failed to load resource: net::ERR_FAILED') problems.splice(i, 1);
+        for (let i = problems.length - 1; i >= 0; i--) if (/^console: Failed to load resource: net::ERR_FAILED \[[^\]]*\/v1\/vehicle-identities/.test(problems[i]!)) problems.splice(i, 1);
 
         // Editing: the stored text shows as it is, and saving without touching it rewrites nothing.
         await page.goto(`${base}/#/vehicles/${alias.id}/settings`);
@@ -222,13 +226,16 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
         await page.getByText('Saved').first().waitFor().catch(() => undefined);
         assert.deepEqual((await rows()).map((r) => [r.id, r.make, r.model]), snapshot.map((r) => [r.id, r.make, r.model]));
       } finally {
-        if (made.length) await db.pool.query('DELETE FROM vehicles WHERE id = ANY($1)', [made]);
+        // Leave the throwaway vehicles' pages and let their requests settle before deleting the rows; deleting first
+        // races the page's own refetch (e.g. the settings tab's comparison lookup after Save) into a 404 console error.
         await page.goto(`${base}/#/${vehicle}`);
         await page.getByRole('heading', { name: 'Golf', level: 1 }).waitFor();
+        await page.waitForLoadState('networkidle');
+        if (made.length) await db.pool.query('DELETE FROM vehicles WHERE id = ANY($1)', [made]);
       }
     });
 
-    await t.test('the theme toggle overrides the system and survives a reload', async () => {
+    await tt('the theme toggle overrides the system and survives a reload', async () => {
       const findings: string[] = [];
       for (const [system, forced] of [['light', 'Dark'], ['dark', 'Light']] as const) {
         await page.emulateMedia({ colorScheme: system });
@@ -253,7 +260,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       assert.deepEqual(findings, []);
     });
 
-    await t.test('settings and administration render', async () => {
+    await tt('settings and administration render', async () => {
       for (const hash of ['garage', 'settings/preferences', 'settings/profile', 'settings/security', 'admin/users', 'admin/invites', 'admin/units', 'admin/email', 'admin/signin', 'admin/audit', 'friends']) {
         await page.goto(`${base}/#/${hash}`);
         await page.waitForLoadState('networkidle');
@@ -262,7 +269,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       }
     });
 
-    await t.test('screens pass automated WCAG 2.2 AA checks', async () => {
+    await tt('screens pass automated WCAG 2.2 AA checks', async () => {
       const findings: string[] = [];
       for (const colorScheme of ['light', 'dark'] as const) {
         await page.emulateMedia({ colorScheme });
@@ -282,7 +289,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       assert.deepEqual(findings, []);
     });
 
-    await t.test('preferences change the units shown', async () => {
+    await tt('preferences change the units shown', async () => {
       await page.goto(`${base}/#/settings/preferences`);
       assert.equal(await page.getByLabel('Fuel economy').inputValue(), '', 'follows the instance default until changed');
       await page.getByLabel('Fuel economy').selectOption('mpg_us');
@@ -293,14 +300,14 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
     });
 
     let link = '';
-    await t.test('an administrator creates an invitation link', async () => {
+    await tt('an administrator creates an invitation link', async () => {
       await page.goto(`${base}/#/admin/invites`);
       await page.getByRole('button', { name: 'Create invitation' }).click();
       link = (await page.locator('.notice code.secret').textContent()) ?? '';
       assert.match(link, /#\/register\?invite=/);
     });
 
-    await t.test('an administrator saves email and sign-on settings, and the secrets stay hidden', async () => {
+    await tt('an administrator saves email and sign-on settings, and the secrets stay hidden', async () => {
       await page.goto(`${base}/#/admin/email`);
       await page.getByRole('heading', { name: 'Email (SMTP)' }).waitFor();
       await page.getByLabel('Server').fill('smtp.example.test');
@@ -342,7 +349,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
 
     const overflows = (p: Page) => p.evaluate('document.documentElement.scrollWidth > window.innerWidth + 1');
 
-    await t.test('an 800px window keeps the desktop shell, with a drawer and no horizontal scroll', async () => {
+    await tt('an 800px window keeps the desktop shell, with a drawer and no horizontal scroll', async () => {
       await page.setViewportSize({ width: 800, height: 900 });
       for (const hash of [vehicle, `${vehicle}/log`, 'garage', 'friends', 'settings/security', 'admin/users']) {
         await page.goto(`${base}/#/${hash}`);
@@ -366,7 +373,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       await page.setViewportSize({ width: 1100, height: 900 });
     });
 
-    await t.test('a phone gets the tab-bar shell: routes fit, the vehicle sheet switches, More leads on', async () => {
+    await tt('a phone gets the tab-bar shell: routes fit, the vehicle sheet switches, More leads on', async () => {
       // A separate context with the same session, so the vehicle it picks is not remembered for the desktop page.
       const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, storageState: await page.context().storageState() });
       const p = watch(await ctx.newPage());
@@ -461,7 +468,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       } finally { await anon.close(); }
     });
 
-    await t.test('on a phone, the quick fill-up sheet logs a fill-up with a live economy preview', async () => {
+    await tt('on a phone, the quick fill-up sheet logs a fill-up with a live economy preview', async () => {
       const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, storageState: await page.context().storageState() });
       const p = watch(await ctx.newPage());
       p.setDefaultTimeout(8000);
@@ -592,7 +599,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       } finally { await ctx.close(); }
     });
 
-    await t.test('on a phone, Home, History and Vehicles are phone-native screens', async () => {
+    await tt('on a phone, Home, History and Vehicles are phone-native screens', async () => {
       const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, storageState: await page.context().storageState() });
       const p = watch(await ctx.newPage());
       p.setDefaultTimeout(8000);
@@ -768,7 +775,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       } finally { await ctx.close(); }
     });
 
-    await t.test('resizing across 700px reloads into the other shell', async () => {
+    await tt('resizing across 700px reloads into the other shell', async () => {
       // Marks the document, resizes, then waits until a new document has replaced it.
       // (Polled from here: waitForFunction would need 'unsafe-eval', which the CSP forbids.)
       const crossTo = async (width: number, height: number) => {
@@ -793,7 +800,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       assert.equal(await page.getByRole('navigation', { name: 'Main' }).count(), 0);
     });
 
-    await t.test('an invited person registers and sends a friend request', async () => {
+    await tt('an invited person registers and sends a friend request', async () => {
       const p2 = watch(await (await browser.newContext()).newPage());
       p2.setDefaultTimeout(8000);
       await p2.goto(link);
@@ -807,7 +814,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       await p2.getByText('Request sent.').waitFor();
     });
 
-    await t.test('on a phone, a waiting friend request shows on More and on the Friends row', async () => {
+    await tt('on a phone, a waiting friend request shows on More and on the Friends row', async () => {
       const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, storageState: await page.context().storageState() });
       const p = watch(await ctx.newPage());
       p.setDefaultTimeout(8000);
@@ -867,7 +874,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       return out;
     };
 
-    await t.test('on a phone, More, Settings, Account and Administration are phone screens', async () => {
+    await tt('on a phone, More, Settings, Account and Administration are phone screens', async () => {
       const { ctx, p, phoneAxe, open } = await phonePage();
       try {
         // More: grouped rows, install status, no theme (it moved to Settings).
@@ -974,7 +981,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       } finally { await ctx.close(); }
     });
 
-    await t.test('on a phone, Friends shows requests first, stacked comparison rows and an add sheet', async () => {
+    await tt('on a phone, Friends shows requests first, stacked comparison rows and an add sheet', async () => {
       const { ctx, p, phoneAxe, open } = await phonePage();
       try {
         await open('friends');
@@ -1002,7 +1009,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       } finally { await ctx.close(); }
     });
 
-    await t.test('on a phone, the Install screen adapts to iOS, Android, installed and insecure', async () => {
+    await tt('on a phone, the Install screen adapts to iOS, Android, installed and insecure', async () => {
       // The server's address is shown as copyable text, not a link.
       const install = { address: async (p: Page) => {
         assert.equal(await p.getByLabel('Address').inputValue(), new URL(base).origin);
@@ -1076,7 +1083,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       }
     });
 
-    await t.test('on a phone, loading shows a skeleton and a failed load offers Try again', async () => {
+    await tt('on a phone, loading shows a skeleton and a failed load offers Try again', async () => {
       const { ctx, p, phoneAxe } = await phonePage({ lenient: true });
       try {
         let release: () => void = () => undefined;
@@ -1106,7 +1113,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       } finally { await ctx.close(); }
     });
 
-    await t.test('on a phone, going offline shows the pill and banner and pauses saving', async () => {
+    await tt('on a phone, going offline shows the pill and banner and pauses saving', async () => {
       const { ctx, p, phoneAxe, open } = await phonePage({ lenient: true });
       try {
         await open('settings/profile');
@@ -1149,7 +1156,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       } finally { await ctx.close(); }
     });
 
-    await t.test('on a phone, an update waits for the fill-up sheet and reloads only when asked', async () => {
+    await tt('on a phone, an update waits for the fill-up sheet and reloads only when asked', async () => {
       const { ctx, p, phoneAxe } = await phonePage();
       // A second build of the client: one changed byte gives the service worker a new build id.
       const dir = mkdtempSync(path.join(tmpdir(), 'driveloom-web-'));
@@ -1199,7 +1206,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       }
     });
 
-    await t.test('on a phone, sign-in is full screen with phone keyboards and returns to the route', async () => {
+    await tt('on a phone, sign-in is full screen with phone keyboards and returns to the route', async () => {
       const { ctx, p, phoneAxe } = await phonePage({ signedIn: false });
       try {
         await p.goto(`${base}/#/friends`);
@@ -1276,7 +1283,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       }
     };
 
-    await t.test('on a desktop, a changed client arrives on the next reload with no banner, and an offline reload still renders the cached shell', async () => {
+    await tt('on a desktop, a changed client arrives on the next reload with no banner, and an offline reload still renders the cached shell', async () => {
       const { ctx, p } = await phonePage({ lenient: true, viewport: { width: 1100, height: 900 } });
       // A second build of the client with one changed web file.
       const dir = mkdtempSync(path.join(tmpdir(), 'driveloom-web-'));
@@ -1326,7 +1333,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       }
     });
 
-    await t.test('crossing the phone width keeps unsaved input and open dialogs, and switches shells when nothing would be lost', async () => {
+    await tt('crossing the phone width keeps unsaved input and open dialogs, and switches shells when nothing would be lost', async () => {
       // Typed text survives 1100 -> 683 until it is cleared.
       {
         const { ctx, p } = await phonePage({ lenient: true, viewport: { width: 1100, height: 900 } });
@@ -1402,7 +1409,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       }
     });
 
-    await t.test('service history: off by default, then a desktop visit is added, corrected and deleted', async () => {
+    await tt('service history: off by default, then a desktop visit is added, corrected and deleted', async () => {
       // Off: no menu entry, and the page says so instead of failing.
       await page.goto(`${base}/#/${vehicle}`);
       await page.getByRole('heading', { name: 'At a glance' }).waitFor();
@@ -1499,7 +1506,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       await noErrorPage();
     });
 
-    await t.test('service history on a phone: reachable from the vehicle screen, add sheet, list, hidden by preference', async () => {
+    await tt('service history on a phone: reachable from the vehicle screen, add sheet, list, hidden by preference', async () => {
       const { ctx, p, phoneAxe, open } = await phonePage();
       try {
         await open(`${vehicle}/overview`);
@@ -1547,7 +1554,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       await page.getByRole('heading', { name: 'At a glance' }).waitFor();
     });
 
-    await t.test('maintenance planning on desktop: add a task, mark it done through a linked visit, snooze', async () => {
+    await tt('maintenance planning on desktop: add a task, mark it done through a linked visit, snooze', async () => {
       await db.pool.query("INSERT INTO instance_modules (module, enabled) VALUES ('service', true) ON CONFLICT (module) DO UPDATE SET enabled = true");
       try {
         await page.goto(`${base}/#/${vehicle}/service?view=maintenance`);
@@ -1603,7 +1610,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       }
     });
 
-    await t.test('maintenance planning on a phone: section in the Service screen, add and snooze in sheets, bottom navigation untouched', async () => {
+    await tt('maintenance planning on a phone: section in the Service screen, add and snooze in sheets, bottom navigation untouched', async () => {
       await db.pool.query("INSERT INTO instance_modules (module, enabled) VALUES ('service', true) ON CONFLICT (module) DO UPDATE SET enabled = true");
       const { ctx, p, phoneAxe, open } = await phonePage();
       try {
@@ -1748,7 +1755,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       await dlg.waitFor({ state: 'detached' });
     };
 
-    await t.test('maintenance recommendations on desktop: no banner without a match, then the five-step review and import', async () => {
+    await tt('maintenance recommendations on desktop: no banner without a match, then the five-step review and import', async () => {
       await db.pool.query("INSERT INTO instance_modules (module, enabled) VALUES ('service', true) ON CONFLICT (module) DO UPDATE SET enabled = true");
       try {
         // No preset for this vehicle: the tab looks exactly as before.
@@ -1765,7 +1772,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       });
     });
 
-    await t.test('maintenance recommendations on a phone: the same flow in a sheet, and a vehicle without a match shows nothing', async () => {
+    await tt('maintenance recommendations on a phone: the same flow in a sheet, and a vehicle without a match shows nothing', async () => {
       await db.pool.query("INSERT INTO instance_modules (module, enabled) VALUES ('service', true) ON CONFLICT (module) DO UPDATE SET enabled = true");
       try {
         const { ctx, p } = await phonePage();
@@ -1793,7 +1800,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       });
     });
 
-    await t.test('reminders by email on desktop: no-SMTP notice, owner settings and the personal switch', async () => {
+    await tt('reminders by email on desktop: no-SMTP notice, owner settings and the personal switch', async () => {
       await db.pool.query("INSERT INTO instance_modules (module, enabled) VALUES ('service', true) ON CONFLICT (module) DO UPDATE SET enabled = true");
       const vid = vehicle.split('/')[1];
       try {
@@ -1832,7 +1839,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       }
     });
 
-    await t.test('reminders by email on a phone: personal switch inline, settings in a sheet, bottom navigation untouched', async () => {
+    await tt('reminders by email on a phone: personal switch inline, settings in a sheet, bottom navigation untouched', async () => {
       await db.pool.query("INSERT INTO instance_modules (module, enabled) VALUES ('service', true) ON CONFLICT (module) DO UPDATE SET enabled = true");
       const vid = vehicle.split('/')[1];
       const { ctx, p, phoneAxe, open } = await phonePage();
@@ -1905,7 +1912,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       `INSERT INTO api_key_activity (id, key_id, user_id, key_name, action, target_type, target_ids, vehicle_id, request_id, metadata, created_at)
        SELECT gen_random_uuid(), k.id, k.user_id, k.name, 'fuel.created', NULL, '{}', NULL, NULL, '{}', now() FROM api_keys k, generate_series(1, $1) WHERE k.name = 'Home Assistant'`, [n]);
 
-    await t.test('API keys on a desktop: create with fresh sign-in, one-time token, edit, rotate, activity, revoke, remove', async () => {
+    await tt('API keys on a desktop: create with fresh sign-in, one-time token, edit, rotate, activity, revoke, remove', async () => {
       await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: base });
       await page.setViewportSize({ width: 1100, height: 900 });
       await page.goto(`${base}/#/settings/security`);
@@ -2048,7 +2055,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       await noErrorPage();
     });
 
-    await t.test('the administrator can switch API keys off and on; owners see why and can still revoke', async () => {
+    await tt('the administrator can switch API keys off and on; owners see why and can still revoke', async () => {
       skewMs = 0;
       await page.goto(`${base}/#/settings/security`);
       const panel = page.getByRole('region', { name: 'API keys' });
@@ -2076,7 +2083,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       await db.pool.query('DELETE FROM api_keys');
     });
 
-    await t.test('API keys on a phone: sheets for create, token, activity, rotate and revoke, and the admin switch', async () => {
+    await tt('API keys on a phone: sheets for create, token, activity, rotate and revoke, and the admin switch', async () => {
       skewMs = 0;
       const { ctx, p, phoneAxe, open } = await phonePage();
       try {
@@ -2152,7 +2159,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       }
     });
 
-    await t.test('the API docs are served by the app itself, render the contract and call no third party', async () => {
+    await tt('the API docs are served by the app itself, render the contract and call no third party', async () => {
       const ctx = await browser.newContext({ viewport: { width: 1100, height: 900 } });
       const d = watch(await ctx.newPage());
       d.setDefaultTimeout(8000);
@@ -2191,7 +2198,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       } finally { await ctx.close(); }
     });
 
-    await t.test('signing out and back in, the request is accepted', async () => {
+    await tt('signing out and back in, the request is accepted', async () => {
       await page.getByRole('button', { name: /sign out/i }).click();
       await page.getByRole('heading', { name: 'Sign in' }).waitFor();
       await page.getByLabel('Email', { exact: true }).fill(ADMIN.email);
@@ -2204,7 +2211,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       await page.getByRole('heading', { name: 'Your friends' }).waitFor();
     });
 
-    await t.test('the service worker caches the shell, never an API response, and sign-out keeps the shell but drops other caches', async () => {
+    await tt('the service worker caches the shell, never an API response, and sign-out keeps the shell but drops other caches', async () => {
       // localhost is a secure context, so the worker registers.
       await page.goto(`${base}/#/`);
       // The page runs in a browser; the test's TypeScript has no DOM types, so the snippets are strings.
@@ -2231,7 +2238,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       assert.deepEqual(after.filter((p) => p.includes('/v1')), [], 'still no API request cached');
     });
 
-    assert.deepEqual(problems, [], 'no console errors, page errors or CSP violations');
+    assert.deepEqual(problems, [], `no console errors, page errors or CSP violations; failed responses: ${failed.join(' | ')}`);
   } finally {
     await browser.close();
     server.close(); server.closeAllConnections();
