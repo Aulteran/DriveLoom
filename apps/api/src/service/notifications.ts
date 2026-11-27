@@ -9,8 +9,11 @@
 // opt-out are checked when a reminder is queued and again just before it is sent,
 // so revoked or opted-out people get nothing.
 //
-// What and when: every unarchived task that is due_soon or overdue for that
-// person and not snoozed for them (personal or vehicle-wide snooze). A task's
+// What and when: every unarchived task with reminders enabled (a per-task switch;
+// imported preset tasks start with it off) that is due_soon or overdue for that
+// person and not snoozed for them (personal or vehicle-wide snooze). Turning a
+// task's reminders on records its current due state as already announced
+// (seedReminderLedger in maintenance.ts), so opting in never sends a backlog. A task's
 // due point (date and odometer) is its occurrence; each level (due soon,
 // overdue) of an occurrence is announced once, then repeated every
 // `follow_up_days` while it stays due (0 = no repeats). notification_task_log
@@ -40,7 +43,7 @@ import { fromKm } from '../units.ts';
 import { EMAIL_RECIPIENT_ROLES } from '../vehicles/permissions.ts';
 import type { Role } from '../vehicles/types.ts';
 import { tasksNeedingAttention, type TaskView } from './maintenance.ts';
-import { LEAD_DAYS, LEAD_DISTANCE } from './maintenance-status.ts';
+import { LEAD_DAYS, LEAD_DISTANCE, occurrenceKey } from './maintenance-status.ts';
 import { latestKnownOdometer } from './odometer.ts';
 
 type Q = Pick<pg.Pool, 'query'>;
@@ -74,9 +77,8 @@ export interface Payload { tasks: PayloadTask[]; reading: { value: string; unit:
 
 export interface Recipient { userId: Id; email: string; role: Role }
 
-/** The task's due point. A completion or an edited interval moves it, which starts a new occurrence. */
-export const occurrenceKey = (t: Pick<TaskView, 'dueOn' | 'dueOdometer'>): string =>
-  `${t.dueOn ?? '-'}|${t.dueOdometer ? `${t.dueOdometer.value}${t.dueOdometer.unit}` : '-'}`;
+/** The task's due point (shared with maintenance.ts, which seeds the ledger when reminders are turned on). */
+export { occurrenceKey };
 
 /** Follow-up period number since the first reminder; always 0 without follow-ups. */
 export const followUpBucket = (firstAt: Date, now: Date, followUpDays: number): number =>

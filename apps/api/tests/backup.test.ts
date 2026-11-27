@@ -69,6 +69,11 @@ async function seed(h: NonNullable<Awaited<ReturnType<typeof harness>>>) {
   await h.ctx.db.query(`INSERT INTO maintenance_tasks (id, vehicle_id, name, catalog_key, recurring, interval_days, interval_distance_input, interval_distance_unit, interval_distance_km, first_due_on, notes, created_by)
     VALUES ($1,$2,'Öl ☃','oil_change',true,365,'7500.5','mi','12071.7',$3,'note',$4)`, [taskId, v.id, '2026-09-01', pb.userId]);
   await h.ctx.db.query("UPDATE service_items SET task_id = $1 WHERE visit_id = $2 AND position = 0", [taskId, visitId]);
+  // A preset-imported task: months, a reported baseline, reminders off and provenance labels.
+  await h.ctx.db.query(`INSERT INTO maintenance_tasks (id, vehicle_id, name, catalog_key, recurring, interval_months, preset_id, preset_version, preset_task_id,
+      baseline_kind, baseline_on, baseline_odometer_input, baseline_odometer_unit, baseline_odometer_km, reminders_enabled, source_trust, source_note, created_by)
+    VALUES ($1,$2,'Bremsflüssigkeit','brake_fluid',true,36,'us-honda-odyssey-2015',2,'brake-fluid','reported','2024-05-10','81234.5','mi','130733.4',false,'manufacturer','Handbuch ☃',$3)`,
+    [uuidv7(), v.id, pb.userId]);
   await h.ctx.db.query("INSERT INTO task_snoozes (id, task_id, scope, user_id, snooze_until_date, snooze_until_odometer_km, reason, created_by) VALUES ($1,$2,'vehicle',NULL,'2026-10-01','5000.5','später',$3)", [uuidv7(), taskId, pb.userId]);
   await h.ctx.db.query("INSERT INTO task_snoozes (id, task_id, scope, user_id, snooze_until_date, created_by) VALUES ($1,$2,'personal',$3,'2026-10-05',$3)", [uuidv7(), taskId, pa.userId]);
   // Reminder emails: settings, a selection, an opt-out, what was already told (kept) and a queued email (not kept).
@@ -126,9 +131,15 @@ test('full restore into an isolated instance preserves users, vehicles, records 
     assert.deepEqual((await target.client.query('SELECT occurrence_key, level, last_bucket, sends, muted FROM notification_task_log')).rows, [{ occurrence_key: '2026-09-01|-', level: 'overdue', last_bucket: 2, sends: 3, muted: true }]);
     assert.deepEqual((await target.client.query('SELECT email_enabled, follow_up_days FROM vehicle_notification_settings')).rows, [{ email_enabled: true, follow_up_days: 14 }]);
     assert.deepEqual((await target.client.query('SELECT show_service FROM vehicle_user_prefs')).rows, [{ show_service: false }]);
-    assert.equal(info.tables['maintenance_tasks'], 1); assert.equal(info.tables['task_snoozes'], 2);
-    assert.deepEqual((await target.client.query('SELECT name, catalog_key, recurring, interval_days, interval_distance_input::text, interval_distance_unit, interval_distance_km::text, first_due_on::text, notes FROM maintenance_tasks')).rows,
+    assert.equal(info.tables['maintenance_tasks'], 2); assert.equal(info.tables['task_snoozes'], 2);
+    assert.deepEqual((await target.client.query('SELECT name, catalog_key, recurring, interval_days, interval_distance_input::text, interval_distance_unit, interval_distance_km::text, first_due_on::text, notes FROM maintenance_tasks WHERE preset_id IS NULL')).rows,
       [{ name: 'Öl ☃', catalog_key: 'oil_change', recurring: true, interval_days: 365, interval_distance_input: '7500.5', interval_distance_unit: 'mi', interval_distance_km: '12071.700000', first_due_on: '2026-09-01', notes: 'note' }], 'maintenance tasks round-trip');
+    assert.deepEqual((await target.client.query(`SELECT name, interval_days, interval_months, preset_id, preset_version, preset_task_id, baseline_kind, baseline_on::text,
+        baseline_odometer_input::text, baseline_odometer_unit, baseline_odometer_km::text, reminders_enabled, source_trust, source_note FROM maintenance_tasks WHERE preset_id IS NOT NULL`)).rows,
+      [{ name: 'Bremsflüssigkeit', interval_days: null, interval_months: 36, preset_id: 'us-honda-odyssey-2015', preset_version: 2, preset_task_id: 'brake-fluid', baseline_kind: 'reported',
+        baseline_on: '2024-05-10', baseline_odometer_input: '81234.5', baseline_odometer_unit: 'mi', baseline_odometer_km: '130733.400000', reminders_enabled: false, source_trust: 'manufacturer',
+        source_note: 'Handbuch ☃' }], 'preset-era columns round-trip');
+    assert.equal((await target.client.query('SELECT reminders_enabled FROM maintenance_tasks WHERE preset_id IS NULL')).rows[0].reminders_enabled, true, 'the default for typed-in tasks');
     assert.deepEqual((await target.client.query('SELECT i.name, t.name AS task FROM service_items i JOIN maintenance_tasks t ON t.id = i.task_id')).rows, [{ name: 'Oil change', task: 'Öl ☃' }], 'the completion link survives');
     assert.deepEqual((await target.client.query('SELECT scope, user_id IS NULL AS vehicle_wide, snooze_until_date::text AS d, snooze_until_odometer_km::text AS km, reason FROM task_snoozes ORDER BY scope')).rows,
       [{ scope: 'personal', vehicle_wide: false, d: '2026-10-05', km: null, reason: null }, { scope: 'vehicle', vehicle_wide: true, d: '2026-10-01', km: '5000.500000', reason: 'später' }], 'both snooze scopes round-trip');

@@ -96,3 +96,30 @@ test('concurrent migrators serialise via advisory lock', { skip }, async () => {
   assert.equal(a.length + b.length, (await loadMigrations()).length);
   await c1.end(); await c2.end();
 });
+
+test('0018 keeps existing maintenance tasks as they were and enforces the new shapes', { skip }, async () => {
+  const { mkdtemp, copyFile, readdir } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const src = new URL('../migrations/', import.meta.url);
+  const dir = await mkdtemp(`${tmpdir()}/mig17-`);
+  for (const f of (await readdir(src)).filter((n) => /^\d{4}_.*\.sql$/.test(n) && Number(n.slice(0, 4)) <= 17)) await copyFile(new URL(f, src), `${dir}/${f}`);
+  const c = await freshClient();
+  await migrate(c, `${dir}/`);
+  await c.query("INSERT INTO vehicles (id, name) VALUES ('018f3b1e-7c4a-7d2e-9a10-5b6c7d8e9f02', 'Car')");
+  await c.query("INSERT INTO maintenance_tasks (id, vehicle_id, name, recurring, interval_days) VALUES ('018f3b1e-7c4a-7d2e-9a10-5b6c7d8e9f03', '018f3b1e-7c4a-7d2e-9a10-5b6c7d8e9f02', 'Oil', true, 365)");
+  assert.deepEqual((await migrate(c)).map((n) => n.slice(0, 4)), ['0018']);
+  assert.deepEqual((await c.query('SELECT interval_days, interval_months, reminders_enabled, preset_id, baseline_kind FROM maintenance_tasks')).rows,
+    [{ interval_days: 365, interval_months: null, reminders_enabled: true, preset_id: null, baseline_kind: null }]);
+  const ins = (cols: string, vals: string) => c.query(`INSERT INTO maintenance_tasks (id, vehicle_id, name, ${cols}) VALUES (gen_random_uuid(), '018f3b1e-7c4a-7d2e-9a10-5b6c7d8e9f02', 'X', ${vals})`);
+  await ins('recurring, interval_months', 'true, 36');
+  await assert.rejects(ins('recurring, interval_days, interval_months', 'true, 30, 1'), /single_time_unit/);
+  await assert.rejects(ins('recurring, interval_months, first_due_on', "false, 3, '2030-01-01'"), /maintenance_tasks_shape/);
+  await assert.rejects(ins('recurring, interval_months, preset_id', "true, 3, 'p'"), /preset_complete/);
+  await assert.rejects(ins('recurring, interval_months, baseline_kind', "true, 3, 'reported'"), /baseline_shape/);
+  await assert.rejects(ins('recurring, interval_months, baseline_on', "true, 3, '2024-01-01'"), /baseline_shape/);
+  await assert.rejects(ins('recurring, interval_months, baseline_kind, baseline_odometer_input', "true, 3, 'tracking', 5"), /baseline_odometer_complete/);
+  await assert.rejects(ins('recurring, interval_months, source_trust', "true, 3, 'official'"), /source_trust/);
+  await ins('recurring, interval_months, preset_id, preset_version, preset_task_id', "true, 3, 'p', 1, 't'");
+  await assert.rejects(ins('recurring, interval_months, preset_id, preset_version, preset_task_id', "true, 6, 'p', 2, 't'"), /maintenance_tasks_preset_idx/);
+  await c.end();
+});

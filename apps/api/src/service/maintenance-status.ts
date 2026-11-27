@@ -3,12 +3,22 @@
 // schedule: every interval comes from a person.
 //
 // Semantics
-//  - A task is time-based (intervalDays), distance-based (intervalDistance), or both;
-//    with both, whichever is reached first makes it due.
-//  - Baseline: the most recent service item linked to the task (visit date and,
-//    when recorded, visit odometer) plus the interval. With no linked
-//    completion, the task's own first-due date/odometer. With neither the
-//    status is `no_baseline`: history is never invented, and "ok" is never implied.
+//  - A task is time-based (intervalDays, or intervalMonths in calendar months with
+//    end-of-month clamping), distance-based (intervalDistance), or both; with
+//    both, whichever is reached first makes it due.
+//  - Baseline, strictly in this order (by kind, never by comparing dates):
+//    1. the most recent service item linked to the task (visit date and, when
+//       recorded, visit odometer) plus the interval;
+//    2. a `reported` baseline: the owner's word for when / at what odometer it
+//       was last done, without a record; scheduled like a completion;
+//    3. a `tracking` baseline ("start tracking now"): due points are worked out
+//       from it, but it is not a completion, so it never yields `ok` (a result
+//       that would be `ok` is `no_baseline`); due_soon / overdue still show,
+//       since the real last service can only have been earlier;
+//    4. the task's own first-due date/odometer.
+//    With none of these the status is `no_baseline`: history is never invented,
+//    and "ok" is never implied. A baseline side that lacks the value an interval
+//    needs (no odometer for a distance interval) leaves that side unknown.
 //  - Dates are calendar dates compared in UTC. Due today is `due_soon`; overdue means past.
 //  - Distance: odometer above the due odometer is `overdue`; within the lead
 //    distance (and not above) is `due_soon`. Only the latest known reading is used and never extrapolated.
@@ -48,12 +58,18 @@ export const catalogName = (key: string): string | undefined => CATALOG.find((c)
 export const TASK_STATES = ['ok', 'due_soon', 'overdue', 'no_baseline', 'unknown_reading', 'completed'] as const;
 export type TaskState = (typeof TASK_STATES)[number];
 
+export type BaselineKind = 'reported' | 'tracking';
+export interface TaskBaseline { kind: BaselineKind; on: string | null; odometerKm: Dec | null }
 export interface TaskSchedule {
   recurring: boolean;
   intervalDays: number | null;
+  /** Calendar months; never set together with intervalDays. */
+  intervalMonths?: number | null;
   intervalDistanceKm: Dec | null;
   firstDueOn: string | null;
   firstDueOdometerKm: Dec | null;
+  /** The task's own reported or tracking starting point (used only without a linked completion). */
+  baseline?: TaskBaseline | null;
 }
 export interface Completion { servicedOn: string; odometerKm: Dec | null }
 export interface Reading { km: Dec; on: string }
@@ -66,8 +82,8 @@ export interface TaskStatus {
   daysUntilDue: number | null;
   /** Kilometres from the latest reading to dueOdometer (negative when past); null without both. */
   distanceUntilDueKm: Dec | null;
-  baseline: 'completion' | 'first_due' | 'none';
-  /** A distance interval exists but the last completion recorded no odometer, so no next odometer can be worked out. */
+  baseline: 'completion' | 'reported' | 'tracking' | 'first_due' | 'none';
+  /** A distance interval exists but the last completion (or reported/tracking baseline) recorded no odometer, so no next odometer can be worked out. */
   distanceBaselineMissing: boolean;
   /** The task has a distance due point and the reading is missing or older than STALE_READING_DAYS. */
   readingStale: boolean;
@@ -78,6 +94,26 @@ const ts = (d: string) => new Date(`${d}T00:00:00Z`).getTime();
 export const daysBetween = (from: string, to: string): number => Math.round((ts(to) - ts(from)) / DAY);
 export const addDays = (d: string, n: number): string => new Date(ts(d) + n * DAY).toISOString().slice(0, 10);
 export const utcDate = (now: Date): string => now.toISOString().slice(0, 10);
+/**
+ * Add calendar months to a YYYY-MM-DD date (UTC), clamping to the last day of
+ * the target month: 2024-01-31 + 1 = 2024-02-29, 2024-02-29 + 12 = 2025-02-28.
+ */
+export function addMonths(d: string, n: number): string {
+  const y = Number(d.slice(0, 4)), m = Number(d.slice(5, 7)) - 1, day = Number(d.slice(8, 10));
+  const total = y * 12 + m + n;
+  const ny = Math.floor(total / 12), nm = total - ny * 12;
+  const last = new Date(Date.UTC(ny, nm + 1, 0)).getUTCDate();
+  const out = new Date(Date.UTC(2000, 0, 1));
+  out.setUTCFullYear(ny, nm, Math.min(day, last));
+  return out.toISOString().slice(0, 10);
+}
+/** The date a time interval (days or months) ends, counted from `from`; null without a time interval. */
+export function addInterval(from: string, t: Pick<TaskSchedule, 'intervalDays' | 'intervalMonths'>): string | null {
+  if (t.intervalMonths !== undefined && t.intervalMonths !== null) return addMonths(from, t.intervalMonths);
+  if (t.intervalDays !== null) return addDays(from, t.intervalDays);
+  return null;
+}
+const hasTimeInterval = (t: TaskSchedule) => t.intervalDays !== null || (t.intervalMonths ?? null) !== null;
 
 const RANK: Record<TaskState, number> = { ok: 0, unknown_reading: 1, due_soon: 2, overdue: 3, no_baseline: -1, completed: -1 };
 const worst = (a: TaskState, b: TaskState): TaskState => (RANK[a] >= RANK[b] ? a : b);
@@ -90,18 +126,20 @@ export function computeStatus(
   if (!t.recurring && last) {
     return { state: 'completed', dueOn: null, dueOdometerKm: null, daysUntilDue: null, distanceUntilDueKm: null, baseline: 'completion', distanceBaselineMissing: false, readingStale: false };
   }
-  if (last) {
-    baseline = 'completion';
-    if (t.intervalDays !== null) dueOn = addDays(last.servicedOn, t.intervalDays);
+  const own = t.recurring ? t.baseline ?? null : null;
+  const start = last ? { kind: 'completion' as const, on: last.servicedOn, odometerKm: last.odometerKm } : own;
+  if (start) {
+    baseline = start.kind;
+    if (start.on !== null && hasTimeInterval(t)) dueOn = addInterval(start.on, t);
     if (t.intervalDistanceKm !== null) {
-      if (last.odometerKm !== null) dueOdometerKm = last.odometerKm.add(t.intervalDistanceKm);
+      if (start.odometerKm !== null) dueOdometerKm = start.odometerKm.add(t.intervalDistanceKm);
       else distanceBaselineMissing = true;
     }
   } else if (t.firstDueOn !== null || t.firstDueOdometerKm !== null) {
     baseline = 'first_due'; dueOn = t.firstDueOn; dueOdometerKm = t.firstDueOdometerKm;
   }
   if (dueOn === null && dueOdometerKm === null) {
-    return { state: 'no_baseline', dueOn, dueOdometerKm, daysUntilDue: null, distanceUntilDueKm: null, baseline: last ? 'completion' : 'none', distanceBaselineMissing, readingStale: false };
+    return { state: 'no_baseline', dueOn, dueOdometerKm, daysUntilDue: null, distanceUntilDueKm: null, baseline, distanceBaselineMissing, readingStale: false };
   }
   const daysUntilDue = dueOn === null ? null : daysBetween(today, dueOn);
   const stale = reading === null || daysBetween(reading.on, today) > STALE_READING_DAYS;
@@ -117,6 +155,8 @@ export function computeStatus(
     else dim = stale ? 'unknown_reading' : 'ok';
     state = worst(state, dim);
   }
+  // A tracking point is not a completion: it can show that something is due, never that it is up to date.
+  if (baseline === 'tracking' && state === 'ok') state = 'no_baseline';
   return { state, dueOn, dueOdometerKm, daysUntilDue, distanceUntilDueKm, baseline, distanceBaselineMissing, readingStale: dueOdometerKm !== null && stale };
 }
 
@@ -137,6 +177,10 @@ export function snoozeActive(s: SnoozeRow, today: string, reading: Reading | nul
 export function effectiveSnoozes<T extends SnoozeRow>(rows: T[], today: string, reading: Reading | null): T[] {
   return rows.filter((s) => snoozeActive(s, today, reading)).sort((a, b) => (a.scope === b.scope ? 0 : a.scope === 'personal' ? -1 : 1));
 }
+
+/** A task's due point as reminders see it. A completion or an edited interval moves it, which starts a new occurrence. */
+export const occurrenceKey = (t: { dueOn: string | null; dueOdometer: { value: string; unit: string } | null }): string =>
+  `${t.dueOn ?? '-'}|${t.dueOdometer ? `${t.dueOdometer.value}${t.dueOdometer.unit}` : '-'}`;
 
 /** States that deserve a reminder. `unknown_reading` and `no_baseline` are shown, never claimed as due. */
 export const needsAttention = (s: TaskState): boolean => s === 'overdue' || s === 'due_soon';

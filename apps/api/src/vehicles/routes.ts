@@ -3,12 +3,21 @@ import type { HttpRequest, Route } from '../http/app.ts';
 import { requirePrincipal } from '../identity.ts';
 import { invalid, obj } from '../http/validate.ts';
 import type { VehicleService } from './service.ts';
+import { suggestIdentities } from './model-identity.ts';
+import { bundledPresets } from '../service/presets.ts';
 
 
 export function vehicleRoutes(svc: VehicleService): Route[] {
   const who = (r: HttpRequest) => requirePrincipal(r.ctx);
   const fields = ['name', 'make', 'model', 'year', 'plateRegion', 'plateNumber', 'vin', 'odometerUnit', 'currency'];
   return [
+    // Optional make/model suggestions for the vehicle form: read-only, nothing stored, any other text stays valid.
+    { method: 'GET', path: '/v1/vehicle-identities', async handler(r) {
+      requirePrincipal(r.ctx);
+      const make = r.query.get('make') ?? '', model = r.query.get('model') ?? '';
+      if (make.length > 80 || model.length > 80) throw invalid('make and model must be at most 80 characters.');
+      return { status: 200, body: suggestIdentities(make, model, bundledPresets()) };
+    } },
     { method: 'GET', path: '/v1/vehicles', async handler(r) {
       const items = await svc.list(who(r), { includeArchived: r.query.get('includeArchived') === 'true' });
       return { status: 200, body: { items } };

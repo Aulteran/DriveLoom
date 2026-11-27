@@ -8,12 +8,13 @@ import { get, post, patch, put, del } from './api.js';
 import { h, form, field, select, toast } from './ui.js';
 import { icon } from './icons.js';
 import { plainDate } from './format.js';
+import { loadPresets, presetBanner, presetFlow, openDialog } from './presets.js';
 
 export const loadMaintenance = async (v) => {
-  const [tasks, summary, catalog] = await Promise.all([
-    get(`/v1/vehicles/${v.id}/maintenance-tasks`), get(`/v1/vehicles/${v.id}/maintenance-status`), get('/v1/maintenance-catalog'),
+  const [tasks, summary, catalog, presets] = await Promise.all([
+    get(`/v1/vehicles/${v.id}/maintenance-tasks`), get(`/v1/vehicles/${v.id}/maintenance-status`), get('/v1/maintenance-catalog'), loadPresets(v),
   ]);
-  return { tasks: tasks.items, summary, catalog };
+  return { tasks: tasks.items, summary, catalog, presets };
 };
 /** Every task including archived ones, for the visit form's "Completes maintenance task" choice. */
 export const loadTaskChoices = async (v) => (await get(`/v1/vehicles/${v.id}/maintenance-tasks?includeArchived=true`)).items;
@@ -25,9 +26,14 @@ const STATE = {
   no_baseline: { icon: 'list', label: 'No starting point', cls: '' },
   unknown_reading: { icon: 'gauge', label: 'Odometer needed', cls: '' },
   completed: { icon: 'check', label: 'Done', cls: 'good' },
+  tracking: { icon: 'clock', label: 'Tracking only', cls: '' },
 };
 /** Status as icon plus words: colour is never the only signal. */
-export const statusBadge = (state) => { const s = STATE[state] ?? STATE.no_baseline; return h('span', { class: `badge mt-badge ${s.cls}` }, icon(s.icon), s.label); };
+export const statusBadge = (state, task) => {
+  // A tracking point is not a completed service, so it is never called "No starting point" (or anything green).
+  const s = state === 'no_baseline' && task?.baseline === 'tracking' ? STATE.tracking : STATE[state] ?? STATE.no_baseline;
+  return h('span', { class: `badge mt-badge ${s.cls}` }, icon(s.icon), s.label);
+};
 
 const num = (n) => Number(n).toLocaleString();
 const dist = (d) => (d ? `${num(d.value)} ${d.unit}` : '');
@@ -38,15 +44,34 @@ const inMonth = () => { const d = new Date(); d.setMonth(d.getMonth() + 1); retu
 export function scheduleText(t) {
   if (!t.recurring) return 'One-time';
   const parts = [];
+  if (t.intervalMonths) parts.push(`${t.intervalMonths} month${t.intervalMonths === 1 ? '' : 's'}`);
   if (t.intervalDays) parts.push(`${t.intervalDays} day${t.intervalDays === 1 ? '' : 's'}`);
   if (t.intervalDistance) parts.push(dist(t.intervalDistance));
   return `Repeats every ${parts.join(' or ')}${parts.length > 1 ? ', whichever comes first' : ''}`;
+}
+
+/** The task's own starting point (reported by the owner, or "start tracking now"), as words. Never a recorded completion. */
+export function baselineText(t) {
+  if (!t.baselineKind) return null;
+  const at = [t.baselineOn ? plainDate(t.baselineOn) : null, t.baselineOdometer ? `at ${dist(t.baselineOdometer)}` : null].filter(Boolean).join(' ');
+  return t.baselineKind === 'reported'
+    ? `Last done ${at}, as you reported (no service record).`
+    : `Tracking since ${at} — not a completed service.`;
 }
 
 /** The lines under a task's name, each a short sentence. Never claims live mileage. */
 export function dueLines(t, summary) {
   const out = [];
   if (t.status === 'completed') { out.push(`Done${t.lastCompleted ? ` on ${plainDate(t.lastCompleted.servicedOn)}` : ''}.`); return out; }
+  if (t.status === 'no_baseline' && t.baseline === 'tracking' && (t.dueOn || t.dueOdometer)) {
+    const due = [t.dueOn ? plainDate(t.dueOn) : null, t.dueOdometer ? `at ${dist(t.dueOdometer)}` : null].filter(Boolean);
+    out.push(`Check by ${due.join(' or ')} at the latest. Without a recorded service DriveLoom cannot say it is up to date.`);
+    return out;
+  }
+  if (t.status === 'no_baseline' && t.baseline === 'tracking') {
+    out.push('Without a recorded service DriveLoom cannot say this is up to date. Record a visit that completes it to set a real starting point.');
+    return out;
+  }
   if (t.status === 'no_baseline') {
     out.push(t.distanceBaselineMissing
       ? 'The last completion has no odometer reading, so the next distance cannot be worked out.'
@@ -56,7 +81,8 @@ export function dueLines(t, summary) {
   const due = [];
   if (t.dueOn) due.push(plainDate(t.dueOn));
   if (t.dueOdometer) due.push(`at ${dist(t.dueOdometer)}`);
-  out.push(`Due ${due.join(' or ')}${t.baseline === 'first_due' ? ' (first due point you set)' : ''}.`);
+  const why = { first_due: ' (first due point you set)', reported: ' (counted from the date you reported)', tracking: ' (counted from when tracking started)' }[t.baseline] ?? '';
+  out.push(`Due ${due.join(' or ')}${why}.`);
   if (t.daysUntilDue !== null) out.push(t.daysUntilDue < 0 ? `${-t.daysUntilDue} day${t.daysUntilDue === -1 ? '' : 's'} past the date.` : t.daysUntilDue === 0 ? 'Due today.' : `${t.daysUntilDue} day${t.daysUntilDue === 1 ? '' : 's'} to go.`);
   if (t.dueOdometer) {
     const r = summary?.reading;
@@ -77,9 +103,11 @@ function snoozeText(t) {
   return `Reminders muted ${s.scope === 'vehicle' ? 'for everyone' : 'for you'} ${end}${s.reason ? ` (${s.reason})` : ''}. The task is still ${STATE[t.status].label.toLowerCase()}.`;
 }
 
-function summaryStrip(summary, phone) {
+function summaryStrip(summary, phone, tasks = []) {
   const c = summary.counts, r = summary.reading, d = summary.defaults;
-  const bits = [['overdue', c.overdue, 'overdue'], ['due_soon', c.due_soon, 'due soon'], ['ok', c.ok + c.completed, 'on track'], ['no_baseline', c.no_baseline, 'without a starting point'], ['unknown_reading', c.unknown_reading, 'needing an odometer reading']]
+  // Tasks that only track from a date are not "without a starting point", and not on track either.
+  const tracking = tasks.filter((t) => !t.archived && t.status === 'no_baseline' && t.baseline === 'tracking').length;
+  const bits = [['overdue', c.overdue, 'overdue'], ['due_soon', c.due_soon, 'due soon'], ['ok', c.ok + c.completed, 'on track'], ['no_baseline', c.no_baseline - tracking, 'without a starting point'], ['tracking', tracking, 'tracking only, not a completed service'], ['unknown_reading', c.unknown_reading, 'needing an odometer reading']]
     .filter(([, n]) => n > 0).map(([k, n, label]) => h('li', { class: 'mt-count' }, statusBadge(k), `${n} ${label}`));
   return h('section', { class: `${phone ? 'm-card ' : 'panel '}mt-summary`, 'aria-label': 'Maintenance summary' },
     bits.length ? h('ul', { class: 'mt-counts' }, bits) : h('p', { class: 'muted' }, c.total ? 'Nothing needs attention right now.' : 'No tasks yet.'),
@@ -90,12 +118,21 @@ function summaryStrip(summary, phone) {
 export function taskCard(v, t, summary, a) {
   const lines = dueLines(t, summary);
   const sn = snoozeText(t);
-  const last = t.lastCompleted ? `Last done ${plainDate(t.lastCompleted.servicedOn)}${t.lastCompleted.odometer ? ` at ${dist(t.lastCompleted.odometer)}` : ''}.` : 'Not recorded as done yet.';
+  const last = t.lastCompleted ? `Last done ${plainDate(t.lastCompleted.servicedOn)}${t.lastCompleted.odometer ? ` at ${dist(t.lastCompleted.odometer)}` : ''}.` : baselineText(t) ?? 'Not recorded as done yet.';
+  // The label says where the task started, not what its interval is now: an interval the owner edited
+  // loses its trust label (sourceTrust is null) and only the provenance is shown.
+  const source = t.presetId
+    ? (t.sourceTrust
+      ? `Originally suggested by the preset (${t.sourceTrust === 'manufacturer' ? 'manufacturer information' : 'community suggestion'})${t.sourceNote ? `: ${t.sourceNote}` : '.'} Check it against your owner's manual.`
+      : 'Originally suggested by the preset. The interval is now your own.')
+    : t.sourceTrust ? `Interval: ${t.sourceTrust === 'manufacturer' ? 'from manufacturer information' : 'a community suggestion'}${t.sourceNote ? ` (${t.sourceNote})` : ''}. Check it against your owner's manual.` : null;
   return h('article', { class: `${a.phone ? 'm-card ' : 'panel '}mt-task`, 'aria-label': `Maintenance task ${t.name}` },
-    h('div', { class: 'mt-head' }, h('h3', {}, t.name), statusBadge(t.status)),
+    h('div', { class: 'mt-head' }, h('h3', {}, t.name), statusBadge(t.status, t)),
     h('p', { class: 'small muted' }, scheduleText(t)),
     h('div', { class: 'mt-due' }, lines.map((l) => h('p', { class: 'small' }, l))),
     h('p', { class: 'small muted' }, last),
+    source ? h('p', { class: 'small muted' }, source) : null,
+    t.remindersEnabled === false ? h('p', { class: 'small muted' }, 'Email reminders are off for this task.') : null,
     sn ? h('p', { class: 'small mt-snooze' }, icon('history'), sn) : null,
     t.notes ? h('p', { class: 'small muted svc-notes' }, t.notes) : null,
     h('div', { class: 'row mt-actions' },
@@ -113,9 +150,12 @@ export function taskForm(v, existing, catalog, done) {
   catalogSel.addEventListener('change', () => { const c = catalog.items.find((i) => i.key === catalogSel.value); if (c) name.value = c.name; });
   const recurring = select('recurring', [['true', 'Repeats on a schedule'], ['false', 'One-time']], String(existing?.recurring ?? true));
   const days = h('input', { name: 'intervalDays', type: 'number', min: 1, max: 36500, step: 1, inputmode: 'numeric', value: existing?.intervalDays ?? '', placeholder: 'e.g. 365' });
+  const months = h('input', { name: 'intervalMonths', type: 'number', min: 1, max: 1200, step: 1, inputmode: 'numeric', value: existing?.intervalMonths ?? '', placeholder: 'e.g. 12' });
+  const reminders = h('input', { name: 'remindersEnabled', type: 'checkbox', value: 'true', checked: existing ? existing.remindersEnabled !== false : true });
   const unit = (n, val) => select(n, [['km', 'km'], ['mi', 'mi']], val ?? v.odometerUnit, { 'aria-label': `${n === 'intervalUnit' ? 'Interval' : 'Odometer'} unit` });
   const repeatBox = h('div', { class: 'grid' },
     field('Every how many days (optional)', days, '365 days is about a year. Leave empty for a distance-only task.'),
+    field('Or every how many months (optional)', months, 'Calendar months, for example 36 for every three years. Use days or months, not both.'),
     field('Every how far (optional)', h('div', { class: 'inline' }, h('input', { name: 'intervalDistance', inputmode: 'decimal', pattern: '\\d+(\\.\\d{1,3})?', 'aria-label': 'Interval distance', value: existing?.intervalDistance?.value ?? '' }), unit('intervalUnit', existing?.intervalDistance?.unit)),
       'If you set both, the task is due when either is reached first.'));
   const sync = () => { repeatBox.hidden = recurring.value !== 'true'; };
@@ -130,15 +170,20 @@ export function taskForm(v, existing, catalog, done) {
       field('First due on (optional)', h('input', { name: 'firstDueOn', type: 'date', value: existing?.firstDueOn ?? '' }), 'Used until the task is first recorded as done.'),
       field('First due at odometer (optional)', h('div', { class: 'inline' }, h('input', { name: 'firstDueOdometer', inputmode: 'decimal', pattern: '\\d+(\\.\\d{1,3})?', 'aria-label': 'First due odometer', value: existing?.firstDueOdometer?.value ?? '' }), unit('firstUnit', existing?.firstDueOdometer?.unit)))),
     field('Notes (optional)', h('textarea', { name: 'notes', maxlength: 500 }, existing?.notes ?? '')),
+    h('label', { class: 'check' }, reminders, 'Email reminders for this task (when the vehicle\'s emails are on)'),
     h('div', { class: 'row' }, h('button', { type: 'submit' }, existing ? 'Save changes' : 'Add task'), h('button', { type: 'button', class: 'secondary', onclick: () => done(false) }, 'Cancel')),
   ], async (x) => {
     const rec = x.recurring === 'true';
-    const iv = x.intervalDistance.trim(), fo = x.firstDueOdometer.trim(), d = String(x.intervalDays ?? '').trim();
+    const iv = x.intervalDistance.trim(), fo = x.firstDueOdometer.trim(), d = String(x.intervalDays ?? '').trim(), mo = String(x.intervalMonths ?? '').trim();
+    if (rec && d && mo) throw new Error('Give the interval in days or in months, not both.');
     const body = {
       name: x.name.trim(), catalogKey: x.catalog || null, recurring: rec,
-      intervalDays: rec && d ? Number(d) : null, intervalDistance: rec && iv ? { value: iv, unit: x.intervalUnit } : null,
+      intervalDays: rec && d ? Number(d) : null, intervalMonths: rec && mo ? Number(mo) : null, intervalDistance: rec && iv ? { value: iv, unit: x.intervalUnit } : null,
       firstDueOn: x.firstDueOn || null, firstDueOdometer: fo ? { value: fo, unit: x.firstUnit } : null, notes: x.notes.trim() || null,
+      remindersEnabled: x.remindersEnabled === 'true',
     };
+    // A one-time task has no starting point of its own; its first due point is what counts.
+    if (!rec && existing?.baselineKind) Object.assign(body, { baselineKind: null, baselineOn: null, baselineOdometer: null });
     if (existing) await patch(`/v1/vehicles/${v.id}/maintenance-tasks/${existing.id}`, body); else await post(`/v1/vehicles/${v.id}/maintenance-tasks`, body);
     done(true);
     return existing ? 'Task updated.' : 'Task added.';
@@ -193,7 +238,7 @@ export const MAINT_EMPTY = ['Add what you want to keep track of.', 'DriveLoom do
  * opens the add-visit form; `refresh()` redraws the page.
  */
 export function maintenancePanel(v, data, { phone = false, present, openVisit, refresh, mayRecord, mayManage, maySnooze, confirm }) {
-  const { tasks, summary, catalog } = data;
+  const { tasks, summary, catalog, presets } = data;
   const actions = {
     phone, mayRecord, mayManage, maySnooze,
     onDone: (t) => openVisit({ items: [{ name: t.name, category: 'scheduled', taskId: t.id }] }),
@@ -207,11 +252,16 @@ export function maintenancePanel(v, data, { phone = false, present, openVisit, r
   };
   const guard = (fn) => (t) => fn(t)?.catch?.((e) => toast(e.message));
   for (const k of ['onArchive', 'onDelete']) actions[k] = guard(actions[k]);
+  // The review flow is a modal dialog on the desktop and a sheet on phones; a finished import refreshes the list however it is closed.
+  let imported = false;
+  const review = (p) => (phone ? present : openDialog)('Maintenance recommendations',
+    (close) => presetFlow(v, presets, p, { summary, close, onImported: () => { imported = true; } }), () => { if (imported) refresh(); });
+  const banner = mayManage ? presetBanner(v, presets, { phone, onReview: review }) : null;
   const add = mayManage ? h('button', { type: 'button', class: phone ? 'm-wide' : '', onclick: () => present('Add a maintenance task', (close) => taskForm(v, null, catalog, (changed) => { close(); if (changed) refresh(); })) }, icon('plus'), 'Add maintenance task') : null;
   const list = h('ul', { class: 'svc-list m-list-plain', 'aria-label': 'Maintenance tasks' }, tasks.map((t) => h('li', {}, taskCard(v, t, summary, actions))));
   return {
     add,
-    node: h('div', { class: phone ? 'm-stack' : '' }, summaryStrip(summary, phone),
+    node: h('div', { class: phone ? 'm-stack' : '' }, banner, summaryStrip(summary, phone, tasks),
       tasks.length ? list : h('div', { class: phone ? 'm-card m-empty' : 'panel empty' }, h('p', {}, MAINT_EMPTY[0]), h('p', { class: 'small' }, MAINT_EMPTY[1]))),
   };
 }

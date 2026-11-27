@@ -24,8 +24,8 @@ export async function serviceScreen(id, query) {
   const canAdd = canAddService(v) && !v.archived;
   const view = query.get('view') === 'maintenance' ? 'maintenance' : 'history';
   const sections = sectionNav(v, view, true);
-  const sheetFor = (title, build) => {
-    const sheet = openSheet({ title, sub: vehicleTitle(v), className: 'm-form-sheet', content: build(() => sheet.close()) });
+  const sheetFor = (title, build, onClose) => {
+    const sheet = openSheet({ title, sub: vehicleTitle(v), className: 'm-form-sheet', content: build(() => sheet.close()), onClose });
     sheet.dialog.querySelector('input:not([type=hidden]), select, textarea')?.focus();
   };
 

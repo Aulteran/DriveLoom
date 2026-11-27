@@ -148,6 +148,82 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       assert.equal(await page.getByRole('combobox', { name: 'Vehicle' }).inputValue(), vehicle.split('/')[1]);
     });
 
+    await t.test('make and model suggest but never constrain: custom text saves verbatim, a suggestion fills its name, a failed lookup changes nothing', async () => {
+      const api = (call: string) => page.evaluate(`import('/js/api.js').then((m) => m.${call})`) as Promise<any>;
+      const made: string[] = [];
+      const add = async () => {
+        await page.goto(`${base}/#/garage`);
+        await page.getByRole('heading', { name: 'Garage', level: 1 }).waitFor();
+        await page.getByRole('button', { name: 'Add vehicle' }).first().click();
+        return page.locator('form', { hasText: 'Add a vehicle' });
+      };
+      const submit = async () => {
+        await page.locator('form').getByRole('button', { name: 'Add vehicle' }).click();
+        await page.waitForURL(/#\/vehicles\/[0-9a-f-]{36}/);
+        const id = new URL(page.url()).hash.split('/')[2]!;
+        made.push(id);
+        return await api(`get('/v1/vehicles/${id}')`);
+      };
+      const rows = async () => (await db.pool.query('SELECT id, make, model FROM vehicles ORDER BY id')).rows;
+      try {
+        // Custom text, no suggestion matches: saved exactly as typed.
+        let f = await add();
+        await f.getByLabel('Make').fill('Zorblax');
+        await f.getByLabel('Model').fill('Custom One');
+        await f.getByLabel('Year').fill('2015');
+        const custom = await submit();
+        assert.deepEqual([custom.make, custom.model, custom.year], ['Zorblax', 'Custom One', 2015]);
+
+        // A suggestion: typing a prefix offers the canonical name; choosing it puts that name in the field.
+        f = await add();
+        const make = f.getByLabel('Make'), model = f.getByLabel('Model');
+        await make.click();
+        await make.pressSequentially('hon');
+        await page.locator(`datalist[id="${await make.getAttribute('list')}"] option[value="Honda"]`).waitFor({ state: 'attached' });
+        assert.deepEqual(await axe('add vehicle with suggestions'), []);
+        await make.fill('Honda');
+        await model.click();
+        await model.pressSequentially('ody');
+        await page.locator(`datalist[id="${await model.getAttribute('list')}"] option[value="Odyssey"]`).waitFor({ state: 'attached' });
+        await model.fill('Odyssey');
+        await f.getByLabel('Year').fill('2015');
+        const picked = await submit();
+        assert.deepEqual([picked.make, picked.model], ['Honda', 'Odyssey']);
+
+        // An alias typed as free text is still saved as typed (never rewritten to the canonical name).
+        f = await add();
+        await f.getByLabel('Make').fill('chevy');
+        await f.getByLabel('Model').fill('Silverado LT');
+        const alias = await submit();
+        assert.deepEqual([alias.make, alias.model], ['chevy', 'Silverado LT']);
+
+        // The lookup failing leaves plain inputs that work as before.
+        await page.route('**/v1/vehicle-identities*', (r) => r.abort());
+        f = await add();
+        await f.getByLabel('Make').pressSequentially('Ren');
+        await f.getByLabel('Model').pressSequentially('Clio V');
+        const offline = await submit();
+        assert.deepEqual([offline.make, offline.model], ['Ren', 'Clio V']);
+        await page.unroute('**/v1/vehicle-identities*');
+        // The aborted lookups are expected to log failed loads; nothing else may.
+        for (let i = problems.length - 1; i >= 0; i--) if (problems[i] === 'console: Failed to load resource: net::ERR_FAILED') problems.splice(i, 1);
+
+        // Editing: the stored text shows as it is, and saving without touching it rewrites nothing.
+        await page.goto(`${base}/#/vehicles/${alias.id}/settings`);
+        await page.reload();
+        await page.getByLabel('Make').waitFor();
+        assert.equal(await page.getByLabel('Make').inputValue(), 'chevy');
+        const snapshot = await rows();
+        await page.getByRole('button', { name: /^Save/ }).first().click();
+        await page.getByText('Saved').first().waitFor().catch(() => undefined);
+        assert.deepEqual((await rows()).map((r) => [r.id, r.make, r.model]), snapshot.map((r) => [r.id, r.make, r.model]));
+      } finally {
+        if (made.length) await db.pool.query('DELETE FROM vehicles WHERE id = ANY($1)', [made]);
+        await page.goto(`${base}/#/${vehicle}`);
+        await page.getByRole('heading', { name: 'Golf', level: 1 }).waitFor();
+      }
+    });
+
     await t.test('the theme toggle overrides the system and survives a reload', async () => {
       const findings: string[] = [];
       for (const [system, forced] of [['light', 'Dark'], ['dark', 'Light']] as const) {
@@ -650,6 +726,13 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
         assert.equal(await p.getByRole('switch', { name: 'Share this vehicle’s economy with my friends' }).isChecked(), true, 'the desktop opt-in shows here');
         await p.getByRole('button', { name: /^Details/ }).click();
         assert.equal(await p.getByRole('dialog', { name: 'Vehicle details' }).getByLabel('Nickname (optional)').inputValue(), 'Golf');
+        const details = p.getByRole('dialog', { name: 'Vehicle details' });
+        assert.equal(await details.getByLabel('Make').inputValue(), 'VW', 'stored text is shown as saved');
+        const dl = await details.getByLabel('Make').getAttribute('list');
+        await details.getByLabel('Make').click();
+        await details.getByLabel('Make').fill('vol');
+        await p.locator(`datalist[id="${dl}"] option[value="Volkswagen"]`).waitFor({ state: 'attached' });
+        await details.getByLabel('Make').fill('VW');
         await p.keyboard.press('Escape');
 
         // Empty states: the second vehicle has no fill-ups.
@@ -1553,6 +1636,157 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
         await db.pool.query('DELETE FROM maintenance_tasks');
         await db.pool.query("UPDATE instance_modules SET enabled = false WHERE module = 'service'");
       }
+    });
+
+    // ---------- community maintenance presets: banner and the five-step review-and-import flow ----------
+    /** Runs `fn` with the journey's vehicle made a 2015 Honda Odyssey and the Service module on; everything is put back afterwards. */
+    const asOdyssey = async (fn: () => Promise<void>) => {
+      const vid = vehicle.split('/')[1];
+      const before = (await db.pool.query('SELECT make, model, model_year FROM vehicles WHERE id = $1', [vid])).rows[0];
+      await db.pool.query("INSERT INTO instance_modules (module, enabled) VALUES ('service', true) ON CONFLICT (module) DO UPDATE SET enabled = true");
+      await db.pool.query("UPDATE vehicles SET make = 'Honda', model = 'Odyssey', model_year = 2015 WHERE id = $1", [vid]);
+      try { await fn(); } finally {
+        await db.pool.query('DELETE FROM maintenance_tasks');
+        await db.pool.query('UPDATE vehicles SET make = $2, model = $3, model_year = $4 WHERE id = $1', [vid, before.make, before.model, before.model_year]);
+        await db.pool.query("UPDATE instance_modules SET enabled = false WHERE module = 'service'");
+      }
+    };
+    /** The whole flow on one page: banner, all five steps, then the imported tasks in the list. `check` runs accessibility checks at a few steps. */
+    const presetJourney = async (p: Page, check: (label: string) => Promise<void>) => {
+      await p.getByText('Maintenance recommendations available').waitFor();
+      await check('banner');
+      await p.getByRole('button', { name: 'Review maintenance recommendations' }).click();
+      const dlg = p.getByRole('dialog', { name: 'Maintenance recommendations' });
+      const step = (n: number, title: string) => dlg.getByText(`Step ${n} of 5`).waitFor().then(() => dlg.getByRole('heading', { name: title, level: 3 }).waitFor());
+      // 1: the vehicle, the market confirmation and where the preset comes from.
+      await step(1, 'Confirm your vehicle');
+      await dlg.getByText('2015 Honda Odyssey', { exact: true }).waitFor();
+      await dlg.getByText(/advisory/).waitFor();
+      await dlg.getByText(/Reviewed on/).waitFor();
+      await dlg.getByRole('button', { name: 'Next' }).click();
+      await dlg.getByRole('alert').getByText('Confirm that this is a US-market vehicle to continue.').waitFor();
+      await dlg.getByLabel('This vehicle is a US-market vehicle').check();
+      await check('step 1');
+      await dlg.getByRole('button', { name: 'Next' }).click();
+      // 2: trust wording, an edited interval, a deselected task; there is no way to add a task.
+      await step(2, 'Review the tasks');
+      assert.equal(await dlg.getByText('Community suggestion — not an official manufacturer requirement').count(), 14, 'every community task carries its trust label');
+      assert.equal(await dlg.getByText('Manufacturer information', { exact: true }).count(), 3, 'every manufacturer task carries its trust label');
+      assert.equal(await dlg.getByRole('button', { name: /add/i }).count(), 0, 'the flow never adds tasks');
+      await dlg.getByLabel('Engine oil and filter: every how many months (optional)').fill('12');
+      await dlg.getByText('Every 12 months or 5,000 mi, whichever comes first').waitFor();
+      await dlg.getByText(/You changed this interval/).waitFor();
+      for (const name of ['Transmission fluid', 'Tire rotation', 'Brake inspection', 'Engine air filter', 'Dust and pollen (cabin) filter', 'Drive belt inspection', 'Engine coolant', 'Spark plugs', 'Water pump inspection', 'Valve clearance inspection', 'Idle speed inspection', 'Battery terminal check', 'Wiper blades', 'General inspection']) await dlg.getByLabel(`Include ${name}`, { exact: true }).uncheck();
+      await check('step 2');
+      await dlg.getByRole('button', { name: 'Next' }).click();
+      // 3: a starting point per selected task. Only these three are listed.
+      await step(3, 'When was each one last done?');
+      assert.equal(await dlg.getByRole('group').count(), 3);
+      await dlg.getByText(/Latest odometer on record|No odometer reading is on record yet/).waitFor();
+      await dlg.getByRole('group', { name: 'Brake fluid' }).getByRole('radio', { name: 'I know when it was last done' }).check();
+      await dlg.getByLabel('Date Brake fluid was last done (optional)').fill('2024-05-10');
+      await dlg.getByRole('group', { name: 'Engine oil and filter' }).getByRole('radio', { name: 'Start tracking now' }).check();
+      await dlg.getByText(/This is not proof that the work was done/).waitFor();
+      assert.equal(await dlg.getByRole('group', { name: 'Timing belt' }).getByRole('radio', { name: "I don't know" }).isChecked(), true, 'I don\'t know is the default');
+      await check('step 3');
+      await dlg.getByRole('button', { name: 'Next' }).click();
+      // 4: the server's preview. Missing and tracking starting points are never shown as up to date.
+      await step(4, 'Preview');
+      const results = dlg.getByRole('list', { name: 'Preview of the import' });
+      await results.waitFor();
+      const item = (name: string) => results.getByRole('listitem').filter({ has: p.getByText(name, { exact: true }) });
+      await item('Brake fluid').getByText(/Next due .*2027/).waitFor();
+      await item('Engine oil and filter').getByText(/not a completed service/).waitFor();
+      await item('Timing belt').getByText(/Baseline needed/).waitFor();
+      assert.doesNotMatch(await results.innerText(), /On track|(?<!shown as |overdue or )up to date/i);
+      assert.equal(await dlg.getByRole('radio', { name: /Skip|Link/ }).count(), 0, 'no similar task, so no duplicate choice');
+      await check('step 4');
+      await dlg.getByRole('button', { name: 'Next' }).click();
+      // 5: reminders stay off and are not offered here; Import writes.
+      await step(5, 'Reminders and import');
+      await dlg.getByText('Imported tasks start with email reminders off; you can turn them on per task later.').waitFor();
+      assert.equal(await dlg.getByRole('checkbox', { name: /remind/i }).count() + await dlg.getByRole('switch').count(), 0, 'reminders are not offered in the flow');
+      assert.equal((await db.pool.query('SELECT count(*)::int AS n FROM maintenance_tasks')).rows[0].n, 0, 'nothing is saved before Import');
+      await check('step 5');
+      await dlg.getByRole('button', { name: 'Import' }).click();
+      await dlg.getByRole('heading', { name: 'Import finished' }).waitFor();
+      await dlg.getByText('Added: 3').waitFor();
+      await dlg.getByRole('button', { name: 'Back to the Maintenance list' }).click();
+      await dlg.waitFor({ state: 'detached' });
+      // The list refreshed: three tasks, reminders off, baselines as chosen.
+      const cards = p.locator('article.mt-task');
+      await cards.nth(2).waitFor();
+      assert.equal(await cards.count(), 3);
+      const card = (name: string) => p.getByRole('article', { name: `Maintenance task ${name}` });
+      await card('Timing belt').getByText('No starting point', { exact: true }).waitFor();
+      await card('Timing belt').getByText('Email reminders are off for this task.').waitFor();
+      await card('Engine oil and filter').getByText('Tracking only', { exact: true }).waitFor();
+      assert.equal(await card('Engine oil and filter').getByText('No starting point').count(), 0, 'a tracking point is not "No starting point"');
+      await card('Engine oil and filter').getByText(/Tracking since .* not a completed service/).first().waitFor();
+      await card('Engine oil and filter').getByText('Originally suggested by the preset. The interval is now your own.').waitFor();
+      await card('Brake fluid').getByText(/^Originally suggested by the preset \(manufacturer information\)/).waitFor();
+      await card('Brake fluid').getByText(/Last done .*2024.*as you reported/).waitFor();
+      const rows = (await db.pool.query('SELECT name, reminders_enabled, baseline_kind, source_trust, interval_months FROM maintenance_tasks ORDER BY name')).rows;
+      assert.deepEqual(rows, [
+        { name: 'Brake fluid', reminders_enabled: false, baseline_kind: 'reported', source_trust: 'manufacturer', interval_months: 36 },
+        { name: 'Engine oil and filter', reminders_enabled: false, baseline_kind: 'tracking', source_trust: null, interval_months: 12 },
+        { name: 'Timing belt', reminders_enabled: false, baseline_kind: null, source_trust: 'community', interval_months: 84 },
+      ]);
+      assert.equal((await db.pool.query('SELECT count(*)::int AS n FROM service_visits')).rows[0].n, 0, 'no service record is invented');
+      // Fourteen tasks are still on offer, so the banner stays; the three imported ones are not offered again.
+      await p.getByText('Maintenance recommendations available').waitFor();
+      await p.getByRole('button', { name: 'Review maintenance recommendations' }).click();
+      await dlg.getByLabel('This vehicle is a US-market vehicle').check();
+      await dlg.getByRole('button', { name: 'Next' }).click();
+      await step(2, 'Review the tasks');
+      assert.equal(await dlg.getByText(/Already imported/).count(), 3);
+      await p.keyboard.press('Escape');
+      await dlg.waitFor({ state: 'detached' });
+    };
+
+    await t.test('maintenance recommendations on desktop: no banner without a match, then the five-step review and import', async () => {
+      await db.pool.query("INSERT INTO instance_modules (module, enabled) VALUES ('service', true) ON CONFLICT (module) DO UPDATE SET enabled = true");
+      try {
+        // No preset for this vehicle: the tab looks exactly as before.
+        await page.goto(`${base}/#/${vehicle}/service?view=maintenance`);
+        await page.reload();
+        await page.getByText('Add what you want to keep track of.').waitFor();
+        assert.equal(await page.getByText('Maintenance recommendations available').count(), 0);
+      } finally { await db.pool.query("UPDATE instance_modules SET enabled = false WHERE module = 'service'"); }
+      await asOdyssey(async () => {
+        await page.goto(`${base}/#/${vehicle}/service?view=maintenance`);
+        await page.reload();
+        await presetJourney(page, async (label) => assert.deepEqual(await axe(`presets ${label}`), []));
+        await noErrorPage();
+      });
+    });
+
+    await t.test('maintenance recommendations on a phone: the same flow in a sheet, and a vehicle without a match shows nothing', async () => {
+      await db.pool.query("INSERT INTO instance_modules (module, enabled) VALUES ('service', true) ON CONFLICT (module) DO UPDATE SET enabled = true");
+      try {
+        const { ctx, p } = await phonePage();
+        try {
+          await p.goto('about:blank');
+          await p.goto(`${base}/#/${vehicle}/service?view=maintenance`);
+          await p.getByText('Add what you want to keep track of.').waitFor();
+          assert.equal(await p.getByText('Maintenance recommendations available').count(), 0);
+        } finally { await ctx.close(); }
+      } finally { await db.pool.query("UPDATE instance_modules SET enabled = false WHERE module = 'service'"); }
+      await asOdyssey(async () => {
+        const { ctx, p, phoneAxe, open } = await phonePage();
+        try {
+          await open(`${vehicle}/service?view=maintenance`);
+          let n = 0;
+          // Both themes are slow; the opening step and the preview stand for the rest.
+          await presetJourney(p, async (label) => {
+            if (label === 'banner' || label === 'step 4') assert.deepEqual(await bothThemes(p, phoneAxe, `presets ${label}`), []);
+            n++;
+            assert.equal(await overflows(p), false, `presets ${label} overflows on a phone`);
+          });
+          assert.ok(n >= 6);
+          await p.emulateMedia({ colorScheme: 'light' });
+        } finally { await ctx.close(); }
+      });
     });
 
     await t.test('reminders by email on desktop: no-SMTP notice, owner settings and the personal switch', async () => {
