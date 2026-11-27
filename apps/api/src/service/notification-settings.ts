@@ -10,7 +10,7 @@ import type pg from 'pg';
 import type { HttpRequest, Route } from '../http/app.ts';
 import { HttpProblem } from '../http/problem.ts';
 import { bool, invalid, obj } from '../http/validate.ts';
-import { isUuid, uuidv7 } from '../ids.ts';
+import { isUuid } from '../ids.ts';
 import { requirePrincipal, type Principal } from '../identity.ts';
 import { requireModule } from '../modules.ts';
 import { getPreferences } from '../preferences.ts';
@@ -19,6 +19,8 @@ import { canManageNotifications, canReceiveServiceEmail } from '../vehicles/perm
 import type { VehicleService } from '../vehicles/service.ts';
 import type { Role, VehicleAccess } from '../vehicles/types.ts';
 import { DEFAULT_FOLLOW_UP_DAYS, EMAIL_LEAD_DAYS, EMAIL_LEAD_DISTANCE, MAX_FOLLOW_UP_DAYS, deliverySummary } from './notifications.ts';
+import { auditAs } from '../audit.ts';
+import { apiKeyProblems } from '../auth/api-key-auth.ts';
 
 type Q = Pick<pg.Pool, 'query'>;
 const MAX_RECIPIENTS = 100;
@@ -29,7 +31,10 @@ export interface NotificationSettingsView {
   leadDays: number; leadDistance: { value: Decimal; unit: DistanceUnit };
   smtpConfigured: boolean; canManage: boolean;
   me: { eligible: boolean; selected: boolean; optedOut: boolean; receiving: boolean };
+  /** For an API key: only the key owner's own entry (the other members' names and addresses are never sent to a key). */
   recipients: RecipientView[] | null;
+  /** Present only for an API key: how many other recipients exist (not who). */
+  otherRecipientCount?: number;
   delivery: { lastSentAt: string | null; pending: number; failed: number } | null;
 }
 
@@ -74,7 +79,8 @@ export class NotificationSettingsService {
       emailEnabled, followUpDays, leadDays: EMAIL_LEAD_DAYS, leadDistance: { value: String(EMAIL_LEAD_DISTANCE) as Decimal, unit: prefs.distanceUnit },
       smtpConfigured: this.#smtp(), canManage: manage,
       me: { eligible, selected, optedOut, receiving: emailEnabled && eligible && selected && !optedOut },
-      recipients: manage ? recipients : null,
+      recipients: manage ? (p.kind === 'api_key' ? recipients.filter((r) => r.userId === p.userId) : recipients) : null,
+      ...(manage && p.kind === 'api_key' ? { otherRecipientCount: recipients.filter((r) => r.userId !== p.userId).length } : {}),
       delivery: manage ? await deliverySummary(q, v.id) : null,
     };
   }
@@ -95,7 +101,7 @@ export class NotificationSettingsService {
   }
 
   async #audit(c: pg.PoolClient, p: Principal, action: string, vehicleId: Id, details: Record<string, unknown>): Promise<void> {
-    await c.query("INSERT INTO audit_events (id, actor_id, action, subject_type, subject_id, details) VALUES ($1,$2,$3,'vehicle',$4,$5)", [uuidv7(), p.userId, action, vehicleId, JSON.stringify(details)]);
+    await auditAs(c, p, { action, subjectType: 'vehicle', subjectId: vehicleId, details });
   }
 
   /** Partial update by the owner or a manager. `recipientUserIds` replaces the selection (the owner is always included). */
@@ -110,6 +116,8 @@ export class NotificationSettingsService {
       followUpDays = n;
     }
     let ids: Id[] | undefined;
+    // Choosing recipients means naming other members; a key cannot see them (D2), so it may not set them either.
+    if (b['recipientUserIds'] !== undefined && p.kind === 'api_key') throw apiKeyProblems.notAllowed('Reminder recipients are chosen in the web app, not with an API key.');
     if (b['recipientUserIds'] !== undefined) {
       const raw = b['recipientUserIds'];
       if (!Array.isArray(raw) || raw.length > MAX_RECIPIENTS || !raw.every(isUuid)) throw invalid(`recipientUserIds must be a list of at most ${MAX_RECIPIENTS} user ids.`);

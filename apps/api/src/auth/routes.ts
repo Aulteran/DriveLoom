@@ -3,7 +3,7 @@ import { getModules } from '../modules.ts';
 import { getInstanceDefaults } from '../preferences.ts';
 import { SESSION_COOKIE, type AuthMode, type HttpRequest, type HttpResult, type Route } from '../http/app.ts';
 import { HttpProblem } from '../http/problem.ts';
-import { requirePrincipal } from '../identity.ts';
+import { requireSessionPrincipal } from '../identity.ts';
 import { isUuid } from '../ids.ts';
 import type { Id } from '../types.ts';
 import type { AuthContext } from './context.ts';
@@ -35,6 +35,9 @@ function sessionResult(ctx: AuthContext, s: NewSession, extra: Record<string, un
     headers: { 'set-cookie': cookie(ctx, SESSION_COOKIE, s.token, maxAge) },
   };
 }
+
+/** The session principal of an optional-auth request; a key principal never reaches these routes and is never accepted here. */
+const sessionOrNull = (req: HttpRequest) => (req.ctx.principal?.kind === 'session' ? req.ctx.principal : null);
 
 export function authRoutes(ctx: AuthContext): Route[] {
   const r = (method: Route['method'], path: string, auth: AuthMode, handler: Route['handler']): Route => ({ method, path, auth, handler });
@@ -71,25 +74,25 @@ export function authRoutes(ctx: AuthContext): Route[] {
       return sessionResult(ctx, out.session);
     }),
     r('POST', '/v1/auth/logout', 'required', async (req) => {
-      const p = requirePrincipal(req.ctx);
+      const p = requireSessionPrincipal(req.ctx);
       await sess.revokeSession(ctx, p.userId, p.sessionId);
       return { status: 204, headers: { 'set-cookie': clearCookie(ctx, SESSION_COOKIE) } };
     }),
     r('GET', '/v1/auth/session', 'required', async (req) => {
-      const p = requirePrincipal(req.ctx);
+      const p = requireSessionPrincipal(req.ctx);
       return ok(200, { csrf_token: req.session!.csrfToken, session_id: p.sessionId, account: await acct.describeAccount(ctx, p), modules: await getModules(ctx.db) });
     }),
     r('POST', '/v1/auth/reauth', 'required', async (req) => {
       const b = body(req);
-      await acct.reauthenticate(ctx, requirePrincipal(req.ctx), { password: b['password'], code: b['code'] }, meta(req));
+      await acct.reauthenticate(ctx, requireSessionPrincipal(req.ctx), { password: b['password'], code: b['code'] }, meta(req));
       return ok();
     }),
     r('PATCH', '/v1/auth/account', 'required', async (req) => {
-      await acct.updateProfile(ctx, requirePrincipal(req.ctx), { displayName: body(req)['display_name'] });
+      await acct.updateProfile(ctx, requireSessionPrincipal(req.ctx), { displayName: body(req)['display_name'] });
       return ok();
     }),
     r('DELETE', '/v1/auth/account', 'required', async (req) => {
-      await acct.deleteAccount(ctx, requirePrincipal(req.ctx));
+      await acct.deleteAccount(ctx, requireSessionPrincipal(req.ctx));
       return { status: 204, headers: { 'set-cookie': clearCookie(ctx, SESSION_COOKIE) } };
     }),
     // Public facts the sign-in screen needs before anyone is authenticated.
@@ -103,26 +106,26 @@ export function authRoutes(ctx: AuthContext): Route[] {
     }),
     // --- sessions ---
     r('GET', '/v1/auth/sessions', 'required', async (req) => {
-      const p = requirePrincipal(req.ctx);
+      const p = requireSessionPrincipal(req.ctx);
       const rows = await sess.listSessions(ctx, p.userId);
       return ok(200, { sessions: rows.map((s) => ({ id: s.id, created_at: s.created_at, last_seen_at: s.last_seen_at, user_agent: s.user_agent, current: s.id === p.sessionId })) });
     }),
     r('DELETE', '/v1/auth/sessions/:id', 'required', async (req) => {
-      const p = requirePrincipal(req.ctx);
+      const p = requireSessionPrincipal(req.ctx);
       if (!(await sess.revokeSession(ctx, p.userId, idParam(req)))) throw new HttpProblem(404, 'not_found', 'Not found');
       return ok();
     }),
     r('POST', '/v1/auth/sessions/revoke-others', 'required', async (req) => {
-      const p = requirePrincipal(req.ctx);
+      const p = requireSessionPrincipal(req.ctx);
       return ok(200, { revoked: await sess.revokeAll(ctx, p.userId, p.sessionId, 'user_request') });
     }),
     // --- password and recovery ---
     r('PUT', '/v1/auth/password', 'required', async (req) => {
       const b = body(req);
-      await acct.setPassword(ctx, requirePrincipal(req.ctx), { currentPassword: b['current_password'], newPassword: b['new_password'] });
+      await acct.setPassword(ctx, requireSessionPrincipal(req.ctx), { currentPassword: b['current_password'], newPassword: b['new_password'] });
       return ok();
     }),
-    r('DELETE', '/v1/auth/password', 'required', async (req) => { await acct.removePassword(ctx, requirePrincipal(req.ctx)); return ok(); }),
+    r('DELETE', '/v1/auth/password', 'required', async (req) => { await acct.removePassword(ctx, requireSessionPrincipal(req.ctx)); return ok(); }),
     r('POST', '/v1/auth/recovery/request', 'none', async (req) => {
       await acct.recoveryRequest(ctx, { email: body(req)['email'] }, meta(req)); // delivery deliberately not awaited
       return ok(202, { status: 'accepted' });
@@ -134,28 +137,28 @@ export function authRoutes(ctx: AuthContext): Route[] {
     }),
     // --- TOTP ---
     r('POST', '/v1/auth/totp', 'required', async (req) => {
-      const out = await acct.totpBegin(ctx, requirePrincipal(req.ctx));
+      const out = await acct.totpBegin(ctx, requireSessionPrincipal(req.ctx));
       return ok(200, { secret: out.secret, otpauth_uri: out.otpauthUri });
     }),
     r('POST', '/v1/auth/totp/confirm', 'required', async (req) => {
-      const out = await acct.totpConfirm(ctx, requirePrincipal(req.ctx), body(req)['code']);
+      const out = await acct.totpConfirm(ctx, requireSessionPrincipal(req.ctx), body(req)['code']);
       return ok(200, { recovery_codes: out.recoveryCodes });
     }),
-    r('DELETE', '/v1/auth/totp', 'required', async (req) => { await acct.totpRemove(ctx, requirePrincipal(req.ctx)); return ok(); }),
+    r('DELETE', '/v1/auth/totp', 'required', async (req) => { await acct.totpRemove(ctx, requireSessionPrincipal(req.ctx)); return ok(); }),
     // --- passkeys ---
-    r('POST', '/v1/auth/passkeys/register/options', 'required', async (req) => ok(200, await pk.registerOptions(ctx, requirePrincipal(req.ctx)))),
+    r('POST', '/v1/auth/passkeys/register/options', 'required', async (req) => ok(200, await pk.registerOptions(ctx, requireSessionPrincipal(req.ctx)))),
     r('POST', '/v1/auth/passkeys/register/verify', 'required', async (req) => {
       const b = body(req);
-      return ok(201, await pk.registerVerify(ctx, requirePrincipal(req.ctx), b['response'], b['label']));
+      return ok(201, await pk.registerVerify(ctx, requireSessionPrincipal(req.ctx), b['response'], b['label']));
     }),
-    r('DELETE', '/v1/auth/passkeys/:id', 'required', async (req) => { await pk.remove(ctx, requirePrincipal(req.ctx), idParam(req)); return ok(); }),
+    r('DELETE', '/v1/auth/passkeys/:id', 'required', async (req) => { await pk.remove(ctx, requireSessionPrincipal(req.ctx), idParam(req)); return ok(); }),
     r('POST', '/v1/auth/passkeys/login/options', 'none', async (req) => ok(200, await pk.loginOptions(ctx, meta(req)))),
     r('POST', '/v1/auth/passkeys/login/verify', 'none', async (req) => sessionResult(ctx, (await pk.loginVerify(ctx, body(req)['response'], meta(req))).session)),
     // --- OIDC ---
     r('POST', '/v1/auth/oidc/start', 'optional', async (req) => {
       const b = body(req);
       const mode = b['mode'] === 'link' ? 'link' : 'login';
-      const out = await oidc.start(ctx, { mode, principal: req.ctx.principal, setupToken: b['setup_token'], units: b['units'] }, meta(req));
+      const out = await oidc.start(ctx, { mode, principal: sessionOrNull(req), setupToken: b['setup_token'], units: b['units'] }, meta(req));
       return { status: 200, body: { authorization_url: out.url }, headers: { 'set-cookie': cookie(ctx, OIDC_BINDING_COOKIE, out.binding, 600, '/v1/auth/oidc') } };
     }),
     r('GET', '/v1/auth/oidc/callback', 'optional', async (req) => {
@@ -164,7 +167,7 @@ export function authRoutes(ctx: AuthContext): Route[] {
       const clear = clearCookie(ctx, OIDC_BINDING_COOKIE, '/v1/auth/oidc');
       let out: Awaited<ReturnType<typeof oidc.callback>>;
       try {
-        out = await oidc.callback(ctx, { query: req.query, binding: req.cookies[OIDC_BINDING_COOKIE], principal: req.ctx.principal }, meta(req));
+        out = await oidc.callback(ctx, { query: req.query, binding: req.cookies[OIDC_BINDING_COOKIE], principal: sessionOrNull(req) }, meta(req));
       } catch (e) {
         if (!browser || !(e instanceof HttpProblem)) throw e;
         return { status: 303, headers: { location: `/#/signin?error=${encodeURIComponent(e.code)}`, 'set-cookie': clear } };
@@ -175,7 +178,7 @@ export function authRoutes(ctx: AuthContext): Route[] {
       if (browser) return { status: 303, headers: { ...res.headers, location: '/#/' } };
       return res;
     }),
-    r('DELETE', '/v1/auth/oidc/identities/:id', 'required', async (req) => { await oidc.unlink(ctx, requirePrincipal(req.ctx), idParam(req)); return ok(); }),
+    r('DELETE', '/v1/auth/oidc/identities/:id', 'required', async (req) => { await oidc.unlink(ctx, requireSessionPrincipal(req.ctx), idParam(req)); return ok(); }),
     // --- API keys (session-only management) ---
     ...apiKeyRoutes(ctx),
   ];

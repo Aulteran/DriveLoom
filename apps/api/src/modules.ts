@@ -6,7 +6,7 @@ import type pg from 'pg';
 import type { Route } from './http/app.ts';
 import { HttpProblem } from './http/problem.ts';
 import { invalid, obj } from './http/validate.ts';
-import { requirePrincipal } from './identity.ts';
+import { requireSessionPrincipal } from './identity.ts';
 import { isUuid } from './ids.ts';
 import type { Id } from './types.ts';
 
@@ -61,11 +61,11 @@ export function vehiclePrefRoutes(db: pg.Pool): Route[] {
   };
   return [
     { method: 'GET', path: '/v1/vehicles/:vehicleId/service-visibility', async handler(r) {
-      const p = requirePrincipal(r.ctx);
+      const p = requireSessionPrincipal(r.ctx);
       return { status: 200, body: await serviceVisibility(db, await member(r.params['vehicleId'], p.userId), p.userId) };
     } },
     { method: 'PUT', path: '/v1/vehicles/:vehicleId/service-visibility', async handler(r) {
-      const p = requirePrincipal(r.ctx);
+      const p = requireSessionPrincipal(r.ctx);
       const vid = await member(r.params['vehicleId'], p.userId);
       const { showService } = obj(r.body, ['showService']);
       if (typeof showService !== 'boolean') throw invalid('showService must be a boolean.');

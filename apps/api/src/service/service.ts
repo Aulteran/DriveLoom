@@ -23,6 +23,8 @@ import { attachmentsFor, exportAttachments, type AttachmentView } from './attach
 import { canChangeVisit, canWriteService } from '../vehicles/permissions.ts';
 import type { VehicleService } from '../vehicles/service.ts';
 import type { VehicleAccess } from '../vehicles/types.ts';
+import { auditAs } from '../audit.ts';
+import { requireKeyGrant } from '../auth/api-key-auth.ts';
 
 export const CATEGORIES = ['scheduled', 'repair', 'inspection', 'other'] as const;
 export type Category = (typeof CATEGORIES)[number];
@@ -96,6 +98,29 @@ interface PageRow extends VisitRow { created_at_text: string }
 const like = (q: string) => `%${q.replace(/[\\%_]/g, '\\$&')}%`;
 const CURSOR_RE = /^(\d{4}-\d{2}-\d{2})\|([0-9T:. +-]{10,40})\|([0-9a-f-]{36})$/;
 const encodeCursor = (r: PageRow) => Buffer.from(`${r.serviced_on}|${r.created_at_text}|${r.id}`).toString('base64url');
+
+const canon = (name: string): string => name.trim().replace(/\s+/g, ' ').toLowerCase();
+
+/**
+ * How many stored items a replacement list drops. Items have no ids in a request, so they are matched by their canonical name
+ * (trimmed, whitespace-collapsed, case-insensitive), one for one: editing an item's cost, category, notes or task keeps it,
+ * while removing or renaming one counts as removing it. A key needs `service.delete` when this is above zero (D1).
+ */
+export function droppedItemCount(stored: readonly { name: string }[], next: readonly { name: string }[]): number {
+  const left = new Map<string, number>();
+  for (const i of next) left.set(canon(i.name), (left.get(canon(i.name)) ?? 0) + 1);
+  let dropped = 0;
+  for (const e of stored) {
+    const k = canon(e.name), n = left.get(k) ?? 0;
+    if (n > 0) left.set(k, n - 1); else dropped++;
+  }
+  return dropped;
+}
+
+/** Linking an item to a maintenance task is choosing that task: a key needs maintenance.read (D1, spec "task selection"). */
+function requireTaskLinkGrant(p: Principal, items: readonly { taskId: Id | null }[]): void {
+  if (items.some((i) => i.taskId !== null)) requireKeyGrant(p, { module: 'maintenance', action: 'read' });
+}
 
 export interface ListOptions { limit?: number; cursor?: string; from?: string; to?: string; q?: string; category?: string }
 
@@ -183,8 +208,7 @@ export class ServiceService {
   }
 
   async #audit(c: pg.PoolClient, p: Principal, action: string, vehicleId: Id, visitId: Id): Promise<void> {
-    await c.query("INSERT INTO audit_events (id, actor_id, action, subject_type, subject_id, details) VALUES ($1,$2,$3,'vehicle',$4,$5)",
-      [uuidv7(), p.userId, action, vehicleId, JSON.stringify({ visitId })]);
+    await auditAs(c, p, { action, subjectType: 'vehicle', subjectId: vehicleId, details: { visitId }, target: { type: 'service_visit', ids: [visitId] } });
   }
 
   async #insertItems(c: pg.PoolClient, visitId: Id, items: ParsedItem[]): Promise<void> {
@@ -218,6 +242,7 @@ export class ServiceService {
     const b = obj(body, VISIT_FIELDS);
     return this.#write(p, vehicleId, async (c, v) => {
       const f = parseVisit(b, v.currency, this.#now());
+      requireTaskLinkGrant(p, f.items);
       await assertTaskLinks(c, v.id, f.items);
       const id = await this.insertParsed(c, v.id, v.currency, f, p.userId);
       await this.#audit(c, p, 'service_visit.create', v.id, id);
@@ -241,7 +266,12 @@ export class ServiceService {
       };
       // The vehicle's currency cannot change once costs exist, so it is always the one these costs were entered in.
       const f = parseVisit(merged, v.currency, this.#now());
-      if ('items' in patch) await assertTaskLinks(c, v.id, f.items);
+      if ('items' in patch) {
+        requireTaskLinkGrant(p, f.items);
+        // The stored items are deleted and re-created: a key that removes or renames one needs delete, not just update.
+        if (droppedItemCount(view.items, f.items) > 0) requireKeyGrant(p, { module: 'service', action: 'delete' });
+        await assertTaskLinks(c, v.id, f.items);
+      }
       await c.query(
         `UPDATE service_visits SET serviced_on = $2, odometer_input = $3, odometer_unit = $4, odometer_km = $5, provider = $6, is_diy = $7, visit_total_cost = $8, notes = $9, currency = $10, updated_at = now() WHERE id = $1`,
         [cur.id, f.servicedOn, f.odometer?.value ?? null, f.odometer?.unit ?? null, f.odometer?.km.toFixed(6) ?? null, f.provider, f.diy, f.totalCost, f.notes, v.currency]);

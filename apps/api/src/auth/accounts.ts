@@ -4,7 +4,7 @@ import { withTx, type Tx } from '../db.ts';
 import { HttpProblem } from '../http/problem.ts';
 import { uuidv7 } from '../ids.ts';
 import type { Id } from '../types.ts';
-import type { Principal } from '../identity.ts';
+import type { SessionPrincipal } from '../identity.ts';
 import { audit, checkPassword, normaliseEmail, problem, rateLimit, type AuthContext } from './context.ts';
 import {
   base32, decryptSecret, dummyHash, encryptSecret, hashPassword, hmacHex, matchTotp, numericCode, randomToken, recoveryCode, safeEqual, sha256Hex, verifyPassword,
@@ -201,7 +201,7 @@ async function useRecoveryCode(ctx: AuthContext, userId: Id, code: string): Prom
 }
 
 /** Refresh the session's authentication time (for sensitive actions) with password or TOTP. */
-export async function reauthenticate(ctx: AuthContext, p: Principal, input: { password?: unknown; code?: unknown }, meta: Meta): Promise<void> {
+export async function reauthenticate(ctx: AuthContext, p: SessionPrincipal, input: { password?: unknown; code?: unknown }, meta: Meta): Promise<void> {
   await rateLimit(ctx, `reauth:acct:${p.userId}`, 10, TEN_MIN);
   let ok = false;
   if (typeof input.password === 'string') {
@@ -216,7 +216,7 @@ export async function reauthenticate(ctx: AuthContext, p: Principal, input: { pa
 }
 
 // ---------- password ----------
-export async function setPassword(ctx: AuthContext, p: Principal, input: { currentPassword?: unknown; newPassword: unknown }): Promise<void> {
+export async function setPassword(ctx: AuthContext, p: SessionPrincipal, input: { currentPassword?: unknown; newPassword: unknown }): Promise<void> {
   const next = checkPassword(ctx, input.newPassword);
   await rateLimit(ctx, `pwchange:acct:${p.userId}`, 10, TEN_MIN);
   const cred = (await ctx.db.query<{ hash: string }>('SELECT hash FROM password_credentials WHERE user_id = $1', [p.userId])).rows[0];
@@ -241,7 +241,7 @@ export async function primaryMethodCount(ctx: AuthContext, q: Pick<PoolClient, '
 }
 
 /** Run a credential removal so the user can never be left with no primary sign-in method. */
-export async function removeGuarded(ctx: AuthContext, p: Principal, remove: (tx: Tx) => Promise<number>, action: string, details: Record<string, unknown>): Promise<void> {
+export async function removeGuarded(ctx: AuthContext, p: SessionPrincipal, remove: (tx: Tx) => Promise<number>, action: string, details: Record<string, unknown>): Promise<void> {
   requireFresh(ctx, p);
   await withTx(ctx.db, async (tx) => {
     await tx.query('SELECT id FROM users WHERE id = $1 FOR UPDATE', [p.userId]); // serialise concurrent removals
@@ -253,7 +253,7 @@ export async function removeGuarded(ctx: AuthContext, p: Principal, remove: (tx:
   await revokeAll(ctx, p.userId, p.sessionId, action);
 }
 
-export const removePassword = (ctx: AuthContext, p: Principal) =>
+export const removePassword = (ctx: AuthContext, p: SessionPrincipal) =>
   removeGuarded(ctx, p, async (tx) => (await tx.query('DELETE FROM password_credentials WHERE user_id = $1', [p.userId])).rowCount ?? 0, 'credential.password_removed', {});
 
 // ---------- recovery by email ----------
@@ -314,7 +314,7 @@ export async function adminResetPassword(ctx: AuthContext, emailRaw: string, new
 }
 
 // ---------- TOTP ----------
-export async function totpBegin(ctx: AuthContext, p: Principal): Promise<{ secret: string; otpauthUri: string }> {
+export async function totpBegin(ctx: AuthContext, p: SessionPrincipal): Promise<{ secret: string; otpauthUri: string }> {
   requireFresh(ctx, p);
   const existing = await ctx.db.query('SELECT 1 FROM totp_credentials WHERE user_id = $1 AND confirmed_at IS NOT NULL', [p.userId]);
   if (existing.rowCount) throw new HttpProblem(409, 'totp_exists', 'An authenticator is already enrolled; remove it first');
@@ -328,7 +328,7 @@ export async function totpBegin(ctx: AuthContext, p: Principal): Promise<{ secre
   return { secret: b32, otpauthUri: `otpauth://totp/DriveLoom:${encodeURIComponent(email)}?secret=${b32}&issuer=DriveLoom&algorithm=SHA1&digits=6&period=30` };
 }
 
-export async function totpConfirm(ctx: AuthContext, p: Principal, code: unknown): Promise<{ recoveryCodes: string[] }> {
+export async function totpConfirm(ctx: AuthContext, p: SessionPrincipal, code: unknown): Promise<{ recoveryCodes: string[] }> {
   requireFresh(ctx, p);
   await rateLimit(ctx, `mfa:acct:${p.userId}`, 10, TEN_MIN);
   const { rows } = await ctx.db.query<{ secret_enc: string }>('SELECT secret_enc FROM totp_credentials WHERE user_id = $1 AND confirmed_at IS NULL', [p.userId]);
@@ -347,7 +347,7 @@ export async function totpConfirm(ctx: AuthContext, p: Principal, code: unknown)
   return { recoveryCodes: codes };
 }
 
-export async function totpRemove(ctx: AuthContext, p: Principal): Promise<void> {
+export async function totpRemove(ctx: AuthContext, p: SessionPrincipal): Promise<void> {
   requireFresh(ctx, p);
   await withTx(ctx.db, async (tx) => {
     const r = await tx.query('DELETE FROM totp_credentials WHERE user_id = $1', [p.userId]);
@@ -359,7 +359,7 @@ export async function totpRemove(ctx: AuthContext, p: Principal): Promise<void> 
 }
 
 // ---------- overview ----------
-export async function describeAccount(ctx: AuthContext, p: Principal) {
+export async function describeAccount(ctx: AuthContext, p: SessionPrincipal) {
   const q = ctx.db;
   const [u, pw, totp, rc, pk, oidc] = await Promise.all([
     q.query<UserRow>('SELECT id, email, instance_role, status, email_verified_at, display_name FROM users WHERE id = $1', [p.userId]),
@@ -380,7 +380,7 @@ export async function describeAccount(ctx: AuthContext, p: Principal) {
 }
 
 // ---------- profile and account removal ----------
-export async function updateProfile(ctx: AuthContext, p: Principal, input: { displayName?: unknown }): Promise<void> {
+export async function updateProfile(ctx: AuthContext, p: SessionPrincipal, input: { displayName?: unknown }): Promise<void> {
   if (typeof input.displayName !== 'string' || input.displayName.trim().length > 80) throw problem.invalidInput('display_name must be text of at most 80 characters');
   await ctx.db.query('UPDATE users SET display_name = $2 WHERE id = $1', [p.userId, input.displayName.trim()]);
 }
@@ -392,7 +392,7 @@ export async function updateProfile(ctx: AuthContext, p: Principal, input: { dis
  * preferences are deleted; the user row stays as an anonymised tombstone so
  * audit history and records they entered on shared vehicles keep a referent.
  */
-export async function deleteAccount(ctx: AuthContext, p: Principal): Promise<void> {
+export async function deleteAccount(ctx: AuthContext, p: SessionPrincipal): Promise<void> {
   requireFresh(ctx, p);
   await withTx(ctx.db, async (tx) => {
     const u = (await tx.query<{ instance_role: string }>('SELECT instance_role FROM users WHERE id = $1 FOR UPDATE', [p.userId])).rows[0]!;

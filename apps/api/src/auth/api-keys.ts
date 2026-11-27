@@ -34,7 +34,7 @@
 import { withTx, type Db } from '../db.ts';
 import { HttpProblem } from '../http/problem.ts';
 import { invalid, obj } from '../http/validate.ts';
-import type { InstanceRole, Principal } from '../identity.ts';
+import type { InstanceRole, SessionPrincipal } from '../identity.ts';
 import { isUuid, uuidv7 } from '../ids.ts';
 import type { Id } from '../types.ts';
 import { audit, type AuthContext } from './context.ts';
@@ -251,7 +251,7 @@ export interface ActivityItem {
 }
 
 /** Owner-only history of one key (also for a removed key). Newest first, keyset-paginated by `before`. */
-export async function listKeyActivity(ctx: AuthContext, p: Principal, keyId: unknown, o: { limit: number; before: Id | null }): Promise<{ items: ActivityItem[]; nextBefore: Id | null }> {
+export async function listKeyActivity(ctx: AuthContext, p: SessionPrincipal, keyId: unknown, o: { limit: number; before: Id | null }): Promise<{ items: ActivityItem[]; nextBefore: Id | null }> {
   if (!isUuid(keyId)) throw problems.notFound();
   const own = await ctx.db.query(
     'SELECT 1 FROM api_keys WHERE id = $1 AND user_id = $2 UNION ALL SELECT 1 FROM api_key_activity WHERE key_id = $1 AND user_id = $2 LIMIT 1', [keyId, p.userId]);
@@ -283,7 +283,7 @@ export async function listApiKeys(ctx: AuthContext, userId: Id): Promise<{ items
 const activeSql = '(revoked_at IS NULL AND (expires_at IS NULL OR expires_at > $2))';
 
 /** Creates a key. Needs fresh authentication and an enabled instance. The token is in the result and nowhere else. */
-export async function createApiKey(ctx: AuthContext, p: Principal, input: CreateInput, requestId: string | null = null): Promise<Created> {
+export async function createApiKey(ctx: AuthContext, p: SessionPrincipal, input: CreateInput, requestId: string | null = null): Promise<Created> {
   if (!(await getApiKeysEnabled(ctx.db))) throw problems.disabled();
   requireFresh(ctx, p);
   const now = ctx.now();
@@ -320,7 +320,7 @@ const levelBroadens = (prev: KeyLevel | undefined, next: KeyLevel | undefined) =
 interface Diff { changed: string[]; broadens: boolean }
 
 /** Updates name, expiry, grants and vehicle scope of an active key. Broadening needs fresh authentication; see the file header. */
-export async function updateApiKey(ctx: AuthContext, p: Principal, id: unknown, patch: PatchInput, requestId: string | null = null): Promise<ApiKeyView> {
+export async function updateApiKey(ctx: AuthContext, p: SessionPrincipal, id: unknown, patch: PatchInput, requestId: string | null = null): Promise<ApiKeyView> {
   const now = ctx.now();
   const enabled = await getApiKeysEnabled(ctx.db);
   return withTx(ctx.db, async (tx) => {
@@ -389,7 +389,7 @@ export async function updateApiKey(ctx: AuthContext, p: Principal, id: unknown, 
 
 // ---------- rotate / revoke / remove ----------
 /** Replaces the secret. Keeps id, grants and expiry. The old token stops working immediately (no grace period). */
-export async function rotateApiKey(ctx: AuthContext, p: Principal, id: unknown, requestId: string | null = null): Promise<Created> {
+export async function rotateApiKey(ctx: AuthContext, p: SessionPrincipal, id: unknown, requestId: string | null = null): Promise<Created> {
   if (!(await getApiKeysEnabled(ctx.db))) throw problems.disabled();
   requireFresh(ctx, p);
   const now = ctx.now();
@@ -406,7 +406,7 @@ export async function rotateApiKey(ctx: AuthContext, p: Principal, id: unknown, 
 }
 
 /** DELETE: an active key is revoked (immediately, no fresh auth); an expired or revoked key is removed from the list. History is kept either way. */
-export async function deleteApiKey(ctx: AuthContext, p: Principal, id: unknown, requestId: string | null = null): Promise<'revoked' | 'removed'> {
+export async function deleteApiKey(ctx: AuthContext, p: SessionPrincipal, id: unknown, requestId: string | null = null): Promise<'revoked' | 'removed'> {
   const now = ctx.now();
   return withTx(ctx.db, async (tx) => {
     const row = await loadOwned(tx, id, p.userId, true);
@@ -435,7 +435,7 @@ export async function revokeApiKeysForUser(q: Q, userId: Id, reason: RevokeReaso
 }
 
 /** Explicit lockdown: revoke every active key now. No fresh authentication, by design. */
-export async function revokeAllApiKeys(ctx: AuthContext, p: Principal, requestId: string | null = null): Promise<number> {
+export async function revokeAllApiKeys(ctx: AuthContext, p: SessionPrincipal, requestId: string | null = null): Promise<number> {
   return withTx(ctx.db, (tx) => revokeApiKeysForUser(tx, p.userId, 'revoke_all', ctx.now(), { actor: p.userId, requestId }));
 }
 
@@ -451,6 +451,13 @@ export async function deleteApiKeysForUser(q: Q, userId: Id, now: Date): Promise
 }
 
 // ---------- bearer lookup ----------
+/** Stored grants -> KeyGrants. Fail closed: a module or level the policy does not recognise is dropped, never guessed. */
+export function grantsFromStored(perms: Record<string, string>, allowVehicleCreate: boolean): KeyGrants {
+  const levels: Partial<Record<LevelModule, KeyLevel>> = {};
+  for (const m of LEVEL_MODULES) { const l = perms[m]; if (isSupportedLevel(m, l) && (KEY_LEVELS as readonly string[]).includes(l as string)) levels[m] = l as KeyLevel; }
+  return { levels, vehicleCreate: allowVehicleCreate === true };
+}
+
 export interface ResolvedApiKey {
   id: Id; userId: Id; name: string; instanceRole: InstanceRole;
   vehicleMode: VehicleMode;
@@ -480,14 +487,12 @@ export async function lookupApiKey(ctx: AuthContext, token: string): Promise<Key
   if (r.expires_at && r.expires_at.getTime() <= ctx.now().getTime()) return { ok: false, reason: 'expired' };
   if (!r.enabled) return { ok: false, reason: 'instance_disabled' };
   // Fail closed: anything the policy does not recognise is dropped, never guessed.
-  const levels: Partial<Record<LevelModule, KeyLevel>> = {};
-  for (const m of LEVEL_MODULES) { const l = r.perms[m]; if (isSupportedLevel(m, l) && (KEY_LEVELS as readonly string[]).includes(l as string)) levels[m] = l as KeyLevel; }
   return {
     ok: true,
     key: {
       id: r.id, userId: r.user_id, name: r.name, instanceRole: r.instance_role, vehicleMode: r.vehicle_mode,
       vehicleIds: new Set(r.vehicle_mode === 'all_current_future' ? [] : r.vehicle_ids),
-      grants: { levels, vehicleCreate: r.allow_vehicle_create === true },
+      grants: grantsFromStored(r.perms, r.allow_vehicle_create),
       expiresAt: r.expires_at, lastUsedAt: r.last_used_at, credentialVersion: r.credential_version,
     },
   };

@@ -11,11 +11,11 @@
 // with the same rules as manual entry, runs inside one transaction, skips
 // purchases that already exist, and is all-or-nothing. A dry run executes the
 // same statements and rolls back.
+import { auditAs } from '../audit.ts';
 import type pg from 'pg';
 import { Dec } from '../decimal.ts';
 import { HttpProblem } from '../http/problem.ts';
 import { invalid, obj } from '../http/validate.ts';
-import { uuidv7 } from '../ids.ts';
 import type { Principal } from '../identity.ts';
 import type { Id } from '../types.ts';
 import { parseFillUp, rowToBody, type FillUpRow, type FuelService, type ParsedFillUp } from '../fuel/service.ts';
@@ -148,8 +148,9 @@ export class PortabilityService {
     // Deliberately not behind the module switch: recorded service data is always exportable.
     const visits = format === 'json' ? await this.#service.exportBodies(this.#pool, v.id) : [];
     const tasks = format === 'json' ? await exportTasks(this.#pool, v.id, this.#now()) : [];
-    await this.#pool.query("INSERT INTO audit_events (id, actor_id, action, subject_type, subject_id, details) VALUES ($1,$2,'vehicle.export','vehicle',$3,$4)",
-      [uuidv7(), p.userId, v.id, JSON.stringify({ format, rows: rows.length, ...(format === 'json' ? { serviceVisits: visits.length, maintenanceTasks: tasks.length } : {}) })]);
+    // Exports are reads: audited as before, never recorded as API key activity.
+    await auditAs(this.#pool, p, { action: 'vehicle.export', subjectType: 'vehicle', subjectId: v.id, keyActivity: false,
+      details: { format, rows: rows.length, ...(format === 'json' ? { serviceVisits: visits.length, maintenanceTasks: tasks.length } : {}) } });
     // Never derive the filename from plate or VIN.
     const label = v.name ?? [v.year, v.make, v.model].filter(Boolean).join(' ');
     const stem = `driveloom-${label.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'vehicle'}-${this.#now().toISOString().slice(0, 10)}`;
@@ -241,8 +242,8 @@ export class PortabilityService {
     }
     const committed = !dryRun && invalidCount === 0;
     if (committed) {
-      await c.query("INSERT INTO audit_events (id, actor_id, action, subject_type, subject_id, details) VALUES ($1,$2,'vehicle.import','vehicle',$3,$4)",
-        [uuidv7(), p.userId, v.id, JSON.stringify({ created, duplicates, ...(svc ? { serviceVisits: svc.created } : {}), ...(mt ? { maintenanceTasks: mt.created } : {}) })]);
+      await auditAs(c, p, { action: 'vehicle.import', subjectType: 'vehicle', subjectId: v.id,
+        details: { created, duplicates, ...(svc ? { serviceVisits: svc.created } : {}), ...(mt ? { maintenanceTasks: mt.created } : {}) } });
     }
     return { dryRun, committed, summary: { total: candidates.length, created, duplicates, invalid: invalidCount }, errors, ...(svc ? { serviceVisits: svc } : {}), ...(mt ? { maintenanceTasks: mt } : {}) };
   }

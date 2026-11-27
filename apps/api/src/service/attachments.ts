@@ -4,6 +4,7 @@
 // served through an authenticated, membership-checked download (never public).
 // Authorization follows the visit: any member reads, canChangeVisit changes.
 // Limits: attachment-limits.ts.
+import { auditAs } from '../audit.ts';
 import { createHash } from 'node:crypto';
 import type pg from 'pg';
 import type { HttpRequest, RawBody, Route } from '../http/app.ts';
@@ -110,8 +111,7 @@ export class AttachmentService {
       if (!canChangeVisit(v.role, visit.created_by, p.userId)) throw new HttpProblem(403, 'forbidden', 'Forbidden', 'Your role does not allow changing attachments on this service visit.');
       if (v.archived) throw new HttpProblem(409, 'vehicle_archived', 'Conflict', 'This vehicle is archived. Unarchive it to change its records.');
       const r = await fn(c, visit.id, v);
-      await c.query("INSERT INTO audit_events (id, actor_id, action, subject_type, subject_id, details) VALUES ($1,$2,$3,'vehicle',$4,$5)",
-        [uuidv7(), p.userId, action, v.id, JSON.stringify({ visitId: visit.id, attachmentId: r.attachmentId, ...r.extra })]);
+      await auditAs(c, p, { action, subjectType: 'vehicle', subjectId: v.id, details: { visitId: visit.id, attachmentId: r.attachmentId, ...r.extra }, target: { type: 'service_attachment', ids: [r.attachmentId] } });
       await c.query('COMMIT');
       return r.out;
     } catch (e) { await c.query('ROLLBACK').catch(() => undefined); throw e; } finally { c.release(); }

@@ -75,6 +75,7 @@ export function adminRoutes(ctx: AuthContext): Route[] {
       return { status: 200, body: { items: rows.map((u) => ({ id: u.id, email: u.email, displayName: u.display_name, instanceRole: u.instance_role, status: u.status, createdAt: u.created_at.toISOString(), ownedVehicleCount: u.owned })) } };
     } },
     { method: 'PUT', path: '/v1/admin/users/:userId/status', async handler(r) {
+      admin(r);
       const { status } = obj(r.body, ['status']);
       if (status !== 'active' && status !== 'disabled') throw invalid("status must be 'active' or 'disabled'.");
       await change(r, async (tx, u) => {
@@ -89,6 +90,7 @@ export function adminRoutes(ctx: AuthContext): Route[] {
       return { status: 204 };
     } },
     { method: 'PUT', path: '/v1/admin/users/:userId/role', async handler(r) {
+      admin(r);
       const { role } = obj(r.body, ['role']);
       if (role !== 'admin' && role !== 'user') throw invalid("role must be 'admin' or 'user'.");
       await change(r, async (tx, u) => {

@@ -1,6 +1,6 @@
 // HTTP routes for vehicles and ownership. All authorization lives in VehicleService.
 import type { HttpRequest, Route } from '../http/app.ts';
-import { requirePrincipal } from '../identity.ts';
+import { requirePrincipal, requireSessionPrincipal } from '../identity.ts';
 import { invalid, obj } from '../http/validate.ts';
 import type { VehicleService } from './service.ts';
 import { suggestIdentities } from './model-identity.ts';
@@ -9,11 +9,13 @@ import { bundledPresets } from '../service/presets.ts';
 
 export function vehicleRoutes(svc: VehicleService): Route[] {
   const who = (r: HttpRequest) => requirePrincipal(r.ctx);
+  /** Routes a key can never call (the router refuses it first; this is the second lock). */
+  const session = (r: HttpRequest) => requireSessionPrincipal(r.ctx);
   const fields = ['name', 'make', 'model', 'year', 'plateRegion', 'plateNumber', 'vin', 'odometerUnit', 'currency'];
   return [
     // Optional make/model suggestions for the vehicle form: read-only, nothing stored, any other text stays valid.
     { method: 'GET', path: '/v1/vehicle-identities', async handler(r) {
-      requirePrincipal(r.ctx);
+      session(r);
       const make = r.query.get('make') ?? '', model = r.query.get('model') ?? '';
       if (make.length > 80 || model.length > 80) throw invalid('make and model must be at most 80 characters.');
       return { status: 200, body: suggestIdentities(make, model, bundledPresets()) };
@@ -36,45 +38,45 @@ export function vehicleRoutes(svc: VehicleService): Route[] {
       return { status: 200, body: await svc.update(p, r.params['vehicleId'], patch) };
     } },
     { method: 'DELETE', path: '/v1/vehicles/:vehicleId', async handler(r) {
-      await svc.delete(who(r), r.params['vehicleId']);
+      await svc.delete(session(r), r.params['vehicleId']);
       return { status: 204 };
     } },
     { method: 'PUT', path: '/v1/vehicles/:vehicleId/archive', async handler(r) {
-      const p = who(r);
+      const p = session(r);
       const { archived } = obj(r.body, ['archived']);
       if (typeof archived !== 'boolean') throw invalid('archived must be a boolean.');
       return { status: 200, body: await svc.setArchived(p, r.params['vehicleId'], archived) };
     } },
     { method: 'GET', path: '/v1/vehicles/:vehicleId/members', async handler(r) {
-      return { status: 200, body: { items: await svc.listMembers(who(r), r.params['vehicleId']) } };
+      return { status: 200, body: { items: await svc.listMembers(session(r), r.params['vehicleId']) } };
     } },
     { method: 'POST', path: '/v1/vehicles/:vehicleId/members', async handler(r) {
-      const p = who(r);
+      const p = session(r);
       const b = obj(r.body, ['userId', 'email', 'role']);
       return { status: 201, body: await svc.addMember(p, r.params['vehicleId'], b['userId'], b['role'], b['email']) };
     } },
     { method: 'PUT', path: '/v1/vehicles/:vehicleId/members/:userId', async handler(r) {
-      const p = who(r);
+      const p = session(r);
       const b = obj(r.body, ['role']);
       return { status: 200, body: await svc.changeMemberRole(p, r.params['vehicleId'], r.params['userId'], b['role']) };
     } },
     { method: 'DELETE', path: '/v1/vehicles/:vehicleId/members/:userId', async handler(r) {
-      await svc.removeMember(who(r), r.params['vehicleId'], r.params['userId']);
+      await svc.removeMember(session(r), r.params['vehicleId'], r.params['userId']);
       return { status: 204 };
     } },
     { method: 'PUT', path: '/v1/vehicles/:vehicleId/owner', async handler(r) {
-      const p = who(r);
+      const p = session(r);
       const b = obj(r.body, ['userId']);
       return { status: 200, body: await svc.transferOwnership(p, r.params['vehicleId'], b['userId']) };
     } },
     { method: 'PUT', path: '/v1/admin/vehicles/:vehicleId/owner', async handler(r) {
-      const p = who(r);
+      const p = session(r);
       const b = obj(r.body, ['userId', 'reason']);
       await svc.recoverOwnership(p, r.params['vehicleId'], b['userId'], b['reason']);
       return { status: 204 };
     } },
     { method: 'GET', path: '/v1/admin/users/:userId/owned-vehicles', async handler(r) {
-      return { status: 200, body: { items: await svc.listOwnedVehicleIds(who(r), r.params['userId']) } };
+      return { status: 200, body: { items: await svc.listOwnedVehicleIds(session(r), r.params['userId']) } };
     } },
   ];
 }

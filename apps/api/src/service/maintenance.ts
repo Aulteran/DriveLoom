@@ -10,6 +10,8 @@
 // for the helper a notifier reuses (it leaves out tasks whose reminders are off).
 // Preset provenance (presetId/presetVersion/presetTaskId, sourceTrust/sourceNote)
 // is a label only: it never changes how status is computed.
+import { auditAs } from '../audit.ts';
+import { requireKeyGrant } from '../auth/api-key-auth.ts';
 import type pg from 'pg';
 import { Dec } from '../decimal.ts';
 import { HttpProblem } from '../http/problem.ts';
@@ -466,7 +468,8 @@ export class MaintenanceService {
   }
 
   async #audit(c: pg.PoolClient, p: Principal, action: string, vehicleId: Id, details: Record<string, unknown>): Promise<void> {
-    await c.query("INSERT INTO audit_events (id, actor_id, action, subject_type, subject_id, details) VALUES ($1,$2,$3,'vehicle',$4,$5)", [uuidv7(), p.userId, action, vehicleId, JSON.stringify(details)]);
+    const taskId = typeof details['taskId'] === 'string' ? [details['taskId'] as Id] : [];
+    await auditAs(c, p, { action, subjectType: 'vehicle', subjectId: vehicleId, details, ...(taskId.length ? { target: { type: 'maintenance_task', ids: taskId } } : {}) });
   }
   readonly #manage = (role: VehicleAccess['role']) => (canManageSchedules(role) ? null : 'Your role does not allow changing maintenance tasks.');
 
@@ -635,6 +638,10 @@ export class MaintenanceService {
       }
       const variant = parseVariant(pr, b['variant']);
       const sel = parseSelection(pr, b['tasks']);
+      // Effects, from the request alone (never from stored data) and before anything is written, so a preview and the commit
+      // it previews need exactly the same grants (D5). maintenance.create is the route's rule; service.read and fuel.read come with it.
+      if (sel.some((s) => s.onDuplicate === 'link')) requireKeyGrant(p, { module: 'maintenance', action: 'update' });
+      if (sel.some((s) => s.baseline.kind === 'reported' && s.baseline.linkServiceItemId !== undefined)) requireKeyGrant(p, { module: 'service', action: 'update' });
       const now = this.#now(), today = utcDate(now);
       const reading = await latestKnownOdometer(c, v.id);
       const rows = await existingTasks(c, v.id);

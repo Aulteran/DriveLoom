@@ -75,7 +75,7 @@ Add any of these under `app: environment:`.
 | --- | --- |
 | `DRIVELOOM_SETUP_TOKEN` | Required to create the first (admin) account. 16+ characters. |
 | `DRIVELOOM_REGISTRATION` | `closed` (default, invite only) or `open`. |
-| `DRIVELOOM_TRUSTED_PROXIES` | Proxy IPs/CIDRs whose `X-Forwarded-For` is trusted, e.g. `172.16.0.0/12`. |
+| `DRIVELOOM_TRUSTED_PROXIES` | Proxy IPs/CIDRs whose `X-Forwarded-For` and `X-Forwarded-Proto` are trusted, e.g. `172.16.0.0/12`. API keys (`Authorization: Bearer`) are accepted only over HTTPS: through a trusted proxy that sends `X-Forwarded-Proto: https`, or from the local machine. |
 | `DRIVELOOM_PASSWORD_LOGIN` | `0` allows only OIDC and passkeys (needs OIDC configured). |
 | `DRIVELOOM_REQUIRE_EMAIL_VERIFICATION` | `1` requires verified email (needs SMTP). |
 | `DRIVELOOM_EMAIL_SIGN_IN_CODES` | `1` emails a one-time code after the password (needs SMTP). |

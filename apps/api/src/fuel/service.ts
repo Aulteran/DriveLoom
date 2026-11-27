@@ -19,6 +19,7 @@ import type { VehicleService } from '../vehicles/service.ts';
 import type { VehicleAccess } from '../vehicles/types.ts';
 import { canChangeFill, canWriteFuel } from '../vehicles/permissions.ts';
 import { aggregate, intervals, inWindow, type Fill, type Interval, type Window } from './economy.ts';
+import { auditAs } from '../audit.ts';
 
 export interface FillUpRow {
   id: Id; vehicle_id: Id; occurred_at: Date;
@@ -225,8 +226,7 @@ export class FuelService {
   }
 
   async #audit(c: pg.PoolClient, p: Principal, action: string, vehicleId: Id, fillUpId: Id): Promise<void> {
-    await c.query("INSERT INTO audit_events (id, actor_id, action, subject_type, subject_id, details) VALUES ($1,$2,$3,'vehicle',$4,$5)",
-      [uuidv7(), p.userId, action, vehicleId, JSON.stringify({ fillUpId })]);
+    await auditAs(c, p, { action, subjectType: 'vehicle', subjectId: vehicleId, details: { fillUpId }, target: { type: 'fill_up', ids: [fillUpId] } });
   }
 
   /** Insert without authorization or audit; used by create and by import inside their own transaction. */

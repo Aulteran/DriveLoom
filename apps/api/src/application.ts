@@ -7,6 +7,8 @@ import type pg from 'pg';
 import { createApp, type Route } from './http/app.ts';
 import { authenticator } from './auth/sessions.ts';
 import { authRoutes } from './auth/routes.ts';
+import { meRoutes } from './auth/me-routes.ts';
+import { createApiKeyGate } from './auth/api-key-auth.ts';
 import type { AuthContext } from './auth/context.ts';
 import { adminRoutes } from './admin/routes.ts';
 import { VehicleService } from './vehicles/service.ts';
@@ -77,6 +79,7 @@ export function allRoutes(ctx: AuthContext, notifier: Notifier | null = null): R
   const routes = [
     ...systemRoutes(ctx.db),
     ...authRoutes(ctx),
+    ...meRoutes(ctx),
     ...adminRoutes(ctx),
     ...vehicleRoutes(vehicles),
     ...imageRoutes(ctx.db, vehicles),
@@ -101,7 +104,7 @@ export interface ApplicationOptions {
 }
 
 export function createApplication(ctx: AuthContext, opts: ApplicationOptions): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
-  const api = createApp({ routes: allRoutes(ctx, opts.notifier ?? null), authenticator: authenticator(ctx), publicOrigin: ctx.config.publicOrigin, ipTrust: ctx.config.ipTrust });
+  const api = createApp({ routes: allRoutes(ctx, opts.notifier ?? null), authenticator: authenticator(ctx), publicOrigin: ctx.config.publicOrigin, ipTrust: ctx.config.ipTrust, apiKeys: createApiKeyGate(ctx) });
   const web = opts.webDir ? staticFiles(opts.webDir, { secure: ctx.config.secureCookies }) : null;
   return async (req, res) => {
     const path = (req.url ?? '/').split('?')[0]!;

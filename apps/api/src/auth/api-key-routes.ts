@@ -3,7 +3,7 @@
 // `revoke-all` is never read as a key id.
 import type { HttpRequest, HttpResult, Route } from '../http/app.ts';
 import { invalid, obj } from '../http/validate.ts';
-import { requirePrincipal } from '../identity.ts';
+import { requireSessionPrincipal } from '../identity.ts';
 import { isUuid } from '../ids.ts';
 import type { Id } from '../types.ts';
 import type { AuthContext } from './context.ts';
@@ -17,7 +17,7 @@ const requestId = (req: HttpRequest): string | null => {
 };
 
 export function apiKeyRoutes(ctx: AuthContext): Route[] {
-  const me = (req: HttpRequest) => requirePrincipal(req.ctx);
+  const me = (req: HttpRequest) => requireSessionPrincipal(req.ctx);
   return [
     { method: 'GET', path: '/v1/auth/api-keys', async handler(req) {
       return { status: 200, body: await keys.listApiKeys(ctx, me(req).userId) };

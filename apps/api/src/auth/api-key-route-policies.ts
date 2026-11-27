@@ -1,7 +1,6 @@
 // The one table that says how every route treats API keys. A route is
 // identified as "METHOD /v1/path/:param", exactly as registered. Nothing here
-// runs yet: bearer authentication arrives later. Until it does, and for any
-// route missing from this table, the answer is 'session_only'.
+// route missing from this table, the answer is 'session_only'. http/app.ts enforces it centrally for bearer requests.
 //
 // tests/api-key-policy.test.ts enumerates the real router and fails when a
 // route has no entry, when an entry matches no route, or when a route the spec
@@ -12,6 +11,7 @@ import type { KeyDynamic, KeyModule, KeyAction, KeyPolicy, KeyRequirement, KeyRu
 
 const SESSION = 'session_only' as const;
 const PUBLIC = 'public' as const;
+const ANY_KEY = 'any_key' as const;
 
 function rule(module: KeyModule, action: KeyAction, extra: { also?: KeyRequirement[]; dynamic?: KeyDynamic[] } = {}): KeyRule {
   return Object.freeze({ module, action, ...(extra.also ? { also: Object.freeze(extra.also) } : {}), ...(extra.dynamic ? { dynamic: Object.freeze(extra.dynamic) } : {}) });
@@ -20,7 +20,8 @@ function rule(module: KeyModule, action: KeyAction, extra: { also?: KeyRequireme
 const V = '/v1/vehicles/:vehicleId';
 const VISITS = `${V}/service-visits`;
 const TASKS = `${V}/maintenance-tasks`;
-const PAYLOAD: KeyDynamic[] = ['payload_sections', 'preview_equals_commit'];
+/** Task status, due dates and "last completed" are computed from service history and odometer readings (fill-ups), so every response that carries them needs these too (D3). */
+const DERIVED: KeyRequirement[] = [{ module: 'service', action: 'read' }, { module: 'fuel', action: 'read' }];
 
 export const KEY_ROUTE_POLICIES: Readonly<Record<string, KeyPolicy>> = Object.freeze({
   // --- public ---
@@ -130,18 +131,20 @@ export const KEY_ROUTE_POLICIES: Readonly<Record<string, KeyPolicy>> = Object.fr
   [`PATCH ${VISITS}/:visitId/attachments/:attachmentId`]: rule('service', 'update'), // rename
   [`DELETE ${VISITS}/:visitId/attachments/:attachmentId`]: rule('service', 'delete'),
 
-  // --- maintenance ---
+  // --- maintenance: catalog names are static; everything that returns an evaluated task also needs service.read + fuel.read (D3) ---
   'GET /v1/maintenance-catalog': rule('maintenance', 'read'),
-  [`GET ${V}/maintenance-status`]: rule('maintenance', 'read'), // derived from service items and odometer readings; documented, not extra-gated
-  [`GET ${TASKS}`]: rule('maintenance', 'read'),
-  [`POST ${TASKS}`]: rule('maintenance', 'create'),
-  [`GET ${TASKS}/:taskId`]: rule('maintenance', 'read'),
-  [`PATCH ${TASKS}/:taskId`]: rule('maintenance', 'update'), // `archived` is a flag, not a removal
-  [`DELETE ${TASKS}/:taskId`]: rule('maintenance', 'delete', { dynamic: ['cascade_unlink'] }),
-  [`PUT ${TASKS}/:taskId/snooze`]: rule('maintenance', 'update'),
-  [`DELETE ${TASKS}/:taskId/snooze`]: rule('maintenance', 'delete'),
-  [`GET ${V}/maintenance/presets`]: rule('maintenance', 'read'),
-  [`POST ${V}/maintenance/presets/:presetId/apply`]: rule('maintenance', 'create', { dynamic: ['preview_equals_commit', 'preset_effects'] }), // ?preview=true is a dry run
+  [`GET ${V}/maintenance-status`]: rule('maintenance', 'read', { also: DERIVED }),
+  [`GET ${TASKS}`]: rule('maintenance', 'read', { also: DERIVED }),
+  [`POST ${TASKS}`]: rule('maintenance', 'create', { also: DERIVED }),
+  [`GET ${TASKS}/:taskId`]: rule('maintenance', 'read', { also: DERIVED }),
+  [`PATCH ${TASKS}/:taskId`]: rule('maintenance', 'update', { also: DERIVED }), // `archived` is a flag, not a removal
+  [`DELETE ${TASKS}/:taskId`]: rule('maintenance', 'delete', { also: [{ module: 'service', action: 'update' }], dynamic: ['cascade_unlink'] }), // clears service_items.task_id (D4)
+  [`PUT ${TASKS}/:taskId/snooze`]: rule('maintenance', 'update', { also: DERIVED }),
+  [`DELETE ${TASKS}/:taskId/snooze`]: rule('maintenance', 'delete', { also: DERIVED }),
+  [`GET ${V}/maintenance/presets`]: rule('maintenance', 'read', { also: DERIVED }), // suggests unlinked service items
+  // ?preview=true is a dry run with exactly the same requirements. Selections that link an existing task also need maintenance.update;
+  // baseline.linkServiceItemId also needs service.update (D5, enforced in MaintenanceService.applyPreset).
+  [`POST ${V}/maintenance/presets/:presetId/apply`]: rule('maintenance', 'create', { also: DERIVED, dynamic: ['preview_equals_commit', 'preset_effects'] }),
 
   // --- notifications ---
   [`GET ${V}/notification-settings`]: rule('notifications', 'read', { dynamic: ['redact_members'] }),
@@ -159,10 +162,16 @@ export const KEY_ROUTE_POLICIES: Readonly<Record<string, KeyPolicy>> = Object.fr
   [`PUT ${V}/comparison`]: SESSION,
   'GET /v1/comparisons': SESSION,
 
-  // --- portability: the sections actually present decide the permissions ---
-  [`GET ${V}/export`]: rule('vehicle_info', 'read', { dynamic: ['payload_sections'] }),
-  [`POST ${V}/import`]: rule('vehicle_info', 'read', { dynamic: PAYLOAD }), // dry run by default; commit needs each section's write
-  'POST /v1/vehicle-imports': rule('vehicle_create', 'create', { dynamic: PAYLOAD }),
+  // --- portability: SESSION ONLY until the payload's sections can be enforced one by one (planned: Phase 4). ---
+  // The intended rules are vehicle_info.read [payload_sections] for export, vehicle_info.read [payload_sections, preview_equals_commit]
+  // for import and vehicle_create.create [payload_sections, preview_equals_commit] for new-vehicle import. Re-open them together with
+  // the enforcement and add 'payload_sections' to ENFORCED_DYNAMIC; until then keys are refused at the router.
+  [`GET ${V}/export`]: SESSION,
+  [`POST ${V}/import`]: SESSION,
+  'POST /v1/vehicle-imports': SESSION,
+
+  // --- identity check, for sessions and keys alike ---
+  'GET /v1/me': ANY_KEY,
 });
 
 const idOf = (r: Pick<Route, 'method' | 'path'>) => `${r.method} ${r.path}`;

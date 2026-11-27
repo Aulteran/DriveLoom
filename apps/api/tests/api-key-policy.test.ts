@@ -132,6 +132,15 @@ test('modules follow the route they protect (independent of the table)', () => {
   }
   const stats = keyPolicyOf(routes.find((r) => r.path.endsWith('/stats'))!) as KeyRule;
   assert.deepEqual(stats.also, [{ module: 'fuel', action: 'read' }], 'statistics also need the source module');
+  // D3/D4: derived maintenance data needs the source modules; deleting a task unlinks service items.
+  const derived = [{ module: 'service', action: 'read' }, { module: 'fuel', action: 'read' }];
+  for (const [route, also] of [
+    ['GET /v1/vehicles/:vehicleId/maintenance-status', derived], ['GET /v1/vehicles/:vehicleId/maintenance-tasks', derived], ['GET /v1/vehicles/:vehicleId/maintenance-tasks/:taskId', derived],
+    ['POST /v1/vehicles/:vehicleId/maintenance-tasks', derived], ['PATCH /v1/vehicles/:vehicleId/maintenance-tasks/:taskId', derived], ['PUT /v1/vehicles/:vehicleId/maintenance-tasks/:taskId/snooze', derived],
+    ['DELETE /v1/vehicles/:vehicleId/maintenance-tasks/:taskId/snooze', derived], ['GET /v1/vehicles/:vehicleId/maintenance/presets', derived], ['POST /v1/vehicles/:vehicleId/maintenance/presets/:presetId/apply', derived],
+    ['DELETE /v1/vehicles/:vehicleId/maintenance-tasks/:taskId', [{ module: 'service', action: 'update' }]],
+  ] as const) assert.deepEqual((KEY_ROUTE_POLICIES[route] as KeyRule).also, also, route);
+  assert.equal((KEY_ROUTE_POLICIES['GET /v1/maintenance-catalog'] as KeyRule).also, undefined, 'the catalog is static names');
 });
 
 test('verbs and actions agree, except for the documented semantic cases', () => {
@@ -149,10 +158,8 @@ test('verbs and actions agree, except for the documented semantic cases', () => 
   const need = (route: string, d: string) => assert.ok((KEY_ROUTE_POLICIES[route] as KeyRule).dynamic?.includes(d as never), `${route} needs ${d}`);
   need('PATCH /v1/vehicles/:vehicleId/service-visits/:visitId', 'nested_delete');
   need('POST /v1/vehicles/:vehicleId/maintenance/presets/:presetId/apply', 'preview_equals_commit');
-  need('POST /v1/vehicles/:vehicleId/import', 'payload_sections');
-  need('POST /v1/vehicles/:vehicleId/import', 'preview_equals_commit');
-  need('POST /v1/vehicle-imports', 'payload_sections');
-  need('GET /v1/vehicles/:vehicleId/export', 'payload_sections');
+  // Import and export stay session-only until their payload sections can be enforced (Phase 4); then these rows return as rules.
+  for (const r of ['POST /v1/vehicles/:vehicleId/import', 'POST /v1/vehicle-imports', 'GET /v1/vehicles/:vehicleId/export']) assert.equal(KEY_ROUTE_POLICIES[r], 'session_only', `${r} is closed to keys until payload sections are enforced`);
   need('GET /v1/vehicles/:vehicleId/notification-settings', 'redact_members');
 });
 
