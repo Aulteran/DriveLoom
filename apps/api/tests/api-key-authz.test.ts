@@ -28,7 +28,8 @@ const maxLevel = (m: LevelModule): KeyLevel => SUPPORTED_LEVELS[m][SUPPORTED_LEV
 
 // What a successful call looks like for each key-accessible route. Routes without an entry still get the generic
 // authorization checks; `every key-accessible route has a success case` fails until one is added.
-interface Case { status: number; body?: unknown; raw?: { type: string; data: Buffer }; prep?: 'image'; }
+interface Case { status: number; body?: unknown; raw?: { type: string; data: Buffer }; prep?: 'image'; query?: string }
+const EMPTY_EXPORT = { format: 'driveloom.vehicle', version: 1, vehicle: { name: 'Imp', odometerUnit: 'km', currency: 'EUR' }, fillUps: [] };
 const CASES: Record<string, Case> = {
   'GET /v1/vehicles': { status: 200 },
   'POST /v1/vehicles': { status: 201, body: { name: 'New', odometerUnit: 'km', currency: 'EUR' } },
@@ -48,7 +49,7 @@ const CASES: Record<string, Case> = {
   'GET /v1/vehicles/:vehicleId/service-visits/:visitId': { status: 200 },
   'PATCH /v1/vehicles/:vehicleId/service-visits/:visitId': { status: 200, body: { notes: 'checked' } },
   'DELETE /v1/vehicles/:vehicleId/service-visits/:visitId': { status: 204 },
-  'POST /v1/vehicles/:vehicleId/service-visits/:visitId/attachments': { status: 201, raw: { type: 'image/png', data: PNG_BYTES() } },
+  'POST /v1/vehicles/:vehicleId/service-visits/:visitId/attachments': { status: 201, raw: { type: 'image/png', data: PNG_BYTES('case') } },
   'GET /v1/vehicles/:vehicleId/service-visits/:visitId/attachments/:attachmentId': { status: 200 },
   'PATCH /v1/vehicles/:vehicleId/service-visits/:visitId/attachments/:attachmentId': { status: 200, body: { fileName: 'renamed.png' } },
   'DELETE /v1/vehicles/:vehicleId/service-visits/:visitId/attachments/:attachmentId': { status: 204 },
@@ -63,6 +64,9 @@ const CASES: Record<string, Case> = {
   'DELETE /v1/vehicles/:vehicleId/maintenance-tasks/:taskId/snooze': { status: 200 },
   'GET /v1/vehicles/:vehicleId/maintenance/presets': { status: 200 },
   'POST /v1/vehicles/:vehicleId/maintenance/presets/:presetId/apply': { status: 200, body: { tasks: [{ presetTaskId: 'engine-oil' }] } },
+  'GET /v1/vehicles/:vehicleId/export': { status: 200, query: '?format=json' },
+  'POST /v1/vehicles/:vehicleId/import': { status: 200, body: { format: 'json', data: EMPTY_EXPORT, dryRun: true } },
+  'POST /v1/vehicle-imports': { status: 200, body: { data: EMPTY_EXPORT, dryRun: true } },
   'GET /v1/vehicles/:vehicleId/notification-settings': { status: 200 },
   'PUT /v1/vehicles/:vehicleId/notification-settings': { status: 200, body: { emailEnabled: true } },
   'PUT /v1/vehicles/:vehicleId/notification-preferences/me': { status: 200, body: { emailMe: true } },
@@ -81,7 +85,7 @@ async function putImage(w: KeyWorld, owner: TestUser, fx: Fixture) {
   assert.equal(r.status, 204, r.text);
 }
 const send = (w: KeyWorld, r: Pick<Route, 'method' | 'path'>, fx: Fixture, token: string, c: Case | undefined) =>
-  w.call(r.method, fill(r.path, fx), { token, ...(c?.raw ? { raw: c.raw } : c?.body !== undefined ? { body: c.body } : r.method === 'GET' || r.method === 'DELETE' ? {} : { body: {} }) });
+  w.call(r.method, fill(r.path, fx) + (c?.query ?? ''), { token, ...(c?.raw ? { raw: c.raw } : c?.body !== undefined ? { body: c.body } : r.method === 'GET' || r.method === 'DELETE' ? {} : { body: {} }) });
 
 test('every key-accessible route has a success case here (add one when you add a route)', { skip }, async () => {
   await keyWorld(async (w) => {
@@ -337,7 +341,7 @@ test('D1: a visit patch that removes or renames an item needs service.delete; ed
     assert.equal((await w.call('PATCH', V, { token: full, body: items('Oil change') })).status, 200, 'full may remove');
     // Receipts: removal needs delete, add and rename do not.
     const A = `${V}/attachments`;
-    const up = await w.call('POST', A, { token: rw, raw: { type: 'image/png', data: PNG_BYTES() } });
+    const up = await w.call('POST', A, { token: rw, raw: { type: 'image/png', data: PNG_BYTES('rw upload') } });
     assert.equal(up.status, 201);
     assert.equal((await w.call('PATCH', `${A}/${up.json.id}`, { token: rw, body: { fileName: 'r.png' } })).status, 200);
     scopeDenied(await w.call('DELETE', `${A}/${up.json.id}`, { token: rw }), 'service.delete', 'attachment removal');
@@ -480,8 +484,8 @@ test('a rule with a run-time effect the server cannot enforce yet is refused for
     const { token } = await w.mint(owner, { permissions: { vehicle_info: 'read' }, vehicleMode: 'all_current_future' });
     const routes: Route[] = [
       { method: 'GET', path: '/v1/x/enforced', key: { module: 'vehicle_info', action: 'read', dynamic: ['task_link'] }, handler: async () => ({ status: 200, body: {} }) },
-      { method: 'GET', path: '/v1/x/payload', key: { module: 'vehicle_info', action: 'read', dynamic: ['payload_sections'] }, handler: async () => ({ status: 200, body: {} }) },
-      { method: 'POST', path: '/v1/x/commit', key: { module: 'vehicle_info', action: 'read', dynamic: ['preview_equals_commit', 'payload_sections'] }, handler: async () => ({ status: 200, body: {} }) },
+      { method: 'GET', path: '/v1/x/payload', key: { module: 'vehicle_info', action: 'read', dynamic: ['future_effect' as never] }, handler: async () => ({ status: 200, body: {} }) },
+      { method: 'POST', path: '/v1/x/commit', key: { module: 'vehicle_info', action: 'read', dynamic: ['preview_equals_commit', 'future_effect' as never] }, handler: async () => ({ status: 200, body: {} }) },
       { method: 'GET', path: '/v1/x/bogus', key: { module: 'friends' as never, action: 'read' }, handler: async () => ({ status: 200, body: {} }) },
       { method: 'GET', path: '/v1/x/badaction', key: { module: 'vehicle_info', action: 'delete' as never }, handler: async () => ({ status: 200, body: {} }) },
     ];
@@ -496,19 +500,6 @@ test('a rule with a run-time effect the server cannot enforce yet is refused for
       assert.equal((await get('/v1/x/payload')).json.code, 'api_key_not_allowed');
       assert.equal((await get('/v1/x/commit', 'POST')).json.code, 'api_key_not_allowed');
     } finally { server.close(); server.closeAllConnections(); }
-  });
-});
-
-test('import and export are closed to keys until their payload sections can be enforced', { skip }, async () => {
-  await keyWorld(async (w) => {
-    const owner = await w.user();
-    const fx = await fixture(w, owner);
-    const { token } = await w.mint(owner, { permissions: ALL_FULL, vehicleCreate: true, vehicleIds: [fx.vehicleId] });
-    for (const [m, p, b] of [['GET', `/v1/vehicles/${fx.vehicleId}/export?format=json`], ['GET', `/v1/vehicles/${fx.vehicleId}/export?format=csv`], ['POST', `/v1/vehicles/${fx.vehicleId}/import`, { format: 'csv', data: 'x', dryRun: true }], ['POST', '/v1/vehicle-imports', { data: {}, dryRun: true }]] as const) {
-      problem(await w.call(m, p, { token, ...(b ? { body: b } : {}) }), 403, 'api_key_not_allowed', `${m} ${p}`);
-    }
-    assert.equal((await w.call('GET', `/v1/vehicles/${fx.vehicleId}/export?format=json`, { as: owner })).status, 200, 'sessions keep export');
-    assert.equal(KEY_ROUTE_POLICIES['GET /v1/vehicles/:vehicleId/export'], 'session_only');
   });
 });
 

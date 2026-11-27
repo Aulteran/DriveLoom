@@ -88,9 +88,10 @@ export type KeyDynamic = (typeof KEY_DYNAMIC)[number];
  * The dynamic effects the server can enforce today. The router refuses a key on any route whose rule lists an effect not in
  * this set (403 api_key_not_allowed), so a route cannot be opened to keys before its run-time rule exists. Where enforced:
  * nested_delete, task_link (ServiceService), cascade_unlink (static `also` on the route), preview_equals_commit and preset_effects
- * (MaintenanceService.applyPreset: one code path for preview and commit), redact_members (NotificationSettingsService).
+ * (MaintenanceService.applyPreset: one code path for preview and commit), redact_members (NotificationSettingsService),
+ * payload_sections (PortabilityService: export sections, whole-request refusal of an import, preview token bound to key, target and payload).
  */
-export const ENFORCED_DYNAMIC: ReadonlySet<KeyDynamic> = new Set<KeyDynamic>(['nested_delete', 'task_link', 'cascade_unlink', 'preview_equals_commit', 'preset_effects', 'redact_members']);
+export const ENFORCED_DYNAMIC: ReadonlySet<KeyDynamic> = new Set<KeyDynamic>(['nested_delete', 'task_link', 'cascade_unlink', 'payload_sections', 'preview_equals_commit', 'preset_effects', 'redact_members']);
 
 export interface KeyRequirement { readonly module: KeyModule; readonly action: KeyAction }
 

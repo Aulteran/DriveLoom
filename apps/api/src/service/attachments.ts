@@ -5,6 +5,7 @@
 // Authorization follows the visit: any member reads, canChangeVisit changes.
 // Limits: attachment-limits.ts.
 import { auditAs } from '../audit.ts';
+import { idemFrom, idemHeaders, withIdempotency, type Idem } from '../auth/idempotency.ts';
 import { createHash } from 'node:crypto';
 import type pg from 'pg';
 import type { HttpRequest, RawBody, Route } from '../http/app.ts';
@@ -85,14 +86,17 @@ async function insert(c: Q, visitId: Id, f: ParsedAttachment, createdBy: Id): Pr
 }
 
 /** Used by import, inside its transaction, without authorization or audit. */
-export async function insertImported(c: Q, visitId: Id, items: ParsedAttachment[], createdBy: Id): Promise<void> {
-  for (const f of items) await insert(c, visitId, f, createdBy);
+export async function insertImported(c: Q, visitId: Id, items: ParsedAttachment[], createdBy: Id): Promise<Id[]> {
+  const ids: Id[] = [];
+  for (const f of items) ids.push((await insert(c, visitId, f, createdBy)).id);
+  return ids;
 }
 
 export class AttachmentService {
   readonly #pool: pg.Pool;
   readonly #vehicles: VehicleService;
-  constructor(pool: pg.Pool, vehicles: VehicleService) { this.#pool = pool; this.#vehicles = vehicles; }
+  readonly #now: () => Date;
+  constructor(pool: pg.Pool, vehicles: VehicleService, now: () => Date = () => new Date()) { this.#pool = pool; this.#vehicles = vehicles; this.#now = now; }
 
   async #visit(q: Q, v: VehicleAccess, visitId: unknown, lock = false): Promise<{ id: Id; created_by: Id | null }> {
     if (!isUuid(visitId)) throw visitNotFound();
@@ -101,7 +105,8 @@ export class AttachmentService {
     return r;
   }
 
-  async #write<T>(p: Principal, vehicleId: unknown, visitId: unknown, action: string, fn: (c: pg.PoolClient, visit: Id, v: VehicleAccess) => Promise<{ out: T; attachmentId: Id; extra?: Record<string, unknown> }>): Promise<T> {
+  async #write<T>(p: Principal, vehicleId: unknown, visitId: unknown, action: string, fn: (c: pg.PoolClient, visit: Id, v: VehicleAccess) => Promise<{ out: T; attachmentId: Id; extra?: Record<string, unknown> }>,
+    wrap?: (c: pg.PoolClient, v: VehicleAccess, visit: Id, run: () => Promise<T>) => Promise<T>): Promise<T> {
     await requireModule(this.#pool, 'service');
     const c = await this.#pool.connect();
     try {
@@ -110,14 +115,23 @@ export class AttachmentService {
       const visit = await this.#visit(c, v, visitId, true);
       if (!canChangeVisit(v.role, visit.created_by, p.userId)) throw new HttpProblem(403, 'forbidden', 'Forbidden', 'Your role does not allow changing attachments on this service visit.');
       if (v.archived) throw new HttpProblem(409, 'vehicle_archived', 'Conflict', 'This vehicle is archived. Unarchive it to change its records.');
-      const r = await fn(c, visit.id, v);
-      await auditAs(c, p, { action, subjectType: 'vehicle', subjectId: v.id, details: { visitId: visit.id, attachmentId: r.attachmentId, ...r.extra }, target: { type: 'service_attachment', ids: [r.attachmentId] } });
+      // The change and its audit row are one unit: an idempotent replay (wrap) returns the first outcome and writes neither.
+      const run = async (): Promise<T> => {
+        const r = await fn(c, visit.id, v);
+        await auditAs(c, p, { action, subjectType: 'vehicle', subjectId: v.id, details: { visitId: visit.id, attachmentId: r.attachmentId, ...r.extra }, target: { type: 'service_attachment', ids: [r.attachmentId] } });
+        return r.out;
+      };
+      const out = wrap ? await wrap(c, v, visit.id, run) : await run();
       await c.query('COMMIT');
-      return r.out;
+      return out;
     } catch (e) { await c.query('ROLLBACK').catch(() => undefined); throw e; } finally { c.release(); }
   }
 
-  async add(p: Principal, vehicleId: unknown, visitId: unknown, body: RawBody, fileName: string | null): Promise<AttachmentView> {
+  /**
+   * `idem` (an API key's Idempotency-Key): the same key and file again returns the first outcome without writing.
+   * For an API key a file already on the visit (same sha256) is refused (409 attachment_duplicate) instead of stored twice; sessions are unchanged.
+   */
+  async add(p: Principal, vehicleId: unknown, visitId: unknown, body: RawBody, fileName: string | null, idem?: Idem): Promise<AttachmentView> {
     if (!body.data.length) throw new HttpProblem(422, 'validation_failed', 'Validation failed', 'The file is empty.');
     const type = sniffAttachment(body.data);
     if (!type) throw new HttpProblem(422, 'attachment_type', 'Validation failed', 'The file is not a PDF, JPEG or PNG file.');
@@ -126,9 +140,13 @@ export class AttachmentService {
     return this.#write(p, vehicleId, visitId, 'service_attachment.add', async (c, visit) => {
       const n = (await c.query<{ n: number }>('SELECT count(*)::int AS n FROM service_attachments WHERE visit_id = $1', [visit])).rows[0]!.n;
       if (n >= MAX_ATTACHMENTS_PER_VISIT) throw tooMany();
+      if (p.kind === 'api_key') {
+        const same = (await c.query<{ id: Id }>('SELECT id FROM service_attachments WHERE visit_id = $1 AND sha256 = $2 LIMIT 1', [visit, f.sha256])).rows[0];
+        if (same) throw new HttpProblem(409, 'attachment_duplicate', 'Conflict', 'This file is already attached to the service visit.', { attachmentId: same.id });
+      }
       const row = await insert(c, visit, f, p.userId);
       return { out: toView(row), attachmentId: row.id, extra: { contentType: type, sizeBytes: f.data.length } };
-    });
+    }, (c, v, visit, run) => withIdempotency(c, p, idem, { operation: 'service_attachment.add', target: `${v.id}/${visit}`, payload: { sha256: f.sha256, fileName: f.fileName }, now: this.#now() }, run));
   }
 
   async rename(p: Principal, vehicleId: unknown, visitId: unknown, attachmentId: unknown, body: unknown): Promise<AttachmentView> {
@@ -171,7 +189,9 @@ export function attachmentRoutes(svc: AttachmentService): Route[] {
   const one = `${base}/:attachmentId`;
   return [
     { method: 'POST', path: base, rawBody: { types: [...ATTACHMENT_TYPES, 'application/octet-stream'], maxBytes: MAX_ATTACHMENT_BYTES }, async handler(r) {
-      return { status: 201, body: await svc.add(who(r), r.params['vehicleId'], r.params['visitId'], r.body as RawBody, r.query.get('fileName')) };
+      const idem = idemFrom(r.headers, who(r));
+      const body = await svc.add(who(r), r.params['vehicleId'], r.params['visitId'], r.body as RawBody, r.query.get('fileName'), idem);
+      return { status: idem.status ?? 201, body, headers: idemHeaders(idem) };
     } },
     { method: 'GET', path: one, async handler(r) {
       const a = await svc.download(who(r), r.params['vehicleId'], r.params['visitId'], r.params['attachmentId']);

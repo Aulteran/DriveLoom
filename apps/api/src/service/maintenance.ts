@@ -26,6 +26,7 @@ import { fromKm, isDistanceUnit, toKm } from '../units.ts';
 import { EMAIL_RECIPIENT_ROLES, canManageSchedules } from '../vehicles/permissions.ts';
 import type { VehicleService } from '../vehicles/service.ts';
 import type { VehicleAccess } from '../vehicles/types.ts';
+import { withIdempotency, type Idem } from '../auth/idempotency.ts';
 import { dateOnly, text } from './fields.ts';
 import {
   CATALOG, LEAD_DAYS, LEAD_DISTANCE, STALE_READING_DAYS, catalogName, computeStatus, daysBetween, effectiveSnoozes, needsAttention, occurrenceKey, snoozeActive, utcDate,
@@ -473,16 +474,17 @@ export class MaintenanceService {
   }
   readonly #manage = (role: VehicleAccess['role']) => (canManageSchedules(role) ? null : 'Your role does not allow changing maintenance tasks.');
 
-  async create(p: Principal, vehicleId: unknown, body: unknown): Promise<TaskView> {
+  /** `idem` (an API key's Idempotency-Key): the same key and payload again returns the first outcome without writing. */
+  async create(p: Principal, vehicleId: unknown, body: unknown, idem?: Idem): Promise<TaskView> {
     const b = obj(body, PUBLIC_TASK_FIELDS);
-    return this.#write(p, vehicleId, async (c, v) => {
+    return this.#write(p, vehicleId, (c, v) => withIdempotency(c, p, idem, { operation: 'maintenance_task.create', target: v.id, payload: b, now: this.#now(), reference: (r) => r.id, reread: (id) => this.#one(c, v, p, id) }, async () => {
       const f = parseTask(b, this.#now());
       const n = Number((await c.query<{ n: string }>('SELECT count(*) AS n FROM maintenance_tasks WHERE vehicle_id = $1', [v.id])).rows[0]!.n);
       if (n >= MAX_TASKS) throw invalid(`A vehicle allows at most ${MAX_TASKS} maintenance tasks.`);
       const id = await insertTask(c, v.id, f, p.userId);
       await this.#audit(c, p, 'maintenance_task.create', v.id, { taskId: id });
       return this.#one(c, v, p, id);
-    }, this.#manage);
+    }), this.#manage);
   }
 
   /** Partial update: the stored task is merged with the patch and validated again as a whole. `archived` hides a task without deleting it. */

@@ -37,7 +37,7 @@ export const BACKUP_VERSION = 1;
  * audit_events: it is archived, has no foreign keys and never authenticates.
  */
 export const EPHEMERAL_TABLES: readonly string[] = ['sessions', 'rate_limits', 'auth_challenges', 'one_time_codes', 'notification_outbox',
-  'api_keys', 'api_key_permissions', 'api_key_vehicles', 'api_key_idempotency'];
+  'api_keys', 'api_key_permissions', 'api_key_vehicles', 'api_key_idempotency', 'api_key_import_previews'];
 
 export class BackupError extends Error {
   readonly code: string;

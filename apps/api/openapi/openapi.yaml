@@ -26,7 +26,15 @@ info:
     a vehicle in the selection with a missing permission is `403 insufficient_scope`. A vehicle the key creates joins its
     selection only in mode `all_current_future`, so a `selected` or `all_current` key that creates a vehicle cannot then read it.
     Limits: failed key authentication is limited per client address (20 a minute), key traffic per key
-    (300 a minute; 30 a minute for uploads) with `429 rate_limited` and `Retry-After`. Import and export are not available to keys yet.
+    (300 a minute; 30 a minute for uploads, imports and exports) with `429 rate_limited` and `Retry-After`.
+
+
+    Bulk writes and retries (keys): an import by a key is checked against every section of its payload (dry runs too) and is refused
+    whole with `403 insufficient_scope` (every missing grant in `missing`) if any part is out of scope; a dry run returns a `previewToken`
+    that the commit must present with the identical payload (`409 preview_required`, `preview_mismatch`, `preview_expired`). Creates accept an
+    `Idempotency-Key` header: a retry with the same key and request returns the first outcome, the same key with a different request is
+    `409 idempotency_conflict`. Service visits may carry an `externalId` (`409 external_id_conflict`); a key may not attach the same
+    file to a visit twice (`409 attachment_duplicate`).
   license:
     name: AGPL-3.0-only
     identifier: AGPL-3.0-only
@@ -1090,7 +1098,11 @@ paths:
         needs `exchangeRate` or `reportingAmount` (`reporting_amount_required`).
 
         API key access: the key must hold `fuel.create`. The vehicle must be in the key's selection: otherwise `404 vehicle_not_found`; a missing permission is `403 insufficient_scope`. Vehicle roles and feature gates still apply underneath.
+
+        Idempotency (API keys): send an `Idempotency-Key` header to make a retry safe. The same key with the same request returns the first outcome (`Idempotent-Replayed: true`) without writing again; the same key with a different request is `409 idempotency_conflict`. Keys are remembered for 48 hours. Sessions ignore the header.
       tags: [fuel]
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
       requestBody:
         required: true
         content:
@@ -1236,7 +1248,11 @@ paths:
         Costs are in the vehicle's currency.
 
         API key access: the key must hold `service.create`. The vehicle must be in the key's selection: otherwise `404 vehicle_not_found`; a missing permission is `403 insufficient_scope`. Items that link a maintenance task also require `maintenance.read`. Vehicle roles and feature gates still apply underneath.
+
+        Idempotency (API keys): send an `Idempotency-Key` header to make a retry safe. The same key with the same request returns the first outcome (`Idempotent-Replayed: true`) without writing again; the same key with a different request is `409 idempotency_conflict`. Keys are remembered for 48 hours. Sessions ignore the header.
       tags: [service]
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
       requestBody:
         required: true
         content:
@@ -1349,9 +1365,12 @@ paths:
         service module is on; when off every attachment route answers 404 `module_disabled`.
 
         API key access: the key must hold `service.create`. The vehicle must be in the key's selection: otherwise `404 vehicle_not_found`; a missing permission is `403 insufficient_scope`. Vehicle roles and feature gates still apply underneath.
+
+        Idempotency (API keys): send an `Idempotency-Key` header to make a retry safe. The same key with the same request returns the first outcome (`Idempotent-Replayed: true`) without writing again; the same key with a different request is `409 idempotency_conflict`. Keys are remembered for 48 hours. Sessions ignore the header. A key may not attach a file the visit already holds (same sha256): `409 attachment_duplicate` with the existing `attachmentId`.
       tags: [service]
       parameters:
         - { name: fileName, in: query, required: false, description: Display name. Defaults to attachment with the detected extension, schema: { type: string, maxLength: 1000 } }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
       requestBody:
         required: true
         content:
@@ -1696,7 +1715,11 @@ paths:
         `firstDueOdometer`. `name` may be omitted when `catalogKey` is given. At most 200 tasks per vehicle.
 
         API key access: the key must hold `maintenance.create` and `service.read` and `fuel.read` (the extra permissions cover data the response is derived from). The vehicle must be in the key's selection: otherwise `404 vehicle_not_found`; a missing permission is `403 insufficient_scope`. Vehicle roles and feature gates still apply underneath.
+
+        Idempotency (API keys): send an `Idempotency-Key` header to make a retry safe. The same key with the same request returns the first outcome (`Idempotent-Replayed: true`) without writing again; the same key with a different request is `409 idempotency_conflict`. Keys are remembered for 48 hours. Sessions ignore the header.
       tags: [service]
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
       requestBody:
         required: true
         content:
@@ -2172,18 +2195,33 @@ paths:
       - { $ref: '#/components/parameters/VehicleId' }
     get:
       operationId: exportVehicle
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [vehicle_info.read]
+        dynamic: [payload_sections]
       summary: Download the vehicle's purchases as CSV or as a versioned JSON document
-      description: Contains no ids, members or users. The JSON document also carries the vehicle's maintenance tasks (`maintenanceTasks`, with only vehicle-wide snoozes; personal snoozes are never exported) and service visits (`serviceVisits`, whose items point at tasks with `taskRef`) even while the Service module is off, each with its `attachments` embedded as base64 (`fileName`, `contentType`, `sha256`, `data`); a vehicle with many receipts therefore produces a large file (up to 10 files of 10 MiB per visit, about 4/3 of the stored size). CSV carries purchases only. Text cells that a spreadsheet could read as a formula are prefixed with an apostrophe.
+      description: >
+        Contains no ids, members or users. The JSON document also carries the vehicle's maintenance tasks (`maintenanceTasks`, with only vehicle-wide snoozes; personal snoozes are never exported) and service visits (`serviceVisits`, whose items point at tasks with `taskRef`) even while the Service module is off, each with its `attachments` embedded as base64 (`fileName`, `contentType`, `sha256`, `data`); a vehicle with many receipts therefore produces a large file (up to 10 files of 10 MiB per visit, about 4/3 of the stored size). CSV carries purchases only. Text cells that a spreadsheet could read as a formula are prefixed with an apostrophe.
+
+        API key access: the key must hold `vehicle_info.read` (the vehicle details are always included). A key's export contains only the sections it may read:
+        `fillUps` needs `fuel.read`; `serviceVisits` (with items and receipts) needs `service.read` and the Service module on; `maintenanceTasks` needs
+        `maintenance.read` and the Service module on. A section it may not read is left out entirely and named in `omittedSections` (an absent list never means "none");
+        a visit item's `taskRef` is dropped when the tasks section is left out. CSV is purchases only and needs `fuel.read` (`403 insufficient_scope`).
+        Exports are read-only, never recorded as key activity, and share the stricter per-key limit of imports and uploads.
       tags: [portability]
       parameters:
         - { name: format, in: query, required: true, schema: { type: string, enum: [csv, json] } }
       responses:
+        '429': { $ref: '#/components/responses/RateLimited' }
         '200':
           description: The export, as an attachment.
           content:
             text/csv: { schema: { type: string } }
             application/json: { schema: { $ref: '#/components/schemas/VehicleExport' } }
         '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
         '404': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
   /v1/vehicles/{vehicleId}/import:
@@ -2191,7 +2229,15 @@ paths:
       - { $ref: '#/components/parameters/VehicleId' }
     post:
       operationId: importIntoVehicle
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [vehicle_info.read]
+        dynamic: [payload_sections, preview_equals_commit]
       summary: Preview or commit an import of purchases (editor or owner)
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
       description: >
         `dryRun` defaults to true: the same statements run and are rolled back.
         A commit is all-or-nothing (`import_invalid` with the report when any
@@ -2199,6 +2245,19 @@ paths:
         same file twice changes nothing. JSON imports accept bodies up to 96 MiB so that embedded
         service attachments fit; each attachment is checked by magic bytes, `sha256` (when given),
         size and the per-visit file limit, and identical files within a visit are stored once.
+
+        Service visits may carry an `externalId` (the id the visit has in the source system; unique per vehicle). A visit whose `externalId` is already stored
+        is skipped when identical (counted in `duplicates`) and is a `conflict` when it differs (nothing is imported, `external_id_conflict`).
+        Without an `externalId` a session import keeps skipping a visit that looks the same (date, odometer, provider and items); an API key import never
+        skips it silently: it is listed under `serviceVisits.possibleDuplicates` and still imported, because two real visits on one day can look alike.
+
+        API key access: the key must hold `vehicle_info.read`, and the import is checked against everything it CONTAINS, dry run included: `fuel.create` for
+        purchases, `service.create` for visits, items and receipts (and the Service module on), `maintenance.create` for tasks, `maintenance.read` for items that
+        link a task. If anything is missing the whole request is refused: `403 insufficient_scope` listing every missing grant in `missing`; nothing is written.
+        A dry run returns a `previewToken` (valid 15 minutes, once) bound to the key, this vehicle and the exact payload. The commit (`dryRun` false) must send that
+        token with the identical `format` and `data`, else `409 preview_required`, `preview_mismatch` or `preview_expired`. Grants, role and module gates are checked
+        again at commit and the commit is atomic. A dry run writes no records and no audit; a commit is recorded in the key's activity as a summary and as the ids of
+        every record it created. `Idempotency-Key` makes a retried commit return the first report.
       tags: [portability]
       requestBody:
         required: true
@@ -2212,7 +2271,9 @@ paths:
                 format: { type: string, enum: [csv, json] }
                 data: { description: CSV text, or a VehicleExport document. }
                 dryRun: { type: boolean, default: true }
+                previewToken: { type: string, description: API keys only. The `previewToken` of a dry run of this exact request; required when committing. }
       responses:
+        '429': { $ref: '#/components/responses/RateLimited' }
         '200':
           description: Report.
           content:
@@ -2227,7 +2288,20 @@ paths:
   /v1/vehicle-imports:
     post:
       operationId: importNewVehicle
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [vehicle_create.create]
+        dynamic: [payload_sections, preview_equals_commit]
       summary: Create a vehicle owned by the caller from a JSON export
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      description: >
+        API key access: the key must hold `vehicle_create.create` and, for every section the file contains, that section's write grant (`fuel.create`, `service.create`
+        with the Service module on, `maintenance.create`, `maintenance.read` for linked items); otherwise the whole request, a dry run included, is `403 insufficient_scope`
+        with every missing grant in `missing`. Preview binding, idempotency and activity recording work as on the import into an existing vehicle (the preview target
+        is "a new vehicle"). The new vehicle joins the key's scope only in the `all_current_future` mode; with any other mode the key cannot read it afterwards.
       tags: [portability]
       requestBody:
         required: true
@@ -2240,13 +2314,17 @@ paths:
               properties:
                 data: { $ref: '#/components/schemas/VehicleExport' }
                 dryRun: { type: boolean, default: true }
+                previewToken: { type: string, description: API keys only. The `previewToken` of a dry run of this exact request; required when committing. }
       responses:
+        '429': { $ref: '#/components/responses/RateLimited' }
         '200':
           description: Report; includes the new vehicle when committed.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ImportReport' }
         '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
         '413': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
   /v1/admin/users:
@@ -2647,6 +2725,17 @@ components:
         HttpOnly, SameSite=Lax session cookie issued by sign-in. A session in
         state `mfa_required` is accepted only by `/v1/auth/mfa/totp` and `/v1/auth/mfa/email`.
   parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: >
+        A client-chosen unique value (1 to 255 printable characters, no spaces) that makes a create safe to retry. Honoured for API keys
+        (ignored for sessions). Same key and same request: the first outcome is returned again with `Idempotent-Replayed: true` and nothing
+        is written twice, even when the retries arrive at the same moment. Same key and a different request: `409 idempotency_conflict`.
+        Only successful outcomes are remembered, for 48 hours. A retry is answered only if the key still passes every check
+        (active, in scope, granted, role); otherwise it fails like any other request.
+      schema: { type: string, minLength: 1, maxLength: 255, pattern: '^[\x21-\x7e]+$' }
     VehicleId:
       name: vehicleId
       in: path
@@ -3406,6 +3495,7 @@ components:
         diy: { type: boolean, default: false, description: Done by the owner rather than a workshop. }
         totalCost: { oneOf: [{ $ref: '#/components/schemas/Decimal' }, { type: 'null' }], description: Whole-visit cost in the vehicle's currency. Null or absent is unknown; "0" is a known zero. It is not checked against item costs. }
         notes: { type: [string, 'null'], maxLength: 2000 }
+        externalId: { type: [string, 'null'], maxLength: 200, description: "The id this visit has in the system it came from. Unique per vehicle; a second visit with the same value is `409 external_id_conflict` (on import it is skipped when identical and a conflict when different)." }
         items: { type: array, minItems: 1, maxItems: 50, items: { $ref: '#/components/schemas/ServiceItemInput' } }
     ServiceVisitExport:
       type: object
@@ -3419,6 +3509,7 @@ components:
         diy: { type: boolean, default: false, description: Done by the owner rather than a workshop. }
         totalCost: { oneOf: [{ $ref: '#/components/schemas/Decimal' }, { type: 'null' }], description: Whole-visit cost in the vehicle's currency. Null or absent is unknown; "0" is a known zero. It is not checked against item costs. }
         notes: { type: [string, 'null'], maxLength: 2000 }
+        externalId: { type: [string, 'null'], maxLength: 200, description: "The id this visit has in the system it came from. Unique per vehicle; a second visit with the same value is `409 external_id_conflict` (on import it is skipped when identical and a conflict when different)." }
         items: { type: array, minItems: 1, maxItems: 50, items: { $ref: '#/components/schemas/ServiceItemExport' } }
         attachments: { type: array, maxItems: 10, items: { $ref: '#/components/schemas/ServiceExportAttachment' } }
     ServiceVisitPatch:
@@ -3432,6 +3523,7 @@ components:
         diy: { type: boolean }
         totalCost: { oneOf: [{ $ref: '#/components/schemas/Decimal' }, { type: 'null' }] }
         notes: { type: [string, 'null'], maxLength: 2000 }
+        externalId: { type: [string, 'null'], maxLength: 200, description: "The id this visit has in the system it came from. Unique per vehicle; a second visit with the same value is `409 external_id_conflict` (on import it is skipped when identical and a conflict when different)." }
         items: { type: array, minItems: 1, maxItems: 50, items: { $ref: '#/components/schemas/ServiceItemInput' } }
     ServiceAttachment:
       type: object
@@ -3445,7 +3537,7 @@ components:
         createdAt: { $ref: '#/components/schemas/Timestamp' }
     ServiceVisit:
       type: object
-      required: [id, vehicleId, servicedOn, odometer, display, provider, diy, totalCost, currency, notes, items, attachments, createdBy, createdAt, updatedAt]
+      required: [id, vehicleId, servicedOn, odometer, display, provider, diy, totalCost, currency, notes, externalId, items, attachments, createdBy, createdAt, updatedAt]
       properties:
         id: { $ref: '#/components/schemas/Id' }
         vehicleId: { $ref: '#/components/schemas/Id' }
@@ -3461,6 +3553,7 @@ components:
         totalCost: { oneOf: [{ $ref: '#/components/schemas/Decimal' }, { type: 'null' }] }
         currency: { $ref: '#/components/schemas/CurrencyCode' }
         notes: { type: [string, 'null'] }
+        externalId: { type: [string, 'null'], maxLength: 200 }
         items: { type: array, items: { $ref: '#/components/schemas/ServiceItem' } }
         attachments: { type: array, maxItems: 10, items: { $ref: '#/components/schemas/ServiceAttachment' } }
         createdBy: { oneOf: [{ $ref: '#/components/schemas/Id' }, { type: 'null' }] }
@@ -3960,7 +4053,7 @@ components:
               vehicles: { type: array, items: { $ref: '#/components/schemas/ComparedVehicle' } }
     VehicleExport:
       type: object
-      required: [format, version, vehicle, fillUps]
+      required: [format, version, vehicle]
       properties:
         format: { type: string, const: driveloom.vehicle }
         version: { type: integer, const: 1 }
@@ -3977,7 +4070,11 @@ components:
             year: { type: [integer, 'null'] }
             odometerUnit: { $ref: '#/components/schemas/DistanceUnit' }
             currency: { $ref: '#/components/schemas/CurrencyCode' }
-        fillUps: { type: array, maxItems: 5000, items: { $ref: '#/components/schemas/FillUpInput' } }
+        fillUps: { type: array, maxItems: 5000, items: { $ref: '#/components/schemas/FillUpInput' }, description: Required, except in a scoped export that lists `fillUps` in `omittedSections`. }
+        omittedSections:
+          type: array
+          items: { type: string, enum: [fillUps, serviceVisits, maintenanceTasks] }
+          description: Only in an export made with an API key. Sections left out because the key may not read them (or the Service module is off); they are absent from the document, which is then not a complete copy. Never present in session exports.
         maintenanceTasks: { type: array, maxItems: 200, items: { $ref: '#/components/schemas/MaintenanceTaskExport' }, description: Optional, added without a version bump; older files lack it. Always exported, and imported when present, regardless of the Service module switch. An identical task already on the vehicle is skipped and reused for `taskRef` links. }
         serviceVisits: { type: array, maxItems: 5000, items: { $ref: '#/components/schemas/ServiceVisitExport' }, description: Optional, added without a version bump; older files lack it. Always exported, and imported when present, regardless of the Service module switch. }
     ImportReport:
@@ -4014,6 +4111,28 @@ components:
             created: { type: integer }
             duplicates: { type: integer }
             invalid: { type: integer }
+            conflicts: { type: integer, description: Visits whose `externalId` exists with different content (also counted in `invalid`); present only when above 0. }
+            possibleDuplicates:
+              type: array
+              description: Imported visits that look like a stored one (same date, odometer, provider and items) and were not skipped. Present only when there are some.
+              items:
+                type: object
+                required: [row, visitId]
+                properties:
+                  row: { type: integer }
+                  visitId: { $ref: '#/components/schemas/Id', description: The stored visit it resembles. }
+            records:
+              type: array
+              maxItems: 100
+              description: The outcome of each visit that carried an `externalId`.
+              items:
+                type: object
+                required: [row, externalId, outcome, visitId]
+                properties:
+                  row: { type: integer }
+                  externalId: { type: string }
+                  outcome: { type: string, enum: [created, duplicate, conflict] }
+                  visitId: { $ref: '#/components/schemas/Id' }
         maintenanceTasks:
           type: object
           description: Present when the JSON file carried `maintenanceTasks`; failures are also counted in `summary.invalid`.
@@ -4023,6 +4142,8 @@ components:
             created: { type: integer }
             duplicates: { type: integer }
             invalid: { type: integer }
+        previewToken: { type: string, description: Only on a dry run made with an API key that found nothing invalid. Send it as `previewToken` to commit exactly this payload. Valid for 15 minutes, usable once. }
+        previewExpiresAt: { $ref: '#/components/schemas/Timestamp' }
     AdminUser:
       type: object
       required: [id, email, displayName, instanceRole, status, createdAt, ownedVehicleCount]

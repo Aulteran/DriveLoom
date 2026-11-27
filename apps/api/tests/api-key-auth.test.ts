@@ -325,7 +325,8 @@ async function keyWorld2(w: KeyWorld, u: Awaited<ReturnType<KeyWorld['user']>>):
   const fx = await fixture(w, u);
   const k = await w.mint(u, { permissions: { service: 'read_write', vehicle_info: 'read' }, vehicleIds: [fx.vehicleId], name: 'uploader' });
   const url = `/v1/vehicles/${fx.vehicleId}/service-visits/${fx.visitId}/attachments`;
-  const post = () => w.call('POST', url, { token: k.token, raw: { type: 'image/png', data: PNG_BYTES() } });
+  let n = 0;
+  const post = () => w.call('POST', url, { token: k.token, raw: { type: 'image/png', data: PNG_BYTES(`upload ${n++}`) } });
   assert.equal((await post()).status, 201);
   assert.equal((await post()).status, 201);
   const third = await post();

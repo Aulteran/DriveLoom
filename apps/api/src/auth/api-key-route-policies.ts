@@ -162,13 +162,12 @@ export const KEY_ROUTE_POLICIES: Readonly<Record<string, KeyPolicy>> = Object.fr
   [`PUT ${V}/comparison`]: SESSION,
   'GET /v1/comparisons': SESSION,
 
-  // --- portability: SESSION ONLY until the payload's sections can be enforced one by one (planned: Phase 4). ---
-  // The intended rules are vehicle_info.read [payload_sections] for export, vehicle_info.read [payload_sections, preview_equals_commit]
-  // for import and vehicle_create.create [payload_sections, preview_equals_commit] for new-vehicle import. Re-open them together with
-  // the enforcement and add 'payload_sections' to ENFORCED_DYNAMIC; until then keys are refused at the router.
-  [`GET ${V}/export`]: SESSION,
-  [`POST ${V}/import`]: SESSION,
-  'POST /v1/vehicle-imports': SESSION,
+  // --- portability: the static grant is only the entry; PortabilityService enforces the payload's sections one by one (D7, Phase 4). ---
+  // Export returns only the sections the key may read (CSV is fuel only, so it also needs fuel.read). An import, a dry run included, is refused
+  // whole unless the key may write every section it contains; a commit must present the token of a preview of the same payload.
+  [`GET ${V}/export`]: rule('vehicle_info', 'read', { dynamic: ['payload_sections'] }),
+  [`POST ${V}/import`]: rule('vehicle_info', 'read', { dynamic: ['payload_sections', 'preview_equals_commit'] }), // dry run by default; the sections add the writes
+  'POST /v1/vehicle-imports': rule('vehicle_create', 'create', { dynamic: ['payload_sections', 'preview_equals_commit'] }),
 
   // --- identity check, for sessions and keys alike ---
   'GET /v1/me': ANY_KEY,

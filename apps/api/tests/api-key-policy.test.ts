@@ -158,8 +158,12 @@ test('verbs and actions agree, except for the documented semantic cases', () => 
   const need = (route: string, d: string) => assert.ok((KEY_ROUTE_POLICIES[route] as KeyRule).dynamic?.includes(d as never), `${route} needs ${d}`);
   need('PATCH /v1/vehicles/:vehicleId/service-visits/:visitId', 'nested_delete');
   need('POST /v1/vehicles/:vehicleId/maintenance/presets/:presetId/apply', 'preview_equals_commit');
-  // Import and export stay session-only until their payload sections can be enforced (Phase 4); then these rows return as rules.
-  for (const r of ['POST /v1/vehicles/:vehicleId/import', 'POST /v1/vehicle-imports', 'GET /v1/vehicles/:vehicleId/export']) assert.equal(KEY_ROUTE_POLICIES[r], 'session_only', `${r} is closed to keys until payload sections are enforced`);
+  // Import and export are open to keys with run-time payload enforcement (Phase 4): the entry grant, plus the dynamic effects that PortabilityService enforces.
+  need('GET /v1/vehicles/:vehicleId/export', 'payload_sections');
+  need('POST /v1/vehicles/:vehicleId/import', 'payload_sections');
+  need('POST /v1/vehicles/:vehicleId/import', 'preview_equals_commit');
+  need('POST /v1/vehicle-imports', 'payload_sections');
+  assert.deepEqual((KEY_ROUTE_POLICIES['POST /v1/vehicle-imports'] as KeyRule).module, 'vehicle_create');
   need('GET /v1/vehicles/:vehicleId/notification-settings', 'redact_members');
 });
 

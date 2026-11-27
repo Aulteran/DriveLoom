@@ -86,7 +86,7 @@ export function allRoutes(ctx: AuthContext, notifier: Notifier | null = null): R
     ...vehiclePrefRoutes(ctx.db),
     ...fuelRoutes(fuel),
     ...serviceRoutes(service),
-    ...attachmentRoutes(new AttachmentService(ctx.db, vehicles)),
+    ...attachmentRoutes(new AttachmentService(ctx.db, vehicles, ctx.now)),
     ...maintenanceRoutes(new MaintenanceService(ctx.db, vehicles, ctx.now)),
     ...notificationRoutes(new NotificationSettingsService(ctx.db, vehicles, () => !!ctx.mailer)),
     ...preferenceRoutes(ctx.db),

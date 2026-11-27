@@ -20,6 +20,7 @@ import type { VehicleAccess } from '../vehicles/types.ts';
 import { canChangeFill, canWriteFuel } from '../vehicles/permissions.ts';
 import { aggregate, intervals, inWindow, type Fill, type Interval, type Window } from './economy.ts';
 import { auditAs } from '../audit.ts';
+import { withIdempotency, type Idem } from '../auth/idempotency.ts';
 
 export interface FillUpRow {
   id: Id; vehicle_id: Id; occurred_at: Date;
@@ -242,13 +243,14 @@ export class FuelService {
     return id;
   }
 
-  async create(p: Principal, vehicleId: unknown, body: unknown): Promise<FillUpView> {
+  /** `idem` (an API key's Idempotency-Key): the same key and payload again returns the first outcome without writing. */
+  async create(p: Principal, vehicleId: unknown, body: unknown, idem?: Idem): Promise<FillUpView> {
     const b = obj(body, FILL_UP_FIELDS);
-    return this.#write(p, vehicleId, async (c, v) => {
+    return this.#write(p, vehicleId, (c, v) => withIdempotency(c, p, idem, { operation: 'fill_up.create', target: v.id, payload: b, now: this.#now(), reference: (r) => r.id, reread: (id) => this.#one(c, p, v, id) }, async () => {
       const id = await this.insertParsed(c, v.id, parseFillUp(b, v.currency, this.#now()), p.userId);
       await this.#audit(c, p, 'fill_up.create', v.id, id);
       return this.#one(c, p, v, id);
-    });
+    }));
   }
 
   /** Partial update: the stored record is merged with the patch and validated again as a whole. */

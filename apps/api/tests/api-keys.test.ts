@@ -645,7 +645,7 @@ async function emptyDb() {
   await client.connect();
   return { client, url: u.toString(), async drop() { await client.end().catch(() => undefined); await admin.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`); await admin.end(); } };
 }
-const CREDENTIAL_TABLES = ['api_keys', 'api_key_permissions', 'api_key_vehicles', 'api_key_idempotency'];
+const CREDENTIAL_TABLES = ['api_keys', 'api_key_permissions', 'api_key_vehicles', 'api_key_idempotency', 'api_key_import_previews'];
 
 test('backups exclude key credentials and bindings; a restore leaves no keys, keeps history, and rejects archives that carry credentials', { skip }, async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'dl-keys-'));
@@ -658,6 +658,7 @@ test('backups exclude key credentials and bindings; a restore leaves no keys, ke
       await mkKey(a, { name: 'Second' });
       assert.equal((await a('PATCH', `${KEYS}/${k.id}`, { name: 'Backed up 2' })).status, 200);
       await db.query("INSERT INTO api_key_idempotency (id, key_id, idempotency_key, operation, request_fingerprint, expires_at) VALUES ($1,$2,'abc','test','fp', now() + interval '1 day')", [uuidv7(), k.id]);
+      await db.query("INSERT INTO api_key_import_previews (id, key_id, token_hash, target, payload_digest, expires_at) VALUES ($1,$2,$3,'new-vehicle',$4, now() + interval '1 hour')", [uuidv7(), k.id, sha256Hex('x'), sha256Hex('y')]);
       await db.query("INSERT INTO instance_flags (flag, enabled) VALUES ('api_keys', false)");
       for (const t of CREDENTIAL_TABLES) assert.ok(EPHEMERAL_TABLES.includes(t), `${t} is ephemeral`);
       assert.ok(!EPHEMERAL_TABLES.includes('api_key_activity'));

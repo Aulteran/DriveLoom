@@ -20,7 +20,7 @@ import { isUuid, uuidv7 } from '../ids.ts';
 import type { ApiKeyPrincipal, Principal } from '../identity.ts';
 import type { Id } from '../types.ts';
 import { rateLimit, type AuthContext } from './context.ts';
-import { grantsAllow, rulePermits, ENFORCED_DYNAMIC, type KeyRequirement, type KeyRule } from './api-key-policy.ts';
+import { grantsAllow, rulePermits, ENFORCED_DYNAMIC, type KeyGrants, type KeyRequirement, type KeyRule } from './api-key-policy.ts';
 import { keyPolicyOf } from './api-key-route-policies.ts';
 import { grantsFromStored, lookupApiKey, touchApiKeyUsed } from './api-keys.ts';
 
@@ -109,10 +109,11 @@ export function requireKeyGrant(p: Principal, req: KeyRequirement): void {
 /**
  * Inside a write transaction (after the vehicle row is locked): the key must still be active, its owner active, the instance
  * switch on, the vehicle still in its selection, and its grants still cover the route. Closes the window between the
- * router's check and the commit. Sessions are a no-op.
+ * router's check and the commit. Returns the key's CURRENT grants (null for a session) so run-time effects can be checked
+ * against them. `vehicleId` null: there is no vehicle yet (creating one), so the selection is not checked. Sessions are a no-op.
  */
-export async function recheckKeyInTx(q: Pick<pg.Pool, 'query'>, p: Principal, vehicleId: Id): Promise<void> {
-  if (p.kind !== 'api_key') return;
+export async function recheckKeyInTx(q: Pick<pg.Pool, 'query'>, p: Principal, vehicleId: Id | null): Promise<KeyGrants | null> {
+  if (p.kind !== 'api_key') return null;
   const { rows } = await q.query<{ mode: string; allow_create: boolean; active: boolean; user_active: boolean; enabled: boolean; selected: boolean; perms: Record<string, string> }>(
     `SELECT k.vehicle_mode AS mode, k.allow_vehicle_create AS allow_create,
             (k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at > $2)) AS active,
@@ -125,11 +126,10 @@ export async function recheckKeyInTx(q: Pick<pg.Pool, 'query'>, p: Principal, ve
   const r = rows[0];
   if (!r || !r.active || !r.user_active) throw apiKeyProblems.invalid();
   if (!r.enabled) throw apiKeyProblems.disabled();
-  if (r.mode !== 'all_current_future' && !r.selected) throw apiKeyProblems.vehicleNotFound();
+  if (vehicleId !== null && r.mode !== 'all_current_future' && !r.selected) throw apiKeyProblems.vehicleNotFound();
+  const grants = grantsFromStored(r.perms, r.allow_create);
   const rule = p.apiKey.rule;
-  if (rule) {
-    const grants = grantsFromStored(r.perms, r.allow_create);
-    if (!rulePermits(grants, rule)) throw apiKeyProblems.scope([rule, ...(rule.also ?? [])].find((x) => !grantsAllow(grants, x)) ?? rule);
-  }
+  if (rule && !rulePermits(grants, rule)) throw apiKeyProblems.scope([rule, ...(rule.also ?? [])].find((x) => !grantsAllow(grants, x)) ?? rule);
+  return grants;
 }
 

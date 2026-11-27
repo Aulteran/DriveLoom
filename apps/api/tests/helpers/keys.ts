@@ -13,7 +13,7 @@ import type { IpTrust } from '../../src/http/ip.ts';
 import type { Id } from '../../src/types.ts';
 import { createTestUser, noProxies, ORIGIN, type TestUser } from './index.ts';
 import { harness, type Harness } from './auth.ts';
-import { png } from './images.ts';
+import { png, pngChunk } from './images.ts';
 
 export interface Res { status: number; json: any; text: string; headers: Headers; bytes: Buffer }
 export interface CallOpts { body?: unknown; headers?: Record<string, string>; as?: TestUser; token?: string; csrf?: boolean; raw?: { type: string; data: Uint8Array } }
@@ -129,4 +129,5 @@ export async function fixture(w: KeyWorld, owner: TestUser, over: Record<string,
   if (a.status !== 201) throw new Error(`fixture attachment: ${a.text}`);
   return { vehicleId, fillUpId: f.json.id, visitId: s.json.id, itemName: 'Oil change', attachmentId: a.json.id, taskId: t.json.id };
 }
-export const PNG_BYTES = (): Buffer => png();
+/** A PNG; a different `tag` gives different bytes (key uploads refuse a file the visit already holds). */
+export const PNG_BYTES = (tag = ''): Buffer => (tag ? png(pngChunk('tEXt', Buffer.from(tag))) : png());

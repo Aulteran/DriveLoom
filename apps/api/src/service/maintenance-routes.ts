@@ -1,4 +1,5 @@
 // HTTP routes for maintenance planning. Module gate and authorization live in MaintenanceService.
+import { idemFrom, idemHeaders } from '../auth/idempotency.ts';
 import type { HttpRequest, Route } from '../http/app.ts';
 import { invalid } from '../http/validate.ts';
 import { requirePrincipal } from '../identity.ts';
@@ -17,7 +18,11 @@ export function maintenanceRoutes(svc: MaintenanceService): Route[] {
       if (a !== null && a !== 'true' && a !== 'false') throw invalid('includeArchived must be true or false.');
       return { status: 200, body: await svc.list(who(r), r.params['vehicleId'], { includeArchived: a === 'true' }) };
     } },
-    { method: 'POST', path: base, async handler(r) { return { status: 201, body: await svc.create(who(r), r.params['vehicleId'], r.body) }; } },
+    { method: 'POST', path: base, async handler(r) {
+      const idem = idemFrom(r.headers, who(r));
+      const body = await svc.create(who(r), r.params['vehicleId'], r.body, idem);
+      return { status: idem.status ?? 201, body, headers: idemHeaders(idem) };
+    } },
     { method: 'GET', path: `${base}/:taskId`, async handler(r) { return { status: 200, body: await svc.get(who(r), r.params['vehicleId'], r.params['taskId']) }; } },
     { method: 'PATCH', path: `${base}/:taskId`, async handler(r) { return { status: 200, body: await svc.update(who(r), r.params['vehicleId'], r.params['taskId'], r.body) }; } },
     { method: 'DELETE', path: `${base}/:taskId`, async handler(r) { await svc.remove(who(r), r.params['vehicleId'], r.params['taskId']); return { status: 204 }; } },
