@@ -19,6 +19,7 @@ import { Integrations } from '../../src/admin/integrations.ts';
 import { createTestDb } from '../helpers/index.ts';
 import { Dec } from '../../src/decimal.ts';
 import { economy } from '../../src/units.ts';
+import { API_VERSION } from '../../src/version.ts';
 
 const skip = process.env['DATABASE_URL'] ? false : 'DATABASE_URL not set';
 const WEB = fileURLToPath(new URL('../../../web/', import.meta.url));
@@ -36,18 +37,25 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
   const config = defaultConfig({ publicOrigin: base, secretKey: Buffer.alloc(32, 9), registration: 'closed', secureCookies: false, ipTrust: trustFromList([]) });
   const integrations = new Integrations(db.pool, config.secretKey, base, { smtp: null, oidc: null });
   await integrations.load();
-  const deps = { db: db.pool, config, integrations, get mailer() { return integrations.mailer; }, get oidc() { return integrations.oidc; }, now: () => new Date() };
+  // Moves the server's clock forward so a sign-in goes stale (fresh-authentication prompts) without waiting minutes.
+  let skewMs = 0;
+  const deps = { db: db.pool, config, integrations, get mailer() { return integrations.mailer; }, get oidc() { return integrations.oidc; }, now: () => new Date(Date.now() + skewMs) };
   // `let`: the update test swaps in a second build of the web client to make a new service worker wait.
   let handler = createApplication(deps, { webDir: WEB });
   server.on('request', (q, s) => void handler(q, s));
 
   const browser = await chromium.launch();
   const problems: string[] = [];
+  let currentTest = '';
+  const tt = (name: string, fn: () => Promise<void>) => { currentTest = name; return t.test(name, fn); };
+  const failed: string[] = [];
   const watch = (p: Page) => {
     p.on('console', (m) => {
       // The signed-out session probe is an expected 401.
-      if (m.type() === 'error' && !/status of 401/.test(m.text())) problems.push(`console: ${m.text()}`);
+      // A 403 is expected only while the clock is moved forward to force a fresh-sign-in prompt (reauth_required).
+      if (m.type() === 'error' && !/status of 401/.test(m.text()) && !(skewMs > 0 && /status of 403/.test(m.text()))) problems.push(`console: ${m.text()} [${m.location().url}] (during: ${currentTest})`);
     });
+    p.on('response', (r) => { if (r.status() >= 400) failed.push(`${r.status()} ${r.request().method()} ${r.url()} (during: ${currentTest})`); });
     p.on('pageerror', (e) => problems.push(`page error: ${e.message}`));
     return p;
   };
@@ -61,7 +69,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
     return r.violations.map((v) => `${label}: ${v.id} (${v.impact}) ${v.nodes.slice(0, 3).map((n) => n.target.join(' ')).join(' | ')}`);
   };
   try {
-    await t.test('first account registers and lands on the welcome screen', async () => {
+    await tt('first account registers and lands on the welcome screen', async () => {
       await page.goto(`${base}/`);
       await page.getByLabel('Email').waitFor();
       assert.deepEqual(await axe('register'), []);
@@ -75,7 +83,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       assert.deepEqual(await axe('welcome'), []);
     });
 
-    await t.test('a vehicle is added and fill-ups produce economy', async () => {
+    await tt('a vehicle is added and fill-ups produce economy', async () => {
       await page.getByLabel('Nickname (optional)').fill('Golf');
       await page.getByLabel('Make').fill('VW');
       await page.getByRole('button', { name: 'Add vehicle' }).click();
@@ -105,7 +113,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       await page.getByText('7.00 L/100 km').first().waitFor();
     });
 
-    await t.test('the dashboard shows charts and reports', async () => {
+    await tt('the dashboard shows charts and reports', async () => {
       const vehicleNav = page.getByRole('navigation', { name: 'Vehicle' });
       await vehicleNav.getByRole('link', { name: 'Dashboard' }).click();
       await page.getByRole('heading', { name: 'Golf', level: 1 }).waitFor();
@@ -122,7 +130,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       await page.getByRole('heading', { name: 'At a glance' }).waitFor();
     });
 
-    await t.test('every vehicle section renders from the sidebar', async () => {
+    await tt('every vehicle section renders from the sidebar', async () => {
       const vehicleNav = page.getByRole('navigation', { name: 'Vehicle' });
       for (const [link, heading] of [['Members', 'Members'], ['Import & export', 'Import & export'], ['Vehicle settings', 'Vehicle settings']] as const) {
         await vehicleNav.getByRole('link', { name: link, exact: true }).click();
@@ -133,7 +141,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       await page.waitForLoadState('networkidle');
     });
 
-    await t.test('the garage adds a second vehicle and the switcher changes vehicle', async () => {
+    await tt('the garage adds a second vehicle and the switcher changes vehicle', async () => {
       await page.getByRole('navigation', { name: 'Account' }).getByRole('link', { name: 'Garage' }).click();
       await page.getByRole('heading', { name: 'Garage', level: 1 }).waitFor();
       await page.getByRole('button', { name: 'Add vehicle' }).first().click();
@@ -148,7 +156,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       assert.equal(await page.getByRole('combobox', { name: 'Vehicle' }).inputValue(), vehicle.split('/')[1]);
     });
 
-    await t.test('make and model suggest but never constrain: custom text saves verbatim, a suggestion fills its name, a failed lookup changes nothing', async () => {
+    await tt('make and model suggest but never constrain: custom text saves verbatim, a suggestion fills its name, a failed lookup changes nothing', async () => {
       const api = (call: string) => page.evaluate(`import('/js/api.js').then((m) => m.${call})`) as Promise<any>;
       const made: string[] = [];
       const add = async () => {
@@ -206,7 +214,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
         assert.deepEqual([offline.make, offline.model], ['Ren', 'Clio V']);
         await page.unroute('**/v1/vehicle-identities*');
         // The aborted lookups are expected to log failed loads; nothing else may.
-        for (let i = problems.length - 1; i >= 0; i--) if (problems[i] === 'console: Failed to load resource: net::ERR_FAILED') problems.splice(i, 1);
+        for (let i = problems.length - 1; i >= 0; i--) if (/^console: Failed to load resource: net::ERR_FAILED \[[^\]]*\/v1\/vehicle-identities/.test(problems[i]!)) problems.splice(i, 1);
 
         // Editing: the stored text shows as it is, and saving without touching it rewrites nothing.
         await page.goto(`${base}/#/vehicles/${alias.id}/settings`);
@@ -218,13 +226,16 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
         await page.getByText('Saved').first().waitFor().catch(() => undefined);
         assert.deepEqual((await rows()).map((r) => [r.id, r.make, r.model]), snapshot.map((r) => [r.id, r.make, r.model]));
       } finally {
-        if (made.length) await db.pool.query('DELETE FROM vehicles WHERE id = ANY($1)', [made]);
+        // Leave the throwaway vehicles' pages and let their requests settle before deleting the rows; deleting first
+        // races the page's own refetch (e.g. the settings tab's comparison lookup after Save) into a 404 console error.
         await page.goto(`${base}/#/${vehicle}`);
         await page.getByRole('heading', { name: 'Golf', level: 1 }).waitFor();
+        await page.waitForLoadState('networkidle');
+        if (made.length) await db.pool.query('DELETE FROM vehicles WHERE id = ANY($1)', [made]);
       }
     });
 
-    await t.test('the theme toggle overrides the system and survives a reload', async () => {
+    await tt('the theme toggle overrides the system and survives a reload', async () => {
       const findings: string[] = [];
       for (const [system, forced] of [['light', 'Dark'], ['dark', 'Light']] as const) {
         await page.emulateMedia({ colorScheme: system });
@@ -249,7 +260,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       assert.deepEqual(findings, []);
     });
 
-    await t.test('settings and administration render', async () => {
+    await tt('settings and administration render', async () => {
       for (const hash of ['garage', 'settings/preferences', 'settings/profile', 'settings/security', 'admin/users', 'admin/invites', 'admin/units', 'admin/email', 'admin/signin', 'admin/audit', 'friends']) {
         await page.goto(`${base}/#/${hash}`);
         await page.waitForLoadState('networkidle');
@@ -258,7 +269,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       }
     });
 
-    await t.test('screens pass automated WCAG 2.2 AA checks', async () => {
+    await tt('screens pass automated WCAG 2.2 AA checks', async () => {
       const findings: string[] = [];
       for (const colorScheme of ['light', 'dark'] as const) {
         await page.emulateMedia({ colorScheme });
@@ -278,7 +289,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       assert.deepEqual(findings, []);
     });
 
-    await t.test('preferences change the units shown', async () => {
+    await tt('preferences change the units shown', async () => {
       await page.goto(`${base}/#/settings/preferences`);
       assert.equal(await page.getByLabel('Fuel economy').inputValue(), '', 'follows the instance default until changed');
       await page.getByLabel('Fuel economy').selectOption('mpg_us');
@@ -289,14 +300,14 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
     });
 
     let link = '';
-    await t.test('an administrator creates an invitation link', async () => {
+    await tt('an administrator creates an invitation link', async () => {
       await page.goto(`${base}/#/admin/invites`);
       await page.getByRole('button', { name: 'Create invitation' }).click();
       link = (await page.locator('.notice code.secret').textContent()) ?? '';
       assert.match(link, /#\/register\?invite=/);
     });
 
-    await t.test('an administrator saves email and sign-on settings, and the secrets stay hidden', async () => {
+    await tt('an administrator saves email and sign-on settings, and the secrets stay hidden', async () => {
       await page.goto(`${base}/#/admin/email`);
       await page.getByRole('heading', { name: 'Email (SMTP)' }).waitFor();
       await page.getByLabel('Server').fill('smtp.example.test');
@@ -338,7 +349,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
 
     const overflows = (p: Page) => p.evaluate('document.documentElement.scrollWidth > window.innerWidth + 1');
 
-    await t.test('an 800px window keeps the desktop shell, with a drawer and no horizontal scroll', async () => {
+    await tt('an 800px window keeps the desktop shell, with a drawer and no horizontal scroll', async () => {
       await page.setViewportSize({ width: 800, height: 900 });
       for (const hash of [vehicle, `${vehicle}/log`, 'garage', 'friends', 'settings/security', 'admin/users']) {
         await page.goto(`${base}/#/${hash}`);
@@ -362,7 +373,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       await page.setViewportSize({ width: 1100, height: 900 });
     });
 
-    await t.test('a phone gets the tab-bar shell: routes fit, the vehicle sheet switches, More leads on', async () => {
+    await tt('a phone gets the tab-bar shell: routes fit, the vehicle sheet switches, More leads on', async () => {
       // A separate context with the same session, so the vehicle it picks is not remembered for the desktop page.
       const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, storageState: await page.context().storageState() });
       const p = watch(await ctx.newPage());
@@ -457,7 +468,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       } finally { await anon.close(); }
     });
 
-    await t.test('on a phone, the quick fill-up sheet logs a fill-up with a live economy preview', async () => {
+    await tt('on a phone, the quick fill-up sheet logs a fill-up with a live economy preview', async () => {
       const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, storageState: await page.context().storageState() });
       const p = watch(await ctx.newPage());
       p.setDefaultTimeout(8000);
@@ -588,7 +599,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       } finally { await ctx.close(); }
     });
 
-    await t.test('on a phone, Home, History and Vehicles are phone-native screens', async () => {
+    await tt('on a phone, Home, History and Vehicles are phone-native screens', async () => {
       const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, storageState: await page.context().storageState() });
       const p = watch(await ctx.newPage());
       p.setDefaultTimeout(8000);
@@ -764,7 +775,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       } finally { await ctx.close(); }
     });
 
-    await t.test('resizing across 700px reloads into the other shell', async () => {
+    await tt('resizing across 700px reloads into the other shell', async () => {
       // Marks the document, resizes, then waits until a new document has replaced it.
       // (Polled from here: waitForFunction would need 'unsafe-eval', which the CSP forbids.)
       const crossTo = async (width: number, height: number) => {
@@ -789,7 +800,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       assert.equal(await page.getByRole('navigation', { name: 'Main' }).count(), 0);
     });
 
-    await t.test('an invited person registers and sends a friend request', async () => {
+    await tt('an invited person registers and sends a friend request', async () => {
       const p2 = watch(await (await browser.newContext()).newPage());
       p2.setDefaultTimeout(8000);
       await p2.goto(link);
@@ -803,7 +814,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       await p2.getByText('Request sent.').waitFor();
     });
 
-    await t.test('on a phone, a waiting friend request shows on More and on the Friends row', async () => {
+    await tt('on a phone, a waiting friend request shows on More and on the Friends row', async () => {
       const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, storageState: await page.context().storageState() });
       const p = watch(await ctx.newPage());
       p.setDefaultTimeout(8000);
@@ -863,7 +874,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       return out;
     };
 
-    await t.test('on a phone, More, Settings, Account and Administration are phone screens', async () => {
+    await tt('on a phone, More, Settings, Account and Administration are phone screens', async () => {
       const { ctx, p, phoneAxe, open } = await phonePage();
       try {
         // More: grouped rows, install status, no theme (it moved to Settings).
@@ -970,7 +981,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       } finally { await ctx.close(); }
     });
 
-    await t.test('on a phone, Friends shows requests first, stacked comparison rows and an add sheet', async () => {
+    await tt('on a phone, Friends shows requests first, stacked comparison rows and an add sheet', async () => {
       const { ctx, p, phoneAxe, open } = await phonePage();
       try {
         await open('friends');
@@ -998,7 +1009,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       } finally { await ctx.close(); }
     });
 
-    await t.test('on a phone, the Install screen adapts to iOS, Android, installed and insecure', async () => {
+    await tt('on a phone, the Install screen adapts to iOS, Android, installed and insecure', async () => {
       // The server's address is shown as copyable text, not a link.
       const install = { address: async (p: Page) => {
         assert.equal(await p.getByLabel('Address').inputValue(), new URL(base).origin);
@@ -1072,7 +1083,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       }
     });
 
-    await t.test('on a phone, loading shows a skeleton and a failed load offers Try again', async () => {
+    await tt('on a phone, loading shows a skeleton and a failed load offers Try again', async () => {
       const { ctx, p, phoneAxe } = await phonePage({ lenient: true });
       try {
         let release: () => void = () => undefined;
@@ -1102,7 +1113,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       } finally { await ctx.close(); }
     });
 
-    await t.test('on a phone, going offline shows the pill and banner and pauses saving', async () => {
+    await tt('on a phone, going offline shows the pill and banner and pauses saving', async () => {
       const { ctx, p, phoneAxe, open } = await phonePage({ lenient: true });
       try {
         await open('settings/profile');
@@ -1145,7 +1156,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       } finally { await ctx.close(); }
     });
 
-    await t.test('on a phone, an update waits for the fill-up sheet and reloads only when asked', async () => {
+    await tt('on a phone, an update waits for the fill-up sheet and reloads only when asked', async () => {
       const { ctx, p, phoneAxe } = await phonePage();
       // A second build of the client: one changed byte gives the service worker a new build id.
       const dir = mkdtempSync(path.join(tmpdir(), 'driveloom-web-'));
@@ -1195,7 +1206,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       }
     });
 
-    await t.test('on a phone, sign-in is full screen with phone keyboards and returns to the route', async () => {
+    await tt('on a phone, sign-in is full screen with phone keyboards and returns to the route', async () => {
       const { ctx, p, phoneAxe } = await phonePage({ signedIn: false });
       try {
         await p.goto(`${base}/#/friends`);
@@ -1272,7 +1283,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       }
     };
 
-    await t.test('on a desktop, a changed client arrives on the next reload with no banner, and an offline reload still renders the cached shell', async () => {
+    await tt('on a desktop, a changed client arrives on the next reload with no banner, and an offline reload still renders the cached shell', async () => {
       const { ctx, p } = await phonePage({ lenient: true, viewport: { width: 1100, height: 900 } });
       // A second build of the client with one changed web file.
       const dir = mkdtempSync(path.join(tmpdir(), 'driveloom-web-'));
@@ -1322,7 +1333,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       }
     });
 
-    await t.test('crossing the phone width keeps unsaved input and open dialogs, and switches shells when nothing would be lost', async () => {
+    await tt('crossing the phone width keeps unsaved input and open dialogs, and switches shells when nothing would be lost', async () => {
       // Typed text survives 1100 -> 683 until it is cleared.
       {
         const { ctx, p } = await phonePage({ lenient: true, viewport: { width: 1100, height: 900 } });
@@ -1398,7 +1409,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       }
     });
 
-    await t.test('service history: off by default, then a desktop visit is added, corrected and deleted', async () => {
+    await tt('service history: off by default, then a desktop visit is added, corrected and deleted', async () => {
       // Off: no menu entry, and the page says so instead of failing.
       await page.goto(`${base}/#/${vehicle}`);
       await page.getByRole('heading', { name: 'At a glance' }).waitFor();
@@ -1495,7 +1506,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       await noErrorPage();
     });
 
-    await t.test('service history on a phone: reachable from the vehicle screen, add sheet, list, hidden by preference', async () => {
+    await tt('service history on a phone: reachable from the vehicle screen, add sheet, list, hidden by preference', async () => {
       const { ctx, p, phoneAxe, open } = await phonePage();
       try {
         await open(`${vehicle}/overview`);
@@ -1543,7 +1554,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       await page.getByRole('heading', { name: 'At a glance' }).waitFor();
     });
 
-    await t.test('maintenance planning on desktop: add a task, mark it done through a linked visit, snooze', async () => {
+    await tt('maintenance planning on desktop: add a task, mark it done through a linked visit, snooze', async () => {
       await db.pool.query("INSERT INTO instance_modules (module, enabled) VALUES ('service', true) ON CONFLICT (module) DO UPDATE SET enabled = true");
       try {
         await page.goto(`${base}/#/${vehicle}/service?view=maintenance`);
@@ -1599,7 +1610,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       }
     });
 
-    await t.test('maintenance planning on a phone: section in the Service screen, add and snooze in sheets, bottom navigation untouched', async () => {
+    await tt('maintenance planning on a phone: section in the Service screen, add and snooze in sheets, bottom navigation untouched', async () => {
       await db.pool.query("INSERT INTO instance_modules (module, enabled) VALUES ('service', true) ON CONFLICT (module) DO UPDATE SET enabled = true");
       const { ctx, p, phoneAxe, open } = await phonePage();
       try {
@@ -1744,7 +1755,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       await dlg.waitFor({ state: 'detached' });
     };
 
-    await t.test('maintenance recommendations on desktop: no banner without a match, then the five-step review and import', async () => {
+    await tt('maintenance recommendations on desktop: no banner without a match, then the five-step review and import', async () => {
       await db.pool.query("INSERT INTO instance_modules (module, enabled) VALUES ('service', true) ON CONFLICT (module) DO UPDATE SET enabled = true");
       try {
         // No preset for this vehicle: the tab looks exactly as before.
@@ -1761,7 +1772,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       });
     });
 
-    await t.test('maintenance recommendations on a phone: the same flow in a sheet, and a vehicle without a match shows nothing', async () => {
+    await tt('maintenance recommendations on a phone: the same flow in a sheet, and a vehicle without a match shows nothing', async () => {
       await db.pool.query("INSERT INTO instance_modules (module, enabled) VALUES ('service', true) ON CONFLICT (module) DO UPDATE SET enabled = true");
       try {
         const { ctx, p } = await phonePage();
@@ -1789,7 +1800,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       });
     });
 
-    await t.test('reminders by email on desktop: no-SMTP notice, owner settings and the personal switch', async () => {
+    await tt('reminders by email on desktop: no-SMTP notice, owner settings and the personal switch', async () => {
       await db.pool.query("INSERT INTO instance_modules (module, enabled) VALUES ('service', true) ON CONFLICT (module) DO UPDATE SET enabled = true");
       const vid = vehicle.split('/')[1];
       try {
@@ -1828,7 +1839,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       }
     });
 
-    await t.test('reminders by email on a phone: personal switch inline, settings in a sheet, bottom navigation untouched', async () => {
+    await tt('reminders by email on a phone: personal switch inline, settings in a sheet, bottom navigation untouched', async () => {
       await db.pool.query("INSERT INTO instance_modules (module, enabled) VALUES ('service', true) ON CONFLICT (module) DO UPDATE SET enabled = true");
       const vid = vehicle.split('/')[1];
       const { ctx, p, phoneAxe, open } = await phonePage();
@@ -1860,7 +1871,334 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       }
     });
 
-    await t.test('signing out and back in, the request is accepted', async () => {
+
+    // ---------- API keys: Account and security, administration, docs ----------
+    const TOKEN_RE = /^dlk_[A-Za-z0-9_-]{43}$/;
+    const bearer = async (token: string, p = '/v1/me') => {
+      const r = await fetch(`${base}${p}`, { headers: { authorization: `Bearer ${token}` } });
+      return { status: r.status, json: await r.json().catch(() => null) as Record<string, unknown> | null };
+    };
+    /** Creates a key through the API with the page's own session (the UI flow is exercised separately). */
+    const makeKey = (p: Page, name: string) => p.evaluate(`(async () => {
+      const s = await (await fetch('/v1/auth/session')).json();
+      const r = await fetch('/v1/auth/api-keys', { method: 'POST', headers: { 'content-type': 'application/json', 'x-csrf-token': s.csrf_token }, body: JSON.stringify({ name: ${JSON.stringify(name)}, permissions: { fuel: 'read' }, vehicleMode: 'all_current' }) });
+      return r.json();
+    })()`) as Promise<{ id: string; token: string }>;
+    /** Nothing about a secret may live in the page: storage, URL, caches, IndexedDB names, the DOM text or form values. */
+    const assertNoSecret = async (p: Page, secrets: string[]) => {
+      // Closing a dialog fires its close event a moment later; the secret must be gone from the DOM right after.
+      for (let i = 0; i < 40 && !(await p.evaluate("!document.querySelector('[data-ak-token]')")); i++) await p.waitForTimeout(50);
+      const dump = await p.evaluate(`(async () => {
+        const out = [['url', location.href], ['text', document.body.innerText], ['local', JSON.stringify({ ...localStorage })], ['session', JSON.stringify({ ...sessionStorage })]];
+        out.push(['fields', [...document.querySelectorAll('input, textarea')].map((e) => e.value).join(' ')]);
+        out.push(['fieldDescriptions', [...document.querySelectorAll('input, textarea')].filter((e) => /dlk_/.test(e.value)).map((e) => e.outerHTML.slice(0, 160) + ' in ' + (e.closest('dialog')?.outerHTML.slice(0, 120) ?? 'page')).join(' || ')]);
+        for (const k of await caches.keys()) for (const r of await (await caches.open(k)).keys()) out.push(['cache', r.url]);
+        out.push(['idb', JSON.stringify(await (indexedDB.databases?.() ?? []))]);
+        return out;
+      })()`) as [string, string][];
+      for (const [where, text] of dump) {
+        for (const secret of secrets) assert.ok(!text.includes(secret), `the API key is in the page's ${where}: ${dump.find(([w]) => w === 'fieldDescriptions')?.[1]}`);
+        assert.ok(!/dlk_[A-Za-z0-9_-]{43}/.test(text), `token-shaped text in the page's ${where}`);
+      }
+    };
+    /** Answers the "Confirm it is you" dialog with the password. */
+    const reauth = async () => {
+      const d = page.locator('dialog', { hasText: 'Confirm it is you' });
+      await d.getByLabel('Password').fill(ADMIN.password);
+      await d.getByRole('button', { name: 'Confirm' }).click();
+      await d.waitFor({ state: 'detached' });
+    };
+    const seedActivity = (n: number) => db.pool.query(
+      `INSERT INTO api_key_activity (id, key_id, user_id, key_name, action, target_type, target_ids, vehicle_id, request_id, metadata, created_at)
+       SELECT gen_random_uuid(), k.id, k.user_id, k.name, 'fuel.created', NULL, '{}', NULL, NULL, '{}', now() FROM api_keys k, generate_series(1, $1) WHERE k.name = 'Home Assistant'`, [n]);
+
+    await tt('API keys on a desktop: create with fresh sign-in, one-time token, edit, rotate, activity, revoke, remove', async () => {
+      await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: base });
+      await page.setViewportSize({ width: 1100, height: 900 });
+      await page.goto(`${base}/#/settings/security`);
+      const panel = page.getByRole('region', { name: 'API keys' });
+      await panel.getByText('No API keys yet.').waitFor();
+      assert.deepEqual(await axe('API keys, empty'), []);
+      const dev = page.getByRole('region', { name: 'Developer access' });
+      assert.equal(await dev.getByRole('link', { name: 'Interactive API documentation' }).getAttribute('href'), '/docs');
+      assert.equal(await dev.getByRole('link', { name: /Download OpenAPI/ }).getAttribute('href'), '/openapi.yaml');
+
+      // The form offers only supported levels, preselects nothing and defaults to 30 days.
+      await panel.getByRole('button', { name: 'Create API key' }).click();
+      const dlg = page.getByRole('dialog', { name: 'Create an API key' });
+      await dlg.waitFor();
+      assert.deepEqual(await dlg.getByLabel('Expires').locator('option').allTextContents(), ['24 hours', '7 days', '30 days', '90 days', '1 year', 'Never expires']);
+      assert.equal(await dlg.getByLabel('Expires').inputValue(), '30d');
+      const levels = async (label: string) => dlg.getByLabel(label, { exact: true }).locator('option').allTextContents();
+      assert.deepEqual(await levels('Vehicle details'), ['No access', 'Read']);
+      assert.deepEqual(await levels('Vehicle settings'), ['No access', 'Read & write', 'Full']);
+      assert.deepEqual(await levels('Fuel'), ['No access', 'Read', 'Read & write', 'Full']);
+      assert.deepEqual(await levels('Reminder settings'), ['No access', 'Read', 'Read & write']);
+      assert.deepEqual(await levels('Statistics'), ['No access', 'Read']);
+      for (const label of ['Vehicle details', 'Vehicle settings', 'Fuel', 'Service', 'Maintenance', 'Reminder settings', 'Statistics']) assert.equal(await dlg.getByLabel(label, { exact: true }).inputValue(), 'none', `${label} starts at no access`);
+      assert.equal(await dlg.getByRole('checkbox', { name: /Allow creating vehicles/ }).isChecked(), false);
+      assert.equal(await dlg.getByRole('checkbox', { name: /Golf/ }).isChecked(), false);
+      assert.equal(await dlg.getByRole('radio', { name: /Selected vehicles/ }).isChecked(), true);
+      await dlg.getByText(/Deletion is always a separate step up/).waitFor();
+      // Warnings appear for the risky choices only.
+      await dlg.getByLabel('Expires').selectOption('never');
+      await dlg.getByText(/stays valid until you revoke it/).waitFor();
+      await dlg.getByLabel('Expires').selectOption('30d');
+      await dlg.getByRole('radio', { name: /now and in the future/ }).check();
+      await dlg.getByText(/also reach every vehicle you create or are added to in the future/).waitFor();
+      await dlg.getByRole('radio', { name: /Selected vehicles/ }).check();
+      assert.deepEqual(await axe('API key form'), []);
+
+      // Needs a vehicle, then a stale sign-in asks for the password before the key is made.
+      await dlg.getByLabel('Name').fill('Home Assistant');
+      await dlg.getByRole('button', { name: 'Create key' }).click();
+      await dlg.getByRole('alert').getByText('Choose at least one vehicle').waitFor();
+      await dlg.getByRole('checkbox', { name: /Golf/ }).check();
+      await dlg.getByLabel('Fuel', { exact: true }).selectOption('read_write');
+      skewMs = 11 * 60_000;
+      await dlg.getByRole('button', { name: 'Create key' }).click();
+      await page.getByRole('heading', { name: 'Confirm it is you' }).waitFor();
+      await page.locator('dialog', { hasText: 'Confirm it is you' }).getByRole('button', { name: 'Cancel' }).click();
+      await dlg.getByRole('alert').getByText('Confirmation cancelled').waitFor();
+      assert.equal((await db.pool.query('SELECT count(*)::int AS n FROM api_keys')).rows[0].n, 0, 'nothing is created without the confirmation');
+      await dlg.getByRole('button', { name: 'Create key' }).click();
+      await page.getByRole('heading', { name: 'Confirm it is you' }).waitFor();
+      await reauth();
+
+      // One-time token.
+      const shown = page.getByRole('dialog', { name: 'API key created' });
+      await shown.waitFor();
+      const token = await shown.getByLabel('API key').inputValue();
+      assert.match(token, TOKEN_RE);
+      assert.deepEqual(await axe('API key token'), []);
+      await shown.getByRole('button', { name: 'Copy key' }).click();
+      await shown.getByText('Copied to the clipboard.').waitFor();
+      assert.equal(await page.evaluate('navigator.clipboard.readText()'), token);
+      await page.evaluate("navigator.clipboard.writeText('')");
+      assert.equal((await bearer(token)).status, 200);
+      await shown.getByRole('button', { name: 'I have stored it' }).click();
+      await shown.waitFor({ state: 'detached' });
+      await assertNoSecret(page, [token]);
+      skewMs = 0;
+
+      // The list shows the key, never its secret.
+      await panel.getByText('Home Assistant').waitFor();
+      await panel.getByText('Fuel: read & write').waitFor();
+      await panel.getByText(/Vehicles: Golf/).waitFor();
+      await panel.getByText('1 of 25 active keys.').waitFor();
+      const listed = await panel.innerText();
+      assert.ok(listed.includes(`${token.slice(0, 12)}…`) && !listed.includes(token), 'only the prefix is shown');
+      assert.deepEqual(await axe('API key list'), []);
+      assert.deepEqual(((await bearer(token)).json?.['apiKey'] as { name: string }).name, 'Home Assistant');
+
+      // Editing down needs no fresh sign-in; editing up does.
+      await panel.getByRole('button', { name: 'Edit' }).click();
+      const edit = page.getByRole('dialog', { name: 'Edit API key' });
+      assert.equal(await edit.getByLabel('Name').inputValue(), 'Home Assistant');
+      assert.equal(await edit.getByLabel('Fuel', { exact: true }).inputValue(), 'read_write');
+      assert.equal(await edit.getByRole('checkbox', { name: /Golf/ }).isChecked(), true);
+      await edit.getByLabel('Fuel', { exact: true }).selectOption('read');
+      skewMs = 22 * 60_000; // the earlier confirmation was itself at +11 minutes
+      await edit.getByRole('button', { name: 'Save changes' }).click();
+      await panel.getByText('Fuel: read', { exact: true }).waitFor();
+      assert.equal(await page.getByRole('heading', { name: 'Confirm it is you' }).count(), 0, 'a reduction needs no confirmation');
+      await panel.getByRole('button', { name: 'Edit' }).click();
+      await edit.getByLabel('Statistics', { exact: true }).selectOption('read');
+      await edit.getByRole('button', { name: 'Save changes' }).click();
+      await page.getByRole('heading', { name: 'Confirm it is you' }).waitFor();
+      await reauth();
+      await panel.getByText(/Statistics: read/).waitFor();
+      skewMs = 0;
+
+      // Activity, paginated with nextBefore.
+      await seedActivity(30);
+      await panel.getByRole('button', { name: 'Activity' }).click();
+      const act = page.getByRole('dialog', { name: 'Activity: Home Assistant' });
+      await act.locator('li.ak-act').first().waitFor();
+      assert.equal(await act.locator('li.ak-act').count(), 25, 'the first page holds 25 events');
+      assert.deepEqual(await axe('API key activity'), []);
+      await act.getByRole('button', { name: 'Load older activity' }).click();
+      await act.getByRole('button', { name: 'Load older activity' }).waitFor({ state: 'hidden' });
+      assert.ok(await act.locator('li.ak-act').count() > 30);
+      assert.ok(await act.getByText('Fuel created').count() >= 30, 'safe labels, not raw action codes');
+      await act.getByText('Key created').waitFor();
+      await act.getByRole('button', { name: 'Close' }).click();
+
+      // Rotation: confirm, then the new token is shown once and the old one stops.
+      await panel.getByRole('button', { name: 'Rotate' }).click();
+      await page.getByRole('dialog').getByText(/stops working immediately/).waitFor();
+      await page.getByRole('dialog').getByRole('button', { name: 'Rotate' }).click();
+      const rotated = page.getByRole('dialog', { name: 'New API key' });
+      const token2 = await rotated.getByLabel('API key').inputValue();
+      assert.match(token2, TOKEN_RE); assert.notEqual(token2, token);
+      assert.equal((await bearer(token)).status, 401, 'the old key is dead');
+      assert.equal((await bearer(token2)).status, 200);
+      await rotated.getByRole('button', { name: 'I have stored it' }).click();
+      await assertNoSecret(page, [token, token2]);
+
+      // Revoke, then remove; revoke all.
+      await panel.getByRole('button', { name: 'Revoke', exact: true }).click();
+      await page.getByRole('dialog').getByRole('button', { name: 'Revoke' }).click();
+      await panel.getByText('Revoked', { exact: true }).waitFor();
+      assert.equal((await bearer(token2)).status, 401);
+      await panel.getByRole('button', { name: 'Remove' }).click();
+      await page.getByRole('dialog').getByRole('button', { name: 'Remove' }).click();
+      await panel.getByText('No API keys yet.').waitFor();
+      await makeKey(page, 'one'); await makeKey(page, 'two');
+      await page.reload();
+      await panel.getByText('2 of 25 active keys.').waitFor();
+      await panel.getByRole('button', { name: 'Revoke all' }).click();
+      await page.getByRole('dialog').getByRole('button', { name: 'Revoke all' }).click();
+      await panel.getByText('0 of 25 active keys.').waitFor();
+      assert.equal((await db.pool.query("SELECT count(*)::int AS n FROM api_keys WHERE revoked_at IS NULL")).rows[0].n, 0);
+      await db.pool.query('DELETE FROM api_keys');
+      await noErrorPage();
+    });
+
+    await tt('the administrator can switch API keys off and on; owners see why and can still revoke', async () => {
+      skewMs = 0;
+      await page.goto(`${base}/#/settings/security`);
+      const panel = page.getByRole('region', { name: 'API keys' });
+      await panel.waitFor();
+      const key = await makeKey(page, 'Switch test');
+      await page.goto(`${base}/#/admin/apikeys`);
+      const box = page.getByRole('checkbox', { name: 'Allow API keys' });
+      await box.waitFor();
+      assert.equal(await box.isChecked(), true);
+      await page.getByText(/Nothing is deleted/).waitFor();
+      assert.deepEqual(await axe('admin API keys'), []);
+      await box.uncheck();
+      await page.locator('#toast').getByText('API keys blocked.').waitFor();
+      const off = await bearer(key.token);
+      assert.deepEqual([off.status, off.json?.['code']], [403, 'api_keys_disabled']);
+      await page.goto(`${base}/#/settings/security`);
+      await panel.getByText(/An administrator has turned API keys off/).waitFor();
+      assert.equal(await panel.getByRole('button', { name: 'Create API key' }).isDisabled(), true);
+      assert.equal(await panel.getByRole('button', { name: 'Revoke', exact: true }).first().isEnabled(), true, 'revoking still works');
+      assert.deepEqual(await axe('API keys, switched off'), []);
+      await page.goto(`${base}/#/admin/apikeys`);
+      await page.getByRole('checkbox', { name: 'Allow API keys' }).check();
+      await page.locator('#toast').getByText('API keys allowed.').waitFor();
+      assert.equal((await bearer(key.token)).status, 200, 'a valid key works again, nothing was deleted');
+      await db.pool.query('DELETE FROM api_keys');
+    });
+
+    await tt('API keys on a phone: sheets for create, token, activity, rotate and revoke, and the admin switch', async () => {
+      skewMs = 0;
+      const { ctx, p, phoneAxe, open } = await phonePage();
+      try {
+        await ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: base });
+        await open('settings/security');
+        const keysSection = p.getByRole('region', { name: 'API keys' });
+        await keysSection.waitFor();
+        assert.equal(await overflows(p), false, 'security screen overflows');
+        assert.deepEqual(await bothThemes(p, phoneAxe, 'API keys empty'), []);
+        assert.equal(await p.getByRole('region', { name: 'Developer access' }).getByRole('link', { name: /Interactive API documentation/ }).getAttribute('href'), '/docs');
+        await keysSection.getByRole('button', { name: 'Create API key' }).click();
+        const sheet = p.getByRole('dialog', { name: 'Create an API key' });
+        await sheet.getByLabel('Name').fill('Home Assistant');
+        assert.deepEqual(await sheet.getByLabel('Expires').locator('option').allTextContents(), ['24 hours', '7 days', '30 days', '90 days', '1 year', 'Never expires']);
+        assert.deepEqual(await sheet.getByLabel('Statistics', { exact: true }).locator('option').allTextContents(), ['No access', 'Read']);
+        await sheet.getByRole('checkbox', { name: /Golf/ }).check();
+        await sheet.getByLabel('Service', { exact: true }).selectOption('read_write');
+        assert.equal(await overflows(p), false, 'form sheet overflows');
+        assert.deepEqual(await bothThemes(p, phoneAxe, 'API key sheet'), []);
+        await sheet.getByRole('button', { name: 'Create key' }).click();
+        const shown = p.getByRole('dialog', { name: 'API key created' });
+        const token = await shown.getByLabel('API key').inputValue().catch(async (e: Error) => { throw new Error(`${e.message}\n${await p.locator('dialog').allInnerTexts()}`); });
+        assert.match(token, TOKEN_RE);
+        assert.deepEqual(await bothThemes(p, phoneAxe, 'API key token sheet'), []);
+        await shown.getByRole('button', { name: 'Copy key' }).click();
+        await shown.getByText('Copied to the clipboard.').waitFor();
+        await shown.getByRole('button', { name: 'I have stored it' }).click();
+        await shown.waitFor({ state: 'detached' });
+        await assertNoSecret(p, [token]);
+        await keysSection.getByRole('button', { name: /Home Assistant/ }).waitFor();
+        assert.deepEqual(await bothThemes(p, phoneAxe, 'API keys list'), []);
+
+        // Open the key: activity, then rotate, then revoke.
+        await keysSection.getByRole('button', { name: /Home Assistant/ }).click();
+        let keySheet = p.getByRole('dialog', { name: 'Home Assistant' });
+        await keySheet.getByRole('button', { name: 'Activity' }).click();
+        const act = p.getByRole('dialog', { name: 'Activity: Home Assistant' });
+        await act.getByText('Key created').waitFor();
+        assert.deepEqual(await bothThemes(p, phoneAxe, 'API key activity'), []);
+        await act.getByRole('button', { name: 'Close' }).click();
+        await keysSection.getByRole('button', { name: /Home Assistant/ }).click();
+        keySheet = p.getByRole('dialog', { name: 'Home Assistant' });
+        await keySheet.getByRole('button', { name: 'Rotate' }).click();
+        await p.getByRole('dialog', { name: 'Rotate “Home Assistant”?' }).getByRole('button', { name: 'Rotate' }).click();
+        const rotated = p.getByRole('dialog', { name: 'New API key' });
+        const token2 = await rotated.getByLabel('API key').inputValue();
+        assert.notEqual(token2, token);
+        await rotated.getByRole('button', { name: 'I have stored it' }).click();
+        await assertNoSecret(p, [token, token2]);
+        assert.equal((await bearer(token)).status, 401);
+        await keysSection.getByRole('button', { name: /Home Assistant/ }).click();
+        await p.getByRole('dialog', { name: 'Home Assistant' }).getByRole('button', { name: 'Revoke', exact: true }).click();
+        await p.getByRole('dialog', { name: 'Revoke “Home Assistant”?' }).getByRole('button', { name: 'Revoke key' }).click();
+        await keysSection.getByText('Revoked', { exact: true }).waitFor();
+        assert.equal((await bearer(token2)).status, 401);
+
+        // Administration: the switch.
+        await open('admin/apikeys');
+        const sw = p.getByRole('switch', { name: 'Allow API keys' });
+        assert.equal(await sw.isChecked(), true);
+        assert.deepEqual(await bothThemes(p, phoneAxe, 'admin API keys'), []);
+        await sw.uncheck();
+        await toastSays(p, 'API keys blocked.');
+        await open('settings/security');
+        await p.getByText(/An administrator has turned API keys off/).first().waitFor();
+        await open('admin/apikeys');
+        await p.getByRole('switch', { name: 'Allow API keys' }).check();
+        await toastSays(p, 'API keys allowed.');
+        await p.emulateMedia({ colorScheme: 'light' });
+      } finally {
+        await ctx.close();
+        await db.pool.query('DELETE FROM api_keys');
+      }
+    });
+
+    await tt('the API docs are served by the app itself, render the contract and call no third party', async () => {
+      const ctx = await browser.newContext({ viewport: { width: 1100, height: 900 } });
+      const d = watch(await ctx.newPage());
+      d.setDefaultTimeout(8000);
+      const requested: string[] = [];
+      d.on('request', (r) => requested.push(r.url()));
+      try {
+        const res = await d.goto(`${base}/docs`);
+        assert.match(res!.headers()['content-type'] ?? '', /^text\/html/);
+        await d.getByRole('heading', { name: 'DriveLoom API', level: 1 }).waitFor();
+        await d.getByText(`Version ${API_VERSION}`).waitFor();
+        assert.match(await d.title(), /DriveLoom API/);
+        await d.locator('details.op').first().waitFor();
+        assert.ok(await d.locator('details.op').count() > 50, 'every operation is listed');
+        const op = d.locator('details.op', { hasText: '/v1/auth/api-keys' }).first();
+        await op.locator('summary').click();
+        await op.getByRole('heading', { name: 'Responses' }).waitFor();
+        assert.ok((await d.locator('pre').allInnerTexts()).some((x) => x.includes('${DRIVELOOM_API_KEY}')), 'curl examples use a placeholder, never a key');
+        const vehicles = d.locator('details.op', { hasText: 'GET/v1/vehicles' }).first();
+        await vehicles.locator('summary').click();
+        await vehicles.getByText(/needs (vehicle_info|fuel)/).first().waitFor().catch(() => undefined);
+        assert.equal(await d.locator('input, textarea').count(), 0, 'the docs never ask for a credential');
+        assert.deepEqual(await new AxeBuilder({ page: d }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa']).analyze().then((r) => r.violations.map((v) => `docs: ${v.id} ${v.nodes.slice(0, 3).map((n) => n.target.join(' ')).join(' | ')}`)), []);
+        await d.emulateMedia({ colorScheme: 'dark' });
+        assert.deepEqual(await new AxeBuilder({ page: d }).withTags(['wcag2a', 'wcag2aa']).analyze().then((r) => r.violations.map((v) => `docs dark: ${v.id} ${v.nodes.slice(0, 3).map((n) => n.target.join(' ')).join(' | ')}`)), []);
+        const foreign = requested.filter((u) => !u.startsWith(`${base}/`) && !u.startsWith('data:') && !u.startsWith('blob:'));
+        assert.deepEqual(foreign, [], 'every request is to the same origin');
+        assert.ok(requested.includes(`${base}/openapi.json`));
+        // The contract downloads match the server's version, and the SPA never answers for them.
+        const yaml = await fetch(`${base}/openapi.yaml`);
+        assert.match(yaml.headers.get('content-type') ?? '', /^application\/yaml/);
+        assert.match(await yaml.text(), new RegExp(`^  version: ${API_VERSION.replaceAll('.', '\\.')}$`, 'm'));
+        // A phone gets the same page without sideways scrolling.
+        await d.setViewportSize({ width: 390, height: 844 });
+        await d.emulateMedia({ colorScheme: 'light' });
+        assert.equal(await overflows(d), false, 'docs overflow on a phone');
+      } finally { await ctx.close(); }
+    });
+
+    await tt('signing out and back in, the request is accepted', async () => {
       await page.getByRole('button', { name: /sign out/i }).click();
       await page.getByRole('heading', { name: 'Sign in' }).waitFor();
       await page.getByLabel('Email', { exact: true }).fill(ADMIN.email);
@@ -1873,7 +2211,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       await page.getByRole('heading', { name: 'Your friends' }).waitFor();
     });
 
-    await t.test('the service worker caches the shell, never an API response, and sign-out keeps the shell but drops other caches', async () => {
+    await tt('the service worker caches the shell, never an API response, and sign-out keeps the shell but drops other caches', async () => {
       // localhost is a secure context, so the worker registers.
       await page.goto(`${base}/#/`);
       // The page runs in a browser; the test's TypeScript has no DOM types, so the snippets are strings.
@@ -1887,6 +2225,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       const cached = await cachedPaths(page);
       assert.ok(cached.includes('/') && cached.includes('/styles.css') && cached.includes('/js/pwa.js'), cached.join(' '));
       assert.deepEqual(cached.filter((p) => p.includes('/v1')), [], 'no API request is cached');
+      assert.deepEqual(cached.filter((p) => p.startsWith('/docs') || p.startsWith('/openapi')), [], 'the API docs are not part of the app shell');
       // Something that is not the shell, which sign-out must drop.
       await page.evaluate("caches.open('scratch-data').then((c) => c.put('/scratch', new Response('x')))");
       await page.getByRole('button', { name: /sign out/i }).click();
@@ -1899,7 +2238,7 @@ test('web client journeys', { skip, timeout: 420_000 }, async (t: TestContext) =
       assert.deepEqual(after.filter((p) => p.includes('/v1')), [], 'still no API request cached');
     });
 
-    assert.deepEqual(problems, [], 'no console errors, page errors or CSP violations');
+    assert.deepEqual(problems, [], `no console errors, page errors or CSP violations; failed responses: ${failed.join(' | ')}`);
   } finally {
     await browser.close();
     server.close(); server.closeAllConnections();

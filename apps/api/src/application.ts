@@ -7,6 +7,8 @@ import type pg from 'pg';
 import { createApp, type Route } from './http/app.ts';
 import { authenticator } from './auth/sessions.ts';
 import { authRoutes } from './auth/routes.ts';
+import { meRoutes } from './auth/me-routes.ts';
+import { createApiKeyGate } from './auth/api-key-auth.ts';
 import type { AuthContext } from './auth/context.ts';
 import { adminRoutes } from './admin/routes.ts';
 import { VehicleService } from './vehicles/service.ts';
@@ -28,6 +30,8 @@ import { friendRoutes } from './friends/routes.ts';
 import { PortabilityService } from './portability/service.ts';
 import { portabilityRoutes } from './portability/routes.ts';
 import { staticFiles } from './http/static.ts';
+import { isOpenApiPath, openApiHandler } from './http/openapi-docs.ts';
+import { withKeyPolicies } from './auth/api-key-route-policies.ts';
 import { API_VERSION } from './version.ts';
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
@@ -76,20 +80,21 @@ export function allRoutes(ctx: AuthContext, notifier: Notifier | null = null): R
   const routes = [
     ...systemRoutes(ctx.db),
     ...authRoutes(ctx),
+    ...meRoutes(ctx),
     ...adminRoutes(ctx),
     ...vehicleRoutes(vehicles),
     ...imageRoutes(ctx.db, vehicles),
     ...vehiclePrefRoutes(ctx.db),
     ...fuelRoutes(fuel),
     ...serviceRoutes(service),
-    ...attachmentRoutes(new AttachmentService(ctx.db, vehicles)),
+    ...attachmentRoutes(new AttachmentService(ctx.db, vehicles, ctx.now)),
     ...maintenanceRoutes(new MaintenanceService(ctx.db, vehicles, ctx.now)),
     ...notificationRoutes(new NotificationSettingsService(ctx.db, vehicles, () => !!ctx.mailer)),
     ...preferenceRoutes(ctx.db),
     ...friendRoutes(new FriendService(ctx.db, vehicles, fuel, ctx.now)),
     ...portabilityRoutes(new PortabilityService(ctx.db, vehicles, fuel, service, ctx.now)),
   ];
-  return notifier ? withOdometerTrigger(routes, notifier) : routes;
+  return withKeyPolicies(notifier ? withOdometerTrigger(routes, notifier) : routes);
 }
 
 export interface ApplicationOptions {
@@ -100,10 +105,12 @@ export interface ApplicationOptions {
 }
 
 export function createApplication(ctx: AuthContext, opts: ApplicationOptions): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
-  const api = createApp({ routes: allRoutes(ctx, opts.notifier ?? null), authenticator: authenticator(ctx), publicOrigin: ctx.config.publicOrigin, ipTrust: ctx.config.ipTrust });
+  const api = createApp({ routes: allRoutes(ctx, opts.notifier ?? null), authenticator: authenticator(ctx), publicOrigin: ctx.config.publicOrigin, ipTrust: ctx.config.ipTrust, apiKeys: createApiKeyGate(ctx) });
   const web = opts.webDir ? staticFiles(opts.webDir, { secure: ctx.config.secureCookies }) : null;
+  const spec = openApiHandler({ secure: ctx.config.secureCookies });
   return async (req, res) => {
     const path = (req.url ?? '/').split('?')[0]!;
+    if (isOpenApiPath(path)) return spec(req, res);
     if (path === '/v1' || path.startsWith('/v1/') || !web) return api(req, res);
     return web(req, res);
   };

@@ -11,6 +11,9 @@ import type { Principal } from '../identity.ts';
 import { ApiError, conflict, forbidden, invalid, notFound } from './errors.ts';
 import type { GrantableRole, Member, Role, Vehicle, VehicleAccess, VehicleInput, VehiclePatch } from './types.ts';
 import { canArchive, canEditVehicle, canManageMembers, canTransferOwnership, isGrantableRole } from './permissions.ts';
+import { auditAs, insertAudit } from '../audit.ts';
+import { withIdempotency, type Idem } from '../auth/idempotency.ts';
+import { keySelectionAllows, keyStoredVehicleIds, recheckKeyInTx } from '../auth/api-key-auth.ts';
 
 type Q = pg.PoolClient;
 interface VehicleRow {
@@ -79,19 +82,19 @@ export class VehicleService {
     } finally { c.release(); }
   }
 
-  async #audit(c: Q, actor: Id, action: string, vehicleId: Id, details: Record<string, unknown> = {}) {
-    await c.query(
-      "INSERT INTO audit_events (id, actor_id, action, subject_type, subject_id, details) VALUES ($1,$2,$3,'vehicle',$4,$5)",
-      [uuidv7(), actor, action, vehicleId, JSON.stringify(details)]);
+  async #audit(c: Q, p: Principal, action: string, vehicleId: Id, details: Record<string, unknown> = {}) {
+    await auditAs(c, p, { action, subjectType: 'vehicle', subjectId: vehicleId, details });
   }
 
   /** Lock the vehicle row (serialises all mutations on it) and return the caller's role, or 404. */
   async #lock(c: Q, p: Principal, vehicleId: unknown): Promise<{ id: Id; role: Role }> {
     const vid = id(vehicleId);
+    if (!keySelectionAllows(p, vid)) throw notFound();
     const { rows } = await c.query<{ role: Role | null }>(
       'SELECT (SELECT role FROM vehicle_members WHERE vehicle_id = v.id AND user_id = $2) AS role FROM vehicles v WHERE v.id = $1 FOR UPDATE',
       [vid, p.userId]);
     if (!rows[0] || !rows[0].role) throw notFound();
+    await recheckKeyInTx(c, p, vid);
     return { id: vid, role: rows[0].role };
   }
 
@@ -102,12 +105,16 @@ export class VehicleService {
    */
   async access(c: Pick<pg.Pool, 'query'>, p: Principal, vehicleId: unknown, lock = false): Promise<VehicleAccess> {
     const vid = id(vehicleId);
+    // An API key reaches only the vehicles in its selection; anything else is indistinguishable from a vehicle that does not exist.
+    if (!keySelectionAllows(p, vid)) throw notFound();
     const { rows } = await c.query<{ role: Role | null; archived: boolean; odometer_unit: DistanceUnit; currency: string }>(
       `SELECT (SELECT role FROM vehicle_members WHERE vehicle_id = v.id AND user_id = $2) AS role,
               v.archived_at IS NOT NULL AS archived, v.odometer_unit, v.currency
          FROM vehicles v WHERE v.id = $1 ${lock ? 'FOR UPDATE' : ''}`, [vid, p.userId]);
     const r = rows[0];
     if (!r || !r.role) throw notFound();
+    // Mutations hold the vehicle lock: re-check the key (revoked, scope, grants) inside the same transaction.
+    if (lock) await recheckKeyInTx(c, p, vid);
     return { id: vid, role: r.role, archived: r.archived, odometerUnit: r.odometer_unit, currency: r.currency };
   }
 
@@ -117,18 +124,23 @@ export class VehicleService {
     return toVehicle(rows[0]!);
   }
 
-  async create(p: Principal, input: VehicleInput, within?: Q): Promise<Vehicle> {
+  async create(p: Principal, input: VehicleInput, within?: Q, idem?: Idem): Promise<Vehicle> {
     const name = text(input.name, 'name', false), make = text(input.make, 'make', false), model = text(input.model, 'model', false);
     const y = year(input.year), region = plateRegion(input.plateRegion), plate = plateNumber(input.plateNumber), vinValue = vin(input.vin);
     // Unit and currency default to the creator's display preferences.
     const prefs = input.odometerUnit === undefined || input.currency === undefined ? await getPreferences(this.#pool, p.userId) : null;
     const unit = input.odometerUnit === undefined ? prefs!.distanceUnit : odometerUnit(input.odometerUnit);
     const cur = input.currency === undefined ? prefs!.currency : currency(input.currency);
-    const insert = async (c: Q) => {
+    const insert = async (c: Q): Promise<Vehicle> => {
+      // A key creating a vehicle: active, owner active, instance on and still allowed to create (no vehicle yet, so no selection check).
+      if (!within) await recheckKeyInTx(c, p, null);
+      return withIdempotency(c, p, idem, { operation: 'vehicle.create', target: 'new-vehicle', payload: { name, make, model, y, region, plate, vinValue, unit, cur }, now: new Date(), reference: (r) => r.id, reread: (rid) => this.#load(c, p, rid as Id) }, () => insertRow(c));
+    };
+    const insertRow = async (c: Q): Promise<Vehicle> => {
       const vid = uuidv7();
       await c.query('INSERT INTO vehicles (id, name, make, model, model_year, plate_region, plate_number, vin, odometer_unit, currency) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)', [vid, name, make, model, y, region, plate, vinValue, unit, cur]);
       await c.query("INSERT INTO vehicle_members (vehicle_id, user_id, role, granted_by) VALUES ($1,$2,'owner',$2)", [vid, p.userId]);
-      await this.#audit(c, p.userId, 'vehicle.create', vid);
+      await this.#audit(c, p, 'vehicle.create', vid);
       return this.#load(c, p, vid);
     };
     // `within` lets import create the vehicle inside its own transaction.
@@ -136,14 +148,17 @@ export class VehicleService {
   }
 
   async list(p: Principal, opts: { includeArchived?: boolean } = {}): Promise<Vehicle[]> {
+    // A key lists only its selection (counts and pagination follow from the filtered rows); all_current_future has no stored list.
+    const scope = p.kind === 'api_key' ? keyStoredVehicleIds(p) : null;
     const { rows } = await this.#pool.query<VehicleRow>(
       `SELECT ${COLS} FROM vehicles v JOIN vehicle_members m ON m.vehicle_id = v.id AND m.user_id = $1
-       WHERE ($2 OR v.archived_at IS NULL) ORDER BY v.id`, [p.userId, opts.includeArchived === true]);
+       WHERE ($2 OR v.archived_at IS NULL) AND ($3::uuid[] IS NULL OR v.id = ANY($3::uuid[])) ORDER BY v.id`, [p.userId, opts.includeArchived === true, scope]);
     return rows.map(toVehicle);
   }
 
   async get(p: Principal, vehicleId: unknown): Promise<Vehicle> {
     const vid = id(vehicleId);
+    if (!keySelectionAllows(p, vid)) throw notFound();
     const { rows } = await this.#pool.query<VehicleRow>(
       `SELECT ${COLS} FROM vehicles v JOIN vehicle_members m ON m.vehicle_id = v.id AND m.user_id = $2 WHERE v.id = $1`, [vid, p.userId]);
     if (!rows[0]) throw notFound();
@@ -175,7 +190,7 @@ export class VehicleService {
       }
       if (sets.length) {
         await c.query(`UPDATE vehicles SET ${sets.join(', ')}, updated_at = now() WHERE id = $1`, [v.id, ...vals]);
-        await this.#audit(c, p.userId, 'vehicle.update', v.id, { fields: Object.keys(patch) });
+        await this.#audit(c, p, 'vehicle.update', v.id, { fields: Object.keys(patch) });
       }
       return this.#load(c, p, v.id);
     });
@@ -186,7 +201,7 @@ export class VehicleService {
       const v = await this.#lock(c, p, vehicleId);
       if (!canArchive(v.role)) throw forbidden('archiving this vehicle');
       await c.query('UPDATE vehicles SET archived_at = CASE WHEN $2 THEN COALESCE(archived_at, now()) ELSE NULL END, updated_at = now() WHERE id = $1', [v.id, archived]);
-      await this.#audit(c, p.userId, archived ? 'vehicle.archive' : 'vehicle.unarchive', v.id);
+      await this.#audit(c, p, archived ? 'vehicle.archive' : 'vehicle.unarchive', v.id);
       return this.#load(c, p, v.id);
     });
   }
@@ -199,7 +214,7 @@ export class VehicleService {
       const { rows } = await c.query<{ archived: boolean }>('SELECT archived_at IS NOT NULL AS archived FROM vehicles WHERE id = $1', [v.id]);
       if (!rows[0]!.archived) throw conflict('not_archived', 'Archive the vehicle before deleting it.');
       await c.query('DELETE FROM vehicles WHERE id = $1', [v.id]);
-      await this.#audit(c, p.userId, 'vehicle.delete', v.id);
+      await this.#audit(c, p, 'vehicle.delete', v.id);
     });
   }
 
@@ -234,7 +249,7 @@ export class VehicleService {
         'INSERT INTO vehicle_members (vehicle_id, user_id, role, granted_by) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING RETURNING created_at',
         [v.id, uid, r, p.userId]);
       if (!ins.rowCount) throw conflict('already_member', 'User is already a member of this vehicle.');
-      await this.#audit(c, p.userId, 'member.add', v.id, { userId: uid, role: r });
+      await this.#audit(c, p, 'member.add', v.id, { userId: uid, role: r });
       return { userId: uid, role: r, grantedBy: p.userId, createdAt: ins.rows[0].created_at.toISOString(), displayName: u.rows[0].display_name, email: u.rows[0].email };
     });
   }
@@ -249,7 +264,7 @@ export class VehicleService {
       if (!cur.rows[0]) throw invalid('That user is not a member.');
       if (cur.rows[0].role === 'owner') throw conflict('owner_immutable', 'The owner role changes only through ownership transfer.');
       const up = await c.query('UPDATE vehicle_members m SET role = $3 FROM users u WHERE m.vehicle_id = $1 AND m.user_id = $2 AND u.id = m.user_id RETURNING m.granted_by, m.created_at, u.display_name, u.email', [v.id, uid, r]);
-      await this.#audit(c, p.userId, 'member.role_change', v.id, { userId: uid, from: cur.rows[0].role, to: r });
+      await this.#audit(c, p, 'member.role_change', v.id, { userId: uid, from: cur.rows[0].role, to: r });
       return { userId: uid, role: r, grantedBy: up.rows[0].granted_by, createdAt: up.rows[0].created_at.toISOString(), displayName: up.rows[0].display_name, email: up.rows[0].email };
     });
   }
@@ -265,7 +280,7 @@ export class VehicleService {
       if (!cur.rows[0]) throw invalid('That user is not a member.');
       if (cur.rows[0].role === 'owner') throw conflict('owner_required', 'A vehicle must keep an owner. Transfer ownership first.');
       await c.query('DELETE FROM vehicle_members WHERE vehicle_id = $1 AND user_id = $2', [v.id, uid]);
-      await this.#audit(c, p.userId, self ? 'member.leave' : 'member.remove', v.id, { userId: uid, role: cur.rows[0].role });
+      await this.#audit(c, p, self ? 'member.leave' : 'member.remove', v.id, { userId: uid, role: cur.rows[0].role });
     });
   }
 
@@ -283,7 +298,7 @@ export class VehicleService {
       const t = await c.query("SELECT 1 FROM vehicle_members m JOIN users u ON u.id = m.user_id WHERE m.vehicle_id = $1 AND m.user_id = $2 AND u.status = 'active'", [v.id, to]);
       if (!t.rowCount) throw invalid('The new owner must be an active member of the vehicle.');
       await this.#swapOwner(c, v.id, p.userId, to);
-      await this.#audit(c, p.userId, 'owner.transfer', v.id, { from: p.userId, to });
+      await this.#audit(c, p, 'owner.transfer', v.id, { from: p.userId, to });
       return this.#load(c, p, v.id);
     });
   }
@@ -319,7 +334,7 @@ export class VehicleService {
       if (prev) await this.#swapOwner(c, vid, prev.user_id, to);
       else await c.query("INSERT INTO vehicle_members (vehicle_id, user_id, role, granted_by) VALUES ($1,$2,'owner',$3) ON CONFLICT (vehicle_id, user_id) DO UPDATE SET role = 'owner'", [vid, to, p.userId]);
       if (prev && prev.status !== 'active') await c.query('DELETE FROM vehicle_members WHERE vehicle_id = $1 AND user_id = $2', [vid, prev.user_id]);
-      await this.#audit(c, p.userId, 'owner.recover', vid, { from: prev?.user_id ?? null, to, reason: reason.trim() });
+      await this.#audit(c, p, 'owner.recover', vid, { from: prev?.user_id ?? null, to, reason: reason.trim() });
     });
   }
 
@@ -336,9 +351,7 @@ export class VehicleService {
     const { rows } = await this.#pool.query<{ id: Id; archived: boolean }>(
       `SELECT v.id, v.archived_at IS NOT NULL AS archived FROM vehicle_members m JOIN vehicles v ON v.id = m.vehicle_id
         WHERE m.user_id = $1 AND m.role = 'owner' ORDER BY v.id`, [userId]);
-    await this.#pool.query(
-      "INSERT INTO audit_events (id, actor_id, action, subject_type, subject_id, details) VALUES ($1,$2,'admin.list_owned_vehicles','user',$3,$4)",
-      [uuidv7(), p.userId, userId, JSON.stringify({ count: rows.length })]);
+    await insertAudit(this.#pool, { actor: p.userId, action: 'admin.list_owned_vehicles', subjectType: 'user', subjectId: userId, details: { count: rows.length } });
     return rows;
   }
 }

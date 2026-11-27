@@ -1,4 +1,5 @@
 // HTTP routes for service history. Module gate and authorization live in ServiceService.
+import { idemFrom, idemHeaders } from '../auth/idempotency.ts';
 import type { HttpRequest, Route } from '../http/app.ts';
 import { invalid } from '../http/validate.ts';
 import { requirePrincipal } from '../identity.ts';
@@ -15,7 +16,11 @@ export function serviceRoutes(svc: ServiceService): Route[] {
       for (const k of ['cursor', 'from', 'to', 'q', 'category'] as const) { const v = r.query.get(k); if (v !== null) o[k] = v; }
       return { status: 200, body: await svc.list(who(r), r.params['vehicleId'], o) };
     } },
-    { method: 'POST', path: base, async handler(r) { return { status: 201, body: await svc.create(who(r), r.params['vehicleId'], r.body) }; } },
+    { method: 'POST', path: base, async handler(r) {
+      const idem = idemFrom(r.headers, who(r));
+      const body = await svc.create(who(r), r.params['vehicleId'], r.body, idem);
+      return { status: idem.status ?? 201, body, headers: idemHeaders(idem) };
+    } },
     { method: 'GET', path: `${base}/:visitId`, async handler(r) { return { status: 200, body: await svc.get(who(r), r.params['vehicleId'], r.params['visitId']) }; } },
     { method: 'PATCH', path: `${base}/:visitId`, async handler(r) { return { status: 200, body: await svc.update(who(r), r.params['vehicleId'], r.params['visitId'], r.body) }; } },
     { method: 'DELETE', path: `${base}/:visitId`, async handler(r) { await svc.remove(who(r), r.params['vehicleId'], r.params['visitId']); return { status: 204 }; } },

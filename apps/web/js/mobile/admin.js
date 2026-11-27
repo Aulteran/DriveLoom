@@ -9,7 +9,7 @@ import { icon } from '../icons.js';
 import { render, state } from '../core.js';
 import { date, dateTime } from '../format.js';
 import { unitFields } from '../units.js';
-import { SECTIONS, adminError, inviteLink, auditDetail, refreshInstance, smtpBody, oidcBody } from '../views/admin.js';
+import { SECTIONS, API_KEYS_ADMIN_HELP, adminError, inviteLink, auditDetail, refreshInstance, smtpBody, oidcBody } from '../views/admin.js';
 import { openSheet } from './sheet.js';
 import { page, row, staticRow, avatar, pill, action, confirmSheet, withFreshSignIn, sheetForm, copyField } from './kit.js';
 import { loadInto, emptyState } from './states.js';
@@ -144,6 +144,20 @@ function modules({ modules: m }) {
     h('p', { class: 'm-note' }, 'Adds a Service page to vehicles for maintenance history. Each member can still hide it for a vehicle in that vehicle’s settings. Turning it off only hides the page: service data and everyone’s choices are kept and return when you turn it back on.'));
 }
 
+// ---------- API keys ----------
+function apiKeys({ enabled }) {
+  const id = 'm-apikeys-allow';
+  return h('div', { class: 'm-group m-pad m-stack-s' },
+    h('p', { class: 'm-note m-flush' }, 'Personal API keys let scripts and integrations use an account’s data without its password.'),
+    h('div', { class: 'm-switch-row' },
+      h('label', { for: id }, 'Allow API keys'),
+      h('input', { id, type: 'checkbox', role: 'switch', class: 'm-toggle', checked: enabled, onchange: async (e) => {
+        const on = e.target.checked;
+        try { await put('/v1/admin/settings/api-keys', { enabled: on }); toast(on ? 'API keys allowed.' : 'API keys blocked.'); } catch (err) { e.target.checked = !on; toast(err.message); }
+      } })),
+    h('p', { class: 'm-note' }, API_KEYS_ADMIN_HELP));
+}
+
 // ---------- email and sign-on ----------
 const status = (on, label) => pill(label, on ? 'good' : 'warn');
 const envNotice = (what, vars) => h('div', { class: 'notice' },
@@ -245,6 +259,7 @@ const LOAD = {
   invites: [() => get('/v1/admin/invites'), invites, 'invitations'],
   units: [() => get('/v1/admin/settings/units'), units, 'default units'],
   modules: [() => get('/v1/admin/settings/modules'), modules, 'modules'],
+  apikeys: [() => get('/v1/admin/settings/api-keys'), apiKeys, 'API key settings'],
   email: [() => get('/v1/admin/settings/smtp'), email, 'email settings'],
   signin: [() => get('/v1/admin/settings/oidc'), signin, 'sign-on settings'],
 };

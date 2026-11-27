@@ -6,7 +6,7 @@ import * as client from 'openid-client';
 import { HttpProblem } from '../http/problem.ts';
 import { uuidv7 } from '../ids.ts';
 import type { Id } from '../types.ts';
-import type { Principal } from '../identity.ts';
+import type { SessionPrincipal } from '../identity.ts';
 import { audit, problem, rateLimit, type AuthContext, type OidcProvider } from './context.ts';
 import type { OidcConfig } from './config.ts';
 import { randomToken, safeEqual, sha256Hex } from './crypto.ts';
@@ -43,7 +43,7 @@ export function createOidcProvider(cfg: OidcConfig): OidcProvider {
   };
 }
 
-export async function start(ctx: AuthContext, input: { mode: 'login' | 'link'; principal: Principal | null; setupToken?: unknown; units?: unknown }, meta: Meta): Promise<{ url: string; binding: string }> {
+export async function start(ctx: AuthContext, input: { mode: 'login' | 'link'; principal: SessionPrincipal | null; setupToken?: unknown; units?: unknown }, meta: Meta): Promise<{ url: string; binding: string }> {
   if (!ctx.oidc) throw new HttpProblem(404, 'oidc_not_configured', 'OIDC is not configured on this instance');
   await rateLimit(ctx, `oidc:ip:${meta.ip}`, 30, TTL);
   if (input.mode === 'link') {
@@ -65,7 +65,7 @@ export async function start(ctx: AuthContext, input: { mode: 'login' | 'link'; p
 
 export type CallbackResult = { kind: 'linked' } | { kind: 'login'; signIn: SignIn };
 
-export async function callback(ctx: AuthContext, input: { query: URLSearchParams; binding: string | undefined; principal: Principal | null }, meta: Meta): Promise<CallbackResult> {
+export async function callback(ctx: AuthContext, input: { query: URLSearchParams; binding: string | undefined; principal: SessionPrincipal | null }, meta: Meta): Promise<CallbackResult> {
   if (!ctx.oidc) throw new HttpProblem(404, 'oidc_not_configured', 'OIDC is not configured on this instance');
   await rateLimit(ctx, `oidc:ip:${meta.ip}`, 30, TTL);
   const state = input.query.get('state');
@@ -126,5 +126,5 @@ export async function callback(ctx: AuthContext, input: { query: URLSearchParams
   return { kind: 'login', signIn: { session, userId, mfaRequired: false } };
 }
 
-export const unlink = (ctx: AuthContext, p: Principal, id: Id) =>
+export const unlink = (ctx: AuthContext, p: SessionPrincipal, id: Id) =>
   removeGuarded(ctx, p, async (tx) => (await tx.query('DELETE FROM oidc_identities WHERE id = $1 AND user_id = $2', [id, p.userId])).rowCount ?? 0, 'credential.oidc_unlinked', { identity: id });

@@ -22,8 +22,9 @@ import { API_VERSION } from '../src/version.ts';
 const doc = parse(await readFile(new URL('../openapi/openapi.yaml', import.meta.url), 'utf8'));
 const key = (m: string, p: string) => `${m.toUpperCase()} ${p.replace(/:(\w+)/g, '{$1}')}`;
 import { systemRoutes } from '../src/application.ts';
+import { meRoutes } from '../src/auth/me-routes.ts';
 export const moduleRoutes: Route[] = [...systemRoutes({} as never), ...vehicleRoutes({} as never), ...fuelRoutes({} as never), ...serviceRoutes({} as never), ...attachmentRoutes({} as never), ...maintenanceRoutes({} as never), ...notificationRoutes({} as never), ...preferenceRoutes({} as never), ...vehiclePrefRoutes({} as never), ...friendRoutes({} as never),
-  ...imageRoutes({} as never, {} as never), ...portabilityRoutes({} as never), ...adminRoutes({} as never)];
+  ...imageRoutes({} as never, {} as never), ...portabilityRoutes({} as never), ...adminRoutes({} as never), ...meRoutes({} as never)];
 const SYSTEM = new Set<string>();
 
 test('module routes and the OpenAPI document agree', () => {

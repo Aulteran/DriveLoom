@@ -1,6 +1,6 @@
 import type { Db } from '../db.ts';
 import { HttpProblem } from '../http/problem.ts';
-import { uuidv7 } from '../ids.ts';
+import { insertAudit } from '../audit-insert.ts';
 import type { Id } from '../types.ts';
 import type { AuthConfig } from './config.ts';
 import type { Mailer } from './mailer.ts';
@@ -46,9 +46,21 @@ export async function rateLimit(ctx: AuthContext, key: string, limit: number, wi
   if (rows[0]!.hits > limit) throw problem.rateLimited(Math.max(1, Math.ceil((start.getTime() + windowMs - t) / 1000)));
 }
 
+/** Account-level events with no principal behind them (sign-in, recovery, admin). Changes made by a principal use auditAs (../audit.ts). */
+/** Account-level events with no principal behind them (sign-in, recovery, admin). Changes made by a principal use auditAs (../audit.ts). */
+/**
+ * Throws when the counter for `key` has already reached `limit` in the current window, without counting this call.
+ * Used to refuse a client that has already failed too often before it is allowed another guess.
+ */
+export async function rateLimitPeek(ctx: AuthContext, key: string, limit: number, windowMs: number): Promise<void> {
+  const t = ctx.now().getTime();
+  const start = new Date(Math.floor(t / windowMs) * windowMs);
+  const { rows } = await ctx.db.query<{ hits: number }>('SELECT hits FROM rate_limits WHERE key = $1 AND window_start = $2', [sha256Hex(key), start]);
+  if ((rows[0]?.hits ?? 0) >= limit) throw problem.rateLimited(Math.max(1, Math.ceil((start.getTime() + windowMs - t) / 1000)));
+}
+
 export async function audit(db: Pick<Db, 'query'>, actor: Id | null, action: string, subjectId: Id | null, details: Record<string, unknown> = {}, at: Date = new Date()): Promise<void> {
-  await db.query('INSERT INTO audit_events (id, occurred_at, actor_id, action, subject_type, subject_id, details) VALUES ($1,$2,$3,$4,$5,$6,$7)',
-    [uuidv7(), at, actor, action, subjectId ? 'user' : null, subjectId, details]);
+  await insertAudit(db, { actor, action, subjectType: subjectId ? 'user' : null, subjectId, details, at });
 }
 
 export function normaliseEmail(raw: unknown): string {

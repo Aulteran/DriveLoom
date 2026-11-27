@@ -5,7 +5,7 @@ import { authenticator } from '../../src/auth/sessions.ts';
 import { totpCode, totpStep } from '../../src/auth/crypto.ts';
 import * as acct from '../../src/auth/accounts.ts';
 import type { AuthContext, OidcClaims, OidcProvider } from '../../src/auth/context.ts';
-import type { Principal } from '../../src/identity.ts';
+import type { SessionPrincipal } from '../../src/identity.ts';
 import { Integrations, type IntegrationEnv } from '../../src/admin/integrations.ts';
 
 export const PW = 'correct horse battery staple';
@@ -48,7 +48,7 @@ export async function signUp(h: Harness, email: string, password = PW) {
   return acct.login(h.ctx, { email, password }, meta);
 }
 
-export async function principalFor(h: Harness, token: string): Promise<Principal> {
+export async function principalFor(h: Harness, token: string): Promise<SessionPrincipal> {
   const s = await h.auth.resolveSession(token);
   if (!s?.principal) throw new Error('no active session');
   return s.principal;

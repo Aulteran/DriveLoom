@@ -3,7 +3,6 @@
 .github
 apps/marketing
 apps/api/tests
-apps/api/openapi
 deploy
 **/.env
 **/*.dl-backup

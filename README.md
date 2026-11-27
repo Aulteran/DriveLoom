@@ -75,7 +75,7 @@ Add any of these under `app: environment:`.
 | --- | --- |
 | `DRIVELOOM_SETUP_TOKEN` | Required to create the first (admin) account. 16+ characters. |
 | `DRIVELOOM_REGISTRATION` | `closed` (default, invite only) or `open`. |
-| `DRIVELOOM_TRUSTED_PROXIES` | Proxy IPs/CIDRs whose `X-Forwarded-For` is trusted, e.g. `172.16.0.0/12`. |
+| `DRIVELOOM_TRUSTED_PROXIES` | Proxy IPs/CIDRs whose `X-Forwarded-For` and `X-Forwarded-Proto` are trusted, e.g. `172.16.0.0/12`. API keys (`Authorization: Bearer`) are accepted only over HTTPS: through a trusted proxy that sends `X-Forwarded-Proto: https`, or from the local machine. |
 | `DRIVELOOM_PASSWORD_LOGIN` | `0` allows only OIDC and passkeys (needs OIDC configured). |
 | `DRIVELOOM_REQUIRE_EMAIL_VERIFICATION` | `1` requires verified email (needs SMTP). |
 | `DRIVELOOM_EMAIL_SIGN_IN_CODES` | `1` emails a one-time code after the password (needs SMTP). |
@@ -85,11 +85,32 @@ Add any of these under `app: environment:`.
 
 SMTP and OpenID Connect can also be configured from the administrator pages in the app, with no environment variables at all.
 
-**Backups:** `docker compose exec app node scripts/backup.ts create /tmp/dl.dl-backup`, then `docker compose cp app:/tmp/dl.dl-backup .`
+**Backups:** `docker compose exec app node scripts/backup.ts create /tmp/dl.dl-backup`, then `docker compose cp app:/tmp/dl.dl-backup .`. Backup files never contain API keys, and restoring one clears every key on the target. A raw database snapshot (`pg_dump`, volume copy) does hold key hashes: invalidate or delete the `api_keys` rows before you share or expose it.
 
 **Update:** `docker compose pull && docker compose up -d`
 
 </details>
+
+## API keys
+
+Scripts and integrations can use a personal API key instead of your password, with only the access you give them.
+
+1. In the app, open **Account and security**, scroll to **API keys** and choose **Create API key**. Pick a name, an expiry, the vehicles and a level for each permission. Nothing is selected for you.
+2. Copy the key when it is shown. It appears **once**; DriveLoom keeps only a hash.
+3. Use it as a bearer token, from a variable, over HTTPS:
+
+```sh
+export DRIVELOOM_API_KEY='dlk_...'   # from your secret store, not typed into history
+curl --fail-with-body -H "Authorization: Bearer ${DRIVELOOM_API_KEY}" https://your-host/v1/vehicles
+```
+
+Every instance serves its own interactive reference at `/docs` and the version-matched contract at `/openapi.yaml` (and `/openapi.json`); both are in **Developer access** on the same screen.
+
+Keep keys safe: never paste one into a chat, note, ticket or source file; keep it in a password manager, secret store or CI secret; give temporary jobs a short expiry and revoke them when finished; rotate a key you think leaked (the old one stops at once). Keys cannot sign in to the app, manage accounts or other keys, or delete a vehicle. An administrator can switch API keys off for the whole server under **Administration, API keys**; that blocks all keys without deleting them. Restoring a backup clears every key by design.
+
+Self-hosting notes: keys are accepted only over HTTPS (through a proxy listed in `DRIVELOOM_TRUSTED_PROXIES` that sends `X-Forwarded-Proto: https`, or from the local machine), and your proxy must pass the `Authorization` header through; see [deploy/proxy](deploy/proxy/).
+
+**Upgrading:** the app treats any `Authorization` header that reaches it as an API-key attempt and never falls back to the login cookie. If a proxy or SSO gateway adds one (Basic auth, an oauth2-proxy or Cloudflare Access Bearer), strip it before forwarding, or the whole web app answers `401 invalid_api_key`. The trusted proxy must also overwrite (not append to) `X-Forwarded-For` and `X-Forwarded-Proto`, and its address must be in `DRIVELOOM_TRUSTED_PROXIES`.
 
 ## Status
 

@@ -16,7 +16,7 @@ let admin: pg.Client, pool: pg.Pool, svc: VehicleService, dbName: string;
 async function user(role: 'admin' | 'user' = 'user', status = 'active'): Promise<Principal> {
   const id = uuidv7();
   await pool.query('INSERT INTO users (id, email, instance_role, status) VALUES ($1,$2,$3,$4)', [id, `${id}@example.test`, role, status]);
-  return { userId: id, sessionId: uuidv7(), instanceRole: role, authenticatedAt: new Date() };
+  return { kind: 'session' as const, userId: id, sessionId: uuidv7(), instanceRole: role, authenticatedAt: new Date() };
 }
 async function rejects(p: Promise<unknown>, status: number, code?: string) {
   await assert.rejects(p, (e) => e instanceof ApiError && e.status === status && (!code || e.code === code), `expected ${status} ${code ?? ''}`);

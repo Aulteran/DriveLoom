@@ -107,7 +107,7 @@ test('0018 keeps existing maintenance tasks as they were and enforces the new sh
   await migrate(c, `${dir}/`);
   await c.query("INSERT INTO vehicles (id, name) VALUES ('018f3b1e-7c4a-7d2e-9a10-5b6c7d8e9f02', 'Car')");
   await c.query("INSERT INTO maintenance_tasks (id, vehicle_id, name, recurring, interval_days) VALUES ('018f3b1e-7c4a-7d2e-9a10-5b6c7d8e9f03', '018f3b1e-7c4a-7d2e-9a10-5b6c7d8e9f02', 'Oil', true, 365)");
-  assert.deepEqual((await migrate(c)).map((n) => n.slice(0, 4)), ['0018']);
+  assert.equal((await migrate(c)).map((n) => n.slice(0, 4))[0], '0018'); // later migrations may follow it
   assert.deepEqual((await c.query('SELECT interval_days, interval_months, reminders_enabled, preset_id, baseline_kind FROM maintenance_tasks')).rows,
     [{ interval_days: 365, interval_months: null, reminders_enabled: true, preset_id: null, baseline_kind: null }]);
   const ins = (cols: string, vals: string) => c.query(`INSERT INTO maintenance_tasks (id, vehicle_id, name, ${cols}) VALUES (gen_random_uuid(), '018f3b1e-7c4a-7d2e-9a10-5b6c7d8e9f02', 'X', ${vals})`);

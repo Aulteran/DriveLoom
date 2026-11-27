@@ -73,7 +73,7 @@ test('damaged images are refused rather than stored', () => {
 test('a malformed cookie or path parameter does not fail the request', async () => {
   assert.deepEqual(parseCookies('other=%E0%A4%A; dl_session=abc'), { other: '%E0%A4%A', dl_session: 'abc' });
   const id = uuidv7();
-  const principal = { userId: id, sessionId: uuidv7(), instanceRole: 'user' as const, authenticatedAt: new Date() };
+  const principal = { kind: 'session' as const, userId: id, sessionId: uuidv7(), instanceRole: 'user' as const, authenticatedAt: new Date() };
   const user: TestUser = { id, email: 'a@example.test', role: 'user', principal, ctx: { principal } };
   const routes: Route[] = [
     { method: 'GET', path: '/v1/whoami', handler: async (r) => ({ status: 200, body: { id: requirePrincipal(r.ctx).userId } }) },

@@ -5,7 +5,7 @@
 import type pg from 'pg';
 import type { Route } from './http/app.ts';
 import { invalid, obj } from './http/validate.ts';
-import { requirePrincipal } from './identity.ts';
+import { requireSessionPrincipal } from './identity.ts';
 import type { DistanceUnit, Id, VolumeUnit } from './types.ts';
 import { isCurrency, isDistanceUnit, isEconomyUnit, isVolumeUnit, type EconomyUnit } from './units.ts';
 
@@ -103,9 +103,9 @@ export async function describePreferences(db: Q, userId: Id) {
 
 export function preferenceRoutes(db: pg.Pool): Route[] {
   return [
-    { method: 'GET', path: '/v1/preferences', async handler(r) { return { status: 200, body: await describePreferences(db, requirePrincipal(r.ctx).userId) }; } },
+    { method: 'GET', path: '/v1/preferences', async handler(r) { return { status: 200, body: await describePreferences(db, requireSessionPrincipal(r.ctx).userId) }; } },
     { method: 'PUT', path: '/v1/preferences', async handler(r) {
-      const p = requirePrincipal(r.ctx);
+      const p = requireSessionPrincipal(r.ctx);
       await setOwnPreferences(db, p.userId, parseUnits(r.body, 'Request body', true));
       return { status: 200, body: await describePreferences(db, p.userId) };
     } },
