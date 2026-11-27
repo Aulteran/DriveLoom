@@ -53,5 +53,35 @@ for (const p of Object.keys(doc.paths ?? {})) {
 for (const id of Object.keys(KEY_ROUTE_POLICIES)) if (!seen.has(id)) errors.push(`${id}: in the API key route policy table but not in the OpenAPI document`);
 if (!doc.components?.securitySchemes?.apiKey || doc.components.securitySchemes.apiKey.type !== 'http' || doc.components.securitySchemes.apiKey.scheme !== 'bearer' || doc.components.securitySchemes.apiKey.bearerFormat !== 'dlk') errors.push('components.securitySchemes.apiKey must be an http bearer scheme with bearerFormat dlk');
 if (JSON.stringify(doc.security) !== JSON.stringify([{ session: [] }])) errors.push('the global default security must stay session only');
+// API.md (repository root) must document every operation of the contract, and nothing the contract lacks.
+// The matching is deliberately plain text. Only the section "## ... Endpoint reference" is searched (up to the next "## " heading).
+//   * Every OpenAPI operation must appear there as `METHOD /v1/path/{param}` (the path exactly as in openapi.yaml, parameters in braces),
+//     not followed by more path characters, so `GET /v1/auth/api-keys` is not satisfied by `GET /v1/auth/api-keys/{id}`.
+//   * Every entry the section lists as a heading (#### `METHOD /v1/...`) or a table row (| `METHOD /v1/...` |) must exist in the contract.
+// A new, renamed or removed route therefore fails `npm run check` until API.md is updated in the same change.
+const apiDoc = await readFile(new URL('../../../API.md', import.meta.url), 'utf8').catch(() => null);
+if (apiDoc === null) errors.push('API.md is missing from the repository root');
+else {
+  const lines = apiDoc.split('\n');
+  const start = lines.findIndex((l) => /^## .*Endpoint reference/i.test(l));
+  if (start < 0) errors.push('API.md needs a "## ... Endpoint reference" section');
+  else {
+    const end = lines.findIndex((l, i) => i > start && /^## /.test(l));
+    const section = lines.slice(start, end < 0 ? undefined : end).join('\n');
+    const documented = new Set<string>();
+    for (const m of section.matchAll(/^(?:#{3,6} |\| )`([A-Z]+) (\/v1\/[^`\s]*)`/gm)) documented.add(`${m[1]} ${m[2]}`);
+    const inContract = new Set<string>();
+    for (const [p, item] of Object.entries<Record<string, unknown>>(doc.paths ?? {})) {
+      for (const method of Object.keys(item)) {
+        if (!HTTP_METHODS.has(method)) continue;
+        const id = `${method.toUpperCase()} ${p}`;
+        inContract.add(id);
+        const escaped = id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        if (!new RegExp(`(?<![A-Z])${escaped}(?![\\w{}/.-])`).test(section)) errors.push(`API.md (Endpoint reference) does not document ${id}`);
+      }
+    }
+    for (const id of documented) if (!inContract.has(id)) errors.push(`API.md documents ${id}, which is not in the OpenAPI contract`);
+  }
+}
 if (errors.length) { console.error(errors.join('\n')); process.exit(1); }
 console.log(`openapi ${doc.info.version}: ok (${Object.keys(doc.paths).length} paths)`);

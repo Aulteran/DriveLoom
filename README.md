@@ -123,3 +123,7 @@ Pre-release: usable and tested, but a security review comes before the first tag
 ## License
 
 [AGPL-3.0-only](LICENSE). Bundled third-party assets keep their own terms; see [apps/marketing/ASSET-PROVENANCE.md](apps/marketing/ASSET-PROVENANCE.md).
+
+## API documentation
+
+The full API reference (authentication, API keys and permissions, every endpoint, imports, errors and rate limits) is in [API.md](API.md). Each running instance also serves interactive docs at `/docs` and the version-matched contract at `/openapi.yaml`.
