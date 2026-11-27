@@ -9,7 +9,7 @@ import path from 'node:path';
 const TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.json': 'application/json', '.webmanifest': 'application/manifest+json',
-  '.woff2': 'font/woff2', '.txt': 'text/plain; charset=utf-8',
+  '.woff2': 'font/woff2', '.yaml': 'application/yaml; charset=utf-8', '.txt': 'text/plain; charset=utf-8',
 };
 
 /** Same-origin only: no inline script, no third-party anything, no framing. */
@@ -40,8 +40,8 @@ export function buildServiceWorker(dir: string): { source: string; build: string
   const hash = createHash('sha256');
   for (const f of files) hash.update(f).update('\0').update(readFileSync(path.join(root, f))).update('\0');
   const build = hash.digest('hex').slice(0, 16);
-  // The app shell only: no service worker, no licence texts, nothing dot-prefixed.
-  const precache = files.filter((f) => f !== 'sw.js' && !f.endsWith('.txt') && !f.split('/').some((p) => p.startsWith('.')))
+  // The app shell only: no service worker, no licence texts, no API docs (a public page of its own), nothing dot-prefixed.
+  const precache = files.filter((f) => f !== 'sw.js' && !f.endsWith('.txt') && !f.startsWith('docs/') && !f.split('/').some((p) => p.startsWith('.')))
     .map((f) => (f === 'index.html' ? '/' : `/${encodeURI(f)}`));
   const source = readFileSync(path.join(root, 'sw.js'), 'utf8')
     // Function replacers: a `$&` or `$1` in a file name must not be read as a replacement pattern.
@@ -69,6 +69,8 @@ export function staticFiles(dir: string, opts: { secure: boolean }) {
       res.writeHead(200, { ...headers(TYPES['.js']!, 'no-cache'), 'service-worker-allowed': '/' });
       res.end(req.method === 'HEAD' ? undefined : sw.source); return;
     }
+    // The API docs are a real page, never the client's index.html.
+    if (rel === '/docs' || rel === '/docs/') rel = '/docs/index.html';
     const file = path.resolve(root, `.${path.posix.normalize(rel)}`);
     let target = file;
     const inside = file === root || file.startsWith(root + path.sep);

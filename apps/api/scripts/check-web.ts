@@ -35,8 +35,10 @@ for (const f of files) {
     }
   }
 }
-const index = readFileSync(path.join(root, 'index.html'), 'utf8');
-if (/<script(?![^>]*\bsrc=)[^>]*>/.test(index) || /\son[a-z]+=/i.test(index) || /\sstyle=/i.test(index)) errors.push('index.html: inline script, handler or style would be blocked by the CSP');
+for (const page of ['index.html', 'docs/index.html']) {
+  const index = readFileSync(path.join(root, page), 'utf8');
+  if (/<script(?![^>]*\bsrc=)[^>]*>/.test(index) || /\son[a-z]+=/i.test(index) || /\sstyle=/i.test(index)) errors.push(`${page}: inline script, handler or style would be blocked by the CSP`);
+}
 
 // The service worker sits at the site root (outside js/) and the server fills in its placeholders.
 const swFile = path.join(root, 'sw.js');

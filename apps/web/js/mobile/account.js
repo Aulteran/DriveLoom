@@ -15,6 +15,8 @@ import { openSheet, closeSheets } from './sheet.js';
 import { page, section, row, staticRow, action, confirmSheet, withFreshSignIn, sheetForm, pill, OFFLINE_SAVE } from './kit.js';
 import { loadInto } from './states.js';
 import { installStatus } from './install.js';
+import { apiKeySections } from './api-keys.js';
+import { listKeys, listVehicles } from '../api-keys.js';
 
 // ---------- Settings: units, appearance, app ----------
 function unitRow(key) {
@@ -151,7 +153,7 @@ function passkeySheet() {
   });
 }
 
-function securityBody(c, sessions, linked) {
+function securityBody(c, sessions, linked, keys) {
   const totpOn = c.totp;
   return h('div', { class: 'm-stack-l' },
     linked ? h('p', { class: 'notice', role: 'status' }, 'Your identity provider is linked.') : null,
@@ -207,16 +209,17 @@ function securityBody(c, sessions, linked) {
         await after();
         return `Signed out ${r.revoked} other ${r.revoked === 1 ? 'session' : 'sessions'}.`;
       }, { cls: 'secondary m-wide' }))) : null,
-    ]));
+    ]),
+    ...apiKeySections(keys.data, keys.vehicles, after));
 }
 
 export function securityScreen(query) {
   const slot = h('div', {});
   loadInto(slot, async () => {
     // Fresh credentials, read directly: refreshSession() would treat a network error as signed out.
-    const [s, { sessions }] = await Promise.all([get('/v1/auth/session'), get('/v1/auth/sessions')]);
+    const [s, { sessions }, data, vehicles] = await Promise.all([get('/v1/auth/session'), get('/v1/auth/sessions'), listKeys(), listVehicles().catch(() => [])]);
     setCsrf(s.csrf_token); state.account = s.account;
-    return { c: s.account.credentials, sessions };
-  }, ({ c, sessions }) => securityBody(c, sessions, query.get('linked') === '1'), { label: 'account and security', rows: 5 });
+    return { c: s.account.credentials, sessions, keys: { data, vehicles } };
+  }, ({ c, sessions, keys }) => securityBody(c, sessions, query.get('linked') === '1', keys), { label: 'account and security', rows: 5 });
   return page({ title: 'Account and security' }, slot);
 }

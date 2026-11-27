@@ -4,5 +4,12 @@ fuel.example.com {
 	request_body {
 		max_size 40MB
 	}
+	# API keys (Authorization: Bearer dlk_...) must reach the app unchanged, over HTTPS. Caddy passes the header
+	# through and sets X-Forwarded-Proto. Run Caddy on another host or container? Put its address in
+	# DRIVELOOM_TRUSTED_PROXIES so the app believes that header.
+	#
+	# If you protect the site with Caddy's basic_auth, that uses the same header: strip it before the app sees it
+	# (keys then cannot be used through this site; expose a separate hostname or path for API clients instead):
+	#   request_header -Authorization
 	reverse_proxy 127.0.0.1:8080
 }

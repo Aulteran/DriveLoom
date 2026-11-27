@@ -30,6 +30,7 @@ import { friendRoutes } from './friends/routes.ts';
 import { PortabilityService } from './portability/service.ts';
 import { portabilityRoutes } from './portability/routes.ts';
 import { staticFiles } from './http/static.ts';
+import { isOpenApiPath, openApiHandler } from './http/openapi-docs.ts';
 import { withKeyPolicies } from './auth/api-key-route-policies.ts';
 import { API_VERSION } from './version.ts';
 
@@ -106,8 +107,10 @@ export interface ApplicationOptions {
 export function createApplication(ctx: AuthContext, opts: ApplicationOptions): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   const api = createApp({ routes: allRoutes(ctx, opts.notifier ?? null), authenticator: authenticator(ctx), publicOrigin: ctx.config.publicOrigin, ipTrust: ctx.config.ipTrust, apiKeys: createApiKeyGate(ctx) });
   const web = opts.webDir ? staticFiles(opts.webDir, { secure: ctx.config.secureCookies }) : null;
+  const spec = openApiHandler({ secure: ctx.config.secureCookies });
   return async (req, res) => {
     const path = (req.url ?? '/').split('?')[0]!;
+    if (isOpenApiPath(path)) return spec(req, res);
     if (path === '/v1' || path.startsWith('/v1/') || !web) return api(req, res);
     return web(req, res);
   };

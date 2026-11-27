@@ -67,6 +67,8 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(fetch(req).finally(() => event.waitUntil(clearAll())));
     return;
   }
+  // The API docs and the contract are public pages of their own: never part of the app shell, never an offline fallback.
+  if (url.pathname === '/docs' || url.pathname.startsWith('/docs/') || url.pathname === '/openapi.yaml' || url.pathname === '/openapi.json') return;
   if (req.method !== 'GET' || url.pathname === '/v1' || url.pathname.startsWith('/v1/')) return;
   if (req.mode === 'navigate') {
     // Only the root document is the cached shell; any other route is the same index.html offline.

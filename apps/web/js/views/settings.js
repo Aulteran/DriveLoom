@@ -6,6 +6,7 @@ import { go, render, refreshSession, state } from '../core.js';
 import { dateTime } from '../format.js';
 import { unitFields, UNIT_KEYS } from '../units.js';
 import { icon } from '../icons.js';
+import * as ak from '../api-keys.js';
 
 const SECTIONS = [['preferences', 'Preferences', 'sliders'], ['profile', 'Profile', 'user'], ['security', 'Security', 'key']];
 
@@ -229,12 +230,97 @@ export function shortAgent(ua) {
   return os ? `${browser} on ${os}` : browser;
 }
 
+
+// ---------- API keys and developer access ----------
+/** A modal with a title and a close button. `build(close)` returns the body node (or { el, clear }); `clear` runs when it closes. */
+function keyDialog(title, build, { onClose } = {}) {
+  const id = `ak-d-${Math.random().toString(36).slice(2, 8)}`;
+  const body = h('div', {});
+  const d = h('dialog', { class: 'ak-dialog', 'aria-labelledby': id },
+    h('div', { class: 'ak-dialog-head' }, h('h2', { id }, title), h('button', { type: 'button', class: 'secondary', 'aria-label': 'Close', onclick: () => d.close() }, 'Close')), body);
+  let cleaners = [];
+  const show = (built) => { const n = built.el ?? built; cleaners = built.clear ? [built.clear] : []; body.replaceChildren(n); };
+  d.addEventListener('close', () => { for (const c of cleaners) c(); body.replaceChildren(); d.remove(); onClose?.(); });
+  show(build(() => d.close(), show));
+  document.body.append(d); d.showModal();
+  return d;
+}
+
+function showToken(out, rotated) {
+  keyDialog(rotated ? 'New API key' : 'API key created', (close) => ak.tokenView({ token: out.token, name: out.name, rotated, onDone: close }), { onClose: () => render() });
+}
+
+function openKeyForm(key, vehicles) {
+  keyDialog(key ? 'Edit API key' : 'Create an API key', (close, show) => ak.keyForm({
+    key, vehicles, fresh: withFreshSignIn, onCancel: close,
+    onSaved: (r) => {
+      if (r.kind === 'created') { close(); showToken(r.key, false); } else { toast('API key updated.'); close(); render(); }
+    },
+  }));
+}
+
+function keyItem(k, vehicles) {
+  const active = k.status === 'active';
+  return h('li', {},
+    h('div', { class: 'row' }, h('strong', {}, k.name), h('span', { class: `badge ${active ? 'good' : 'warn'}` }, ak.statusText(k)), h('code', {}, `${k.prefix}…`)),
+    h('div', { class: 'ak-key-meta' }, ak.permissionSummary(k)),
+    h('div', { class: 'ak-key-meta' }, `Vehicles: ${ak.modeSummary(k, vehicles)}`),
+    h('div', { class: 'ak-key-meta' }, ak.datesText(k)),
+    h('div', { class: 'ak-key-actions' },
+      active ? act('Edit', async () => { openKeyForm(k, vehicles); return false; }) : null,
+      active ? act('Rotate', async () => {
+        if (!(await confirmDialog(`Rotate “${k.name}”? A new key is made and the current one stops working immediately.`, 'Rotate', false))) return false;
+        showToken(await ak.rotateKey(withFreshSignIn, k.id), true);
+        return false;
+      }) : null,
+      act('Activity', async () => { keyDialog(`Activity: ${k.name}`, () => ak.activityView(k, vehicles)); return false; }),
+      active
+        ? act('Revoke', async () => {
+          if (!(await confirmDialog(`Revoke “${k.name}”? Anything using it stops working immediately. This cannot be undone.`, 'Revoke'))) return false;
+          await ak.revokeKey(k.id); return 'API key revoked.';
+        }, 'danger')
+        : act('Remove', async () => {
+          if (!(await confirmDialog(`Remove “${k.name}” from the list? Its activity history is kept.`, 'Remove'))) return false;
+          await ak.revokeKey(k.id); return 'API key removed.';
+        }, 'secondary')));
+}
+
+async function apiKeysPanel() {
+  let data, vehicles = [];
+  try { [data, vehicles] = await Promise.all([ak.listKeys(), ak.listVehicles().catch(() => [])]); } catch (err) {
+    return h('section', { class: 'panel', id: 'api-keys' }, h('h2', {}, 'API keys'), h('p', { class: 'error', role: 'alert' }, err.message));
+  }
+  const active = data.items.filter((k) => k.status === 'active');
+  return h('section', { class: 'panel', id: 'api-keys', 'aria-labelledby': 'api-keys-h' },
+    h('div', { class: 'row spread' }, h('h2', { id: 'api-keys-h' }, 'API keys'),
+      h('div', { class: 'row' },
+        active.length ? act('Revoke all', async () => {
+          if (!(await confirmDialog(`Revoke all ${active.length} active API keys? Everything using them stops working immediately.`, 'Revoke all'))) return false;
+          const r = await ak.revokeAllKeys(); return `${r.revoked} API ${r.revoked === 1 ? 'key' : 'keys'} revoked.`;
+        }, 'danger') : null,
+        h('button', { type: 'button', disabled: !data.apiKeysEnabled || active.length >= data.maxActiveKeys, onclick: () => openKeyForm(null, vehicles) }, 'Create API key'))),
+    h('p', { class: 'muted' }, 'Let a script or another service read or write your data without your password. Each key gets only the access you choose, and you can revoke it at any time. Keys cannot sign in to the app, change your account or manage other keys.'),
+    data.apiKeysEnabled ? null : h('div', { class: 'notice', role: 'status' }, ak.DISABLED_TEXT),
+    h('p', { class: 'small muted' }, `${active.length} of ${data.maxActiveKeys} active keys.`),
+    data.items.length ? h('ul', { class: 'list' }, data.items.map((k) => keyItem(k, vehicles))) : h('p', { class: 'muted' }, 'No API keys yet.'));
+}
+
+function developerPanel() {
+  return h('section', { class: 'panel', id: 'developer-access', 'aria-labelledby': 'dev-h' },
+    h('h2', { id: 'dev-h' }, 'Developer access'),
+    h('p', { class: 'muted' }, 'Use an API key with the documented HTTP API. The documentation and the contract are served by this server and match its version.'),
+    h('div', { class: 'ak-links' },
+      h('a', { href: '#api-keys', onclick: (e) => { e.preventDefault(); document.getElementById('api-keys')?.scrollIntoView(); } }, 'API keys'),
+      h('a', { href: '/docs' }, 'Interactive API documentation'),
+      h('a', { href: '/openapi.yaml', download: 'driveloom-openapi.yaml' }, 'Download OpenAPI (YAML)')));
+}
+
 async function security(query) {
   await refreshSession();
   const c = state.account.credentials;
   return h('div', {},
     query.get('linked') === '1' ? h('p', { class: 'notice' }, 'Your identity provider is linked.') : null,
-    passwordPanel(c), totpPanel(c), passkeyPanel(c), oidcPanel(c), await sessionsPanel());
+    passwordPanel(c), totpPanel(c), passkeyPanel(c), oidcPanel(c), await sessionsPanel(), await apiKeysPanel(), developerPanel());
 }
 
 export async function settingsView(section, query) {
