@@ -444,6 +444,11 @@ export async function revokeAllApiKeys(ctx: AuthContext, p: SessionPrincipal, re
  * free-text parts of its history, which keeps only stable ids and timestamps like audit_events does. Call inside the deletion transaction.
  */
 export async function deleteApiKeysForUser(q: Q, userId: Id, now: Date): Promise<number> {
+  // The audit trail names the key in details.apiKey; blank it first (the key ids are still needed to find those rows).
+  await q.query(
+    `UPDATE audit_events SET details = jsonb_set(details, '{apiKey,name}', '""'::jsonb)
+      WHERE details ? 'apiKey' AND jsonb_typeof(details->'apiKey') = 'object' AND details->'apiKey' ? 'name'
+        AND details->'apiKey'->>'id' IN (SELECT id::text FROM api_keys WHERE user_id = $1 UNION SELECT key_id::text FROM api_key_activity WHERE user_id = $1)`, [userId]);
   const r = await q.query('DELETE FROM api_keys WHERE user_id = $1', [userId]);
   await q.query("UPDATE api_key_activity SET key_name = '', metadata = '{}', request_id = NULL WHERE user_id = $1", [userId]);
   if (r.rowCount) await audit(q, userId, 'api_keys.deleted_with_account', userId, { count: r.rowCount }, now);

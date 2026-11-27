@@ -110,7 +110,8 @@ export function requireKeyGrant(p: Principal, req: KeyRequirement): void {
  * Inside a write transaction (after the vehicle row is locked): the key must still be active, its owner active, the instance
  * switch on, the vehicle still in its selection, and its grants still cover the route. Closes the window between the
  * router's check and the commit. Returns the key's CURRENT grants (null for a session) so run-time effects can be checked
- * against them. `vehicleId` null: there is no vehicle yet (creating one), so the selection is not checked. Sessions are a no-op.
+ * against them. The key row is locked FOR SHARE until the transaction ends, so a revoke or an edit (which update or lock that row)
+ * waits for this write to commit instead of slipping in between the check and the commit; later checks then see it. `vehicleId` null: there is no vehicle yet (creating one), so the selection is not checked. Sessions are a no-op.
  */
 export async function recheckKeyInTx(q: Pick<pg.Pool, 'query'>, p: Principal, vehicleId: Id | null): Promise<KeyGrants | null> {
   if (p.kind !== 'api_key') return null;
@@ -121,7 +122,7 @@ export async function recheckKeyInTx(q: Pick<pg.Pool, 'query'>, p: Principal, ve
             COALESCE((SELECT f.enabled FROM instance_flags f WHERE f.flag = 'api_keys'), true) AS enabled,
             EXISTS (SELECT 1 FROM api_key_vehicles v WHERE v.key_id = k.id AND v.vehicle_id = $3) AS selected,
             COALESCE((SELECT jsonb_object_agg(pm.module, pm.level) FROM api_key_permissions pm WHERE pm.key_id = k.id), '{}'::jsonb) AS perms
-       FROM api_keys k JOIN users u ON u.id = k.user_id WHERE k.id = $1 AND k.user_id = $4`,
+       FROM api_keys k JOIN users u ON u.id = k.user_id WHERE k.id = $1 AND k.user_id = $4 FOR SHARE OF k`,
     [p.apiKey.id, p.apiKey.checkedAt, vehicleId, p.userId]);
   const r = rows[0];
   if (!r || !r.active || !r.user_active) throw apiKeyProblems.invalid();

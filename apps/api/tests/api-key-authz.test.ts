@@ -364,7 +364,10 @@ test('D1: linking a service item to a maintenance task needs maintenance.read (c
     assert.equal((await w.call('POST', V, { token: svc, body: { servicedOn: '2026-10-11', items: [{ name: 'Oil' }] } })).status, 201, 'no link, no need');
     const made = await w.call('POST', V, { token: both, body: linked });
     assert.equal(made.status, 201, made.text);
-    scopeDenied(await w.call('PATCH', `${V}/${made.json.id}`, { token: svc, body: { items: [{ name: 'Oil', taskId: fx.taskId }] } }), 'maintenance.read', 'update with a link');
+    assert.equal((await w.call('PATCH', `${V}/${made.json.id}`, { token: svc, body: { items: [{ name: 'Oil', taskId: fx.taskId }] } })).status, 200, 'keeping the link it already has needs no grant (M1)');
+    scopeDenied(await w.call('PATCH', `${V}/${made.json.id}`, { token: svc, body: { items: [{ name: 'Oil' }] } }), 'maintenance.read', 'unlinking');
+    const plain = await w.call('POST', V, { token: svc, body: { servicedOn: '2026-10-12', items: [{ name: 'Oil' }] } });
+    scopeDenied(await w.call('PATCH', `${V}/${plain.json.id}`, { token: svc, body: { items: [{ name: 'Oil', taskId: fx.taskId }] } }), 'maintenance.read', 'adding a link');
     assert.equal((await w.call('PATCH', `${V}/${made.json.id}`, { token: both, body: { items: [{ name: 'Oil', taskId: fx.taskId }] } })).status, 200);
     assert.equal((await w.call('PATCH', `${V}/${made.json.id}`, { token: svc, body: { notes: 'n' } })).status, 200, 'unrelated patches are fine');
   });

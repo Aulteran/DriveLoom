@@ -7,7 +7,7 @@
 //     grants, role, module gate) because the claim comes after them;
 //   * the same key with a different operation, target or payload is a 409 idempotency_conflict, never a replay;
 //   * only successful outcomes are stored (a failed request rolled back and may be retried with the same key).
-// Records are kept 48 hours (the spec asks for at least 24) and vanish with the key. A small response is stored whole;
+// The client's key is stored only as a SHA-256. Records are kept 48 hours (the spec asks for at least 24) and vanish with the key. A small response is stored whole;
 // a large one is stored as a reference to the created resource and re-read on replay. Sessions ignore the header.
 import { createHash } from 'node:crypto';
 import type pg from 'pg';
@@ -67,17 +67,19 @@ export interface IdemSpec<T> {
 export async function withIdempotency<T>(c: Pick<pg.PoolClient, 'query'>, p: Principal, idem: Idem | undefined, spec: IdemSpec<T>, produce: () => Promise<T>): Promise<T> {
   if (!idem?.key || p.kind !== 'api_key') return produce();
   const keyId = p.apiKey.id;
+  // Only a SHA-256 of the client's header is stored (a careless client may send a secret as its key).
+  const stored = createHash('sha256').update(idem.key).digest('hex');
   const fingerprint = digestOf({ operation: spec.operation, target: spec.target, payload: spec.payload });
   // An expired record is as good as none: it is replaced.
   await c.query('DELETE FROM api_key_idempotency WHERE key_id = $1 AND expires_at <= $2', [keyId, spec.now]);
   const claim = await c.query<{ id: string }>(
     `INSERT INTO api_key_idempotency (id, key_id, idempotency_key, operation, target, request_fingerprint, created_at, expires_at)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (key_id, idempotency_key) DO NOTHING RETURNING id`,
-    [uuidv7(), keyId, idem.key, spec.operation, spec.target, fingerprint, spec.now, new Date(spec.now.getTime() + IDEMPOTENCY_RETENTION_MS)]);
+    [uuidv7(), keyId, stored, spec.operation, spec.target, fingerprint, spec.now, new Date(spec.now.getTime() + IDEMPOTENCY_RETENTION_MS)]);
   if (!claim.rowCount) {
     // Someone else's claim, committed (an uncommitted one would have made the insert wait for its outcome).
     const { rows } = await c.query<{ request_fingerprint: string; response_status: number | null; response_meta: { kind: 'inline'; body: unknown } | { kind: 'ref'; id: string } | null }>(
-      'SELECT request_fingerprint, response_status, response_meta FROM api_key_idempotency WHERE key_id = $1 AND idempotency_key = $2', [keyId, idem.key]);
+      'SELECT request_fingerprint, response_status, response_meta FROM api_key_idempotency WHERE key_id = $1 AND idempotency_key = $2', [keyId, stored]);
     const r = rows[0];
     if (!r || r.request_fingerprint !== fingerprint) {
       throw new HttpProblem(409, 'idempotency_conflict', 'Conflict', 'This Idempotency-Key was already used for a different request. Use a new key for a new request.');
@@ -99,6 +101,6 @@ export async function withIdempotency<T>(c: Pick<pg.PoolClient, 'query'>, p: Pri
     else if (spec.shrink) meta = { kind: 'inline', body: spec.shrink(result) };
     else meta = { kind: 'inline', body: result }; // no way to shrink: keep it (still bounded by the request limits)
   }
-  await c.query('UPDATE api_key_idempotency SET response_status = $3, response_meta = $4 WHERE key_id = $1 AND idempotency_key = $2', [keyId, idem.key, status, JSON.stringify(meta)]);
+  await c.query('UPDATE api_key_idempotency SET response_status = $3, response_meta = $4 WHERE key_id = $1 AND idempotency_key = $2', [keyId, stored, status, JSON.stringify(meta)]);
   return result;
 }

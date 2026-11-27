@@ -750,8 +750,12 @@ paths:
         requires: [vehicle_create.create]
       description: >
         API key access: the key must hold `vehicle_create.create`. A missing permission is `403 insufficient_scope`. Vehicle roles and feature gates still apply underneath.
+
+        Idempotency (API keys): send an `Idempotency-Key` header to make a retry safe; a retry returns the first outcome (`Idempotent-Replayed: true`) without creating a second vehicle. A replay returns the original response even if that vehicle was deleted in the meantime (nothing is recreated). Sessions ignore the header.
       summary: Create a vehicle; the caller becomes its owner
       tags: [vehicles]
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
       requestBody:
         required: true
         content:
@@ -2733,7 +2737,8 @@ components:
         A client-chosen unique value (1 to 255 printable characters, no spaces) that makes a create safe to retry. Honoured for API keys
         (ignored for sessions). Same key and same request: the first outcome is returned again with `Idempotent-Replayed: true` and nothing
         is written twice, even when the retries arrive at the same moment. Same key and a different request: `409 idempotency_conflict`.
-        Only successful outcomes are remembered, for 48 hours. A retry is answered only if the key still passes every check
+        Only successful outcomes are remembered, for 48 hours, and a replay returns the original response even if the created resource was deleted
+        in the meantime (nothing is recreated). The server stores only a SHA-256 of the value. A retry is answered only if the key still passes every check
         (active, in scope, granted, role); otherwise it fails like any other request.
       schema: { type: string, minLength: 1, maxLength: 255, pattern: '^[\x21-\x7e]+$' }
     VehicleId:

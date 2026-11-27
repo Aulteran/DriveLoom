@@ -129,6 +129,24 @@ function requireTaskLinkGrant(p: Principal, items: readonly { taskId: Id | null 
   if (items.some((i) => i.taskId !== null)) requireKeyGrant(p, { module: 'maintenance', action: 'read' });
 }
 
+/**
+ * Whether a replacement item list adds, changes or removes a maintenance-task link. Items are matched by canonical name; within a
+ * name the same (name, taskId) pairs cancel out, so an item that keeps the link it already had is not a change. A dropped or
+ * renamed linked item, or a linked item that is new, is.
+ */
+export function taskLinksChanged(stored: readonly { name: string; taskId: Id | null }[], next: readonly { name: string; taskId: Id | null }[]): boolean {
+  const left = new Map<string, number>();
+  const kk = (i: { name: string; taskId: Id | null }) => `${canon(i.name)}\u0000${i.taskId ?? ''}`;
+  for (const i of next) left.set(kk(i), (left.get(kk(i)) ?? 0) + 1);
+  for (const e of stored) {
+    const n = left.get(kk(e)) ?? 0;
+    if (n > 0) left.set(kk(e), n - 1);
+    else if (e.taskId !== null) return true; // an existing link goes away (dropped, renamed, re-pointed or unlinked)
+  }
+  for (const [k, n] of left) if (n > 0 && !k.endsWith('\u0000')) return true; // a link that was not there before
+  return false;
+}
+
 export interface ListOptions { limit?: number; cursor?: string; from?: string; to?: string; q?: string; category?: string }
 
 export class ServiceService {
@@ -303,7 +321,8 @@ export class ServiceService {
       // The vehicle's currency cannot change once costs exist, so it is always the one these costs were entered in.
       const f = parseVisit(merged, v.currency, this.#now());
       if ('items' in patch) {
-        requireTaskLinkGrant(p, f.items);
+        // Keeping the link an item already has needs no maintenance grant; adding, changing or removing one does (M1).
+        if (taskLinksChanged(view.items, f.items)) requireKeyGrant(p, { module: 'maintenance', action: 'read' });
         // The stored items are deleted and re-created: a key that removes or renames one needs delete, not just update.
         if (droppedItemCount(view.items, f.items) > 0) requireKeyGrant(p, { module: 'service', action: 'delete' });
         await assertTaskLinks(c, v.id, f.items);

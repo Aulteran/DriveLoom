@@ -1,6 +1,7 @@
 // HTTP routes for vehicles and ownership. All authorization lives in VehicleService.
 import type { HttpRequest, Route } from '../http/app.ts';
 import { requirePrincipal, requireSessionPrincipal } from '../identity.ts';
+import { idemFrom, idemHeaders } from '../auth/idempotency.ts';
 import { invalid, obj } from '../http/validate.ts';
 import type { VehicleService } from './service.ts';
 import { suggestIdentities } from './model-identity.ts';
@@ -26,7 +27,9 @@ export function vehicleRoutes(svc: VehicleService): Route[] {
     } },
     { method: 'POST', path: '/v1/vehicles', async handler(r) {
       const p = who(r);
-      return { status: 201, body: await svc.create(p, obj(r.body, fields) as never) };
+      const idem = idemFrom(r.headers, p);
+      const body = await svc.create(p, obj(r.body, fields) as never, undefined, idem);
+      return { status: idem.status ?? 201, body, headers: idemHeaders(idem) };
     } },
     { method: 'GET', path: '/v1/vehicles/:vehicleId', async handler(r) {
       return { status: 200, body: await svc.get(who(r), r.params['vehicleId']) };

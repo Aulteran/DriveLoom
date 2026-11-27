@@ -110,6 +110,8 @@ Keep keys safe: never paste one into a chat, note, ticket or source file; keep i
 
 Self-hosting notes: keys are accepted only over HTTPS (through a proxy listed in `DRIVELOOM_TRUSTED_PROXIES` that sends `X-Forwarded-Proto: https`, or from the local machine), and your proxy must pass the `Authorization` header through; see [deploy/proxy](deploy/proxy/).
 
+**Upgrading:** the app treats any `Authorization` header that reaches it as an API-key attempt and never falls back to the login cookie. If a proxy or SSO gateway adds one (Basic auth, an oauth2-proxy or Cloudflare Access Bearer), strip it before forwarding, or the whole web app answers `401 invalid_api_key`. The trusted proxy must also overwrite (not append to) `X-Forwarded-For` and `X-Forwarded-Proto`, and its address must be in `DRIVELOOM_TRUSTED_PROXIES`.
+
 ## Status
 
 Pre-release: usable and tested, but a security review comes before the first tagged release. A native Android app lives in [DriveLoom-Android](https://github.com/Aulteran/DriveLoom-Android).

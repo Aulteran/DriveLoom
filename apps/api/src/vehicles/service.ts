@@ -12,6 +12,7 @@ import { ApiError, conflict, forbidden, invalid, notFound } from './errors.ts';
 import type { GrantableRole, Member, Role, Vehicle, VehicleAccess, VehicleInput, VehiclePatch } from './types.ts';
 import { canArchive, canEditVehicle, canManageMembers, canTransferOwnership, isGrantableRole } from './permissions.ts';
 import { auditAs, insertAudit } from '../audit.ts';
+import { withIdempotency, type Idem } from '../auth/idempotency.ts';
 import { keySelectionAllows, keyStoredVehicleIds, recheckKeyInTx } from '../auth/api-key-auth.ts';
 
 type Q = pg.PoolClient;
@@ -123,14 +124,19 @@ export class VehicleService {
     return toVehicle(rows[0]!);
   }
 
-  async create(p: Principal, input: VehicleInput, within?: Q): Promise<Vehicle> {
+  async create(p: Principal, input: VehicleInput, within?: Q, idem?: Idem): Promise<Vehicle> {
     const name = text(input.name, 'name', false), make = text(input.make, 'make', false), model = text(input.model, 'model', false);
     const y = year(input.year), region = plateRegion(input.plateRegion), plate = plateNumber(input.plateNumber), vinValue = vin(input.vin);
     // Unit and currency default to the creator's display preferences.
     const prefs = input.odometerUnit === undefined || input.currency === undefined ? await getPreferences(this.#pool, p.userId) : null;
     const unit = input.odometerUnit === undefined ? prefs!.distanceUnit : odometerUnit(input.odometerUnit);
     const cur = input.currency === undefined ? prefs!.currency : currency(input.currency);
-    const insert = async (c: Q) => {
+    const insert = async (c: Q): Promise<Vehicle> => {
+      // A key creating a vehicle: active, owner active, instance on and still allowed to create (no vehicle yet, so no selection check).
+      if (!within) await recheckKeyInTx(c, p, null);
+      return withIdempotency(c, p, idem, { operation: 'vehicle.create', target: 'new-vehicle', payload: { name, make, model, y, region, plate, vinValue, unit, cur }, now: new Date(), reference: (r) => r.id, reread: (rid) => this.#load(c, p, rid as Id) }, () => insertRow(c));
+    };
+    const insertRow = async (c: Q): Promise<Vehicle> => {
       const vid = uuidv7();
       await c.query('INSERT INTO vehicles (id, name, make, model, model_year, plate_region, plate_number, vin, odometer_unit, currency) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)', [vid, name, make, model, y, region, plate, vinValue, unit, cur]);
       await c.query("INSERT INTO vehicle_members (vehicle_id, user_id, role, granted_by) VALUES ($1,$2,'owner',$2)", [vid, p.userId]);

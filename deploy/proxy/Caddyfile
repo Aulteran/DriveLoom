@@ -11,5 +11,10 @@ fuel.example.com {
 	# If you protect the site with Caddy's basic_auth, that uses the same header: strip it before the app sees it
 	# (keys then cannot be used through this site; expose a separate hostname or path for API clients instead):
 	#   request_header -Authorization
+	#
+	# Upgrade note: the app treats ANY Authorization header as an API-key attempt and never falls back to the login
+	# cookie, so a Basic or SSO-injected (oauth2-proxy, Cloudflare Access) Authorization header that reaches it makes the
+	# whole web app answer 401. Strip it as above. The proxy must also overwrite X-Forwarded-For and
+	# X-Forwarded-Proto (Caddy does by default), and be listed in DRIVELOOM_TRUSTED_PROXIES.
 	reverse_proxy 127.0.0.1:8080
 }
