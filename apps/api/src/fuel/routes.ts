@@ -1,4 +1,5 @@
 // HTTP routes for fuel records and statistics. Authorization lives in FuelService.
+import { idemFrom, idemHeaders } from '../auth/idempotency.ts';
 import type { HttpRequest, Route } from '../http/app.ts';
 import { instant, invalid } from '../http/validate.ts';
 import { requirePrincipal } from '../identity.ts';
@@ -31,7 +32,11 @@ export function fuelRoutes(svc: FuelService): Route[] {
       if (offset !== undefined) opts.offset = offset;
       return { status: 200, body: await svc.list(who(r), r.params['vehicleId'], opts) };
     } },
-    { method: 'POST', path: base, async handler(r) { return { status: 201, body: await svc.create(who(r), r.params['vehicleId'], r.body) }; } },
+    { method: 'POST', path: base, async handler(r) {
+      const idem = idemFrom(r.headers, who(r));
+      const body = await svc.create(who(r), r.params['vehicleId'], r.body, idem);
+      return { status: idem.status ?? 201, body, headers: idemHeaders(idem) };
+    } },
     { method: 'GET', path: `${base}/:fillUpId`, async handler(r) { return { status: 200, body: await svc.get(who(r), r.params['vehicleId'], r.params['fillUpId']) }; } },
     { method: 'PATCH', path: `${base}/:fillUpId`, async handler(r) { return { status: 200, body: await svc.update(who(r), r.params['vehicleId'], r.params['fillUpId'], r.body) }; } },
     { method: 'DELETE', path: `${base}/:fillUpId`, async handler(r) { await svc.remove(who(r), r.params['vehicleId'], r.params['fillUpId']); return { status: 204 }; } },

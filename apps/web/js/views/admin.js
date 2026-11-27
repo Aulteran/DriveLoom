@@ -7,7 +7,7 @@ import { withFreshSignIn } from './settings.js';
 import { unitFields } from '../units.js';
 import { icon } from '../icons.js';
 
-export const SECTIONS = [['users', 'Accounts', 'users'], ['invites', 'Invitations', 'mail'], ['units', 'Default units', 'sliders'], ['modules', 'Modules', 'sliders'], ['email', 'Email', 'mail'], ['signin', 'Single sign-on', 'key'], ['audit', 'Audit log', 'list']];
+export const SECTIONS = [['users', 'Accounts', 'users'], ['invites', 'Invitations', 'mail'], ['units', 'Default units', 'sliders'], ['modules', 'Modules', 'sliders'], ['apikeys', 'API keys', 'key'], ['email', 'Email', 'mail'], ['signin', 'Single sign-on', 'key'], ['audit', 'Audit log', 'list']];
 
 const act = (label, fn, cls = 'secondary') => h('button', { class: cls, onclick: async (e) => {
   const btn = e.currentTarget; btn.disabled = true;
@@ -145,6 +145,20 @@ async function modules() {
     h('p', { class: 'small muted' }, 'Adds a Service page to vehicles for maintenance history. Each member can still hide it for a vehicle in that vehicle\'s settings. Turning it off only hides the page: service data and everyone\'s choices are kept and return when you turn it back on.'));
 }
 
+export const API_KEYS_ADMIN_HELP = 'Turning this off blocks every API key at once: keys stop working and no key can be created, rotated or widened. Nothing is deleted. Owners can still list and revoke their keys, and keys that are still valid work again when you turn this back on.';
+
+async function apiKeys() {
+  const { enabled } = await get('/v1/admin/settings/api-keys');
+  return h('section', { class: 'panel' },
+    h('h2', {}, 'API keys'),
+    h('p', { class: 'muted' }, 'Personal API keys let scripts and integrations use an account’s data without its password.'),
+    h('label', { class: 'check' }, h('input', { type: 'checkbox', name: 'apiKeysEnabled', checked: enabled, onchange: async (e) => {
+      const on = e.target.checked;
+      try { await put('/v1/admin/settings/api-keys', { enabled: on }); toast(on ? 'API keys allowed.' : 'API keys blocked.'); } catch (err) { e.target.checked = !on; toast(err.message); }
+    } }), 'Allow API keys'),
+    h('p', { class: 'small muted' }, API_KEYS_ADMIN_HELP));
+}
+
 // The sign-in screen and Security page read these public facts once; refresh them after a change here.
 export const refreshInstance = async () => { state.instance = await get('/v1/auth/instance').catch(() => state.instance); };
 
@@ -266,7 +280,7 @@ async function signin() {
 export async function adminView(section, query) {
   if (state.account?.instanceRole !== 'admin') return h('div', { class: 'panel empty' }, h('h1', {}, 'Administrators only'), h('p', {}, h('a', { href: '#/' }, 'Back to your dashboard')));
   if (!SECTIONS.some(([k]) => k === section)) section = 'users';
-  const body = section === 'invites' ? await invites() : section === 'units' ? await units() : section === 'modules' ? await modules() : section === 'email' ? await email() : section === 'signin' ? await signin() : section === 'audit' ? await audit(query) : await users();
+  const body = section === 'invites' ? await invites() : section === 'units' ? await units() : section === 'modules' ? await modules() : section === 'apikeys' ? await apiKeys() : section === 'email' ? await email() : section === 'signin' ? await signin() : section === 'audit' ? await audit(query) : await users();
   return h('div', {},
     h('h1', {}, 'Administration'),
     h('nav', { class: 'tabs', 'aria-label': 'Administration sections' }, SECTIONS.map(([k, label, ic]) => h('a', { href: `#/admin/${k}`, 'aria-current': k === section ? 'page' : undefined }, icon(ic), label))),

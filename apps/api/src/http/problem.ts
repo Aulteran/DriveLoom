@@ -23,6 +23,7 @@ const AUTH_TITLES: Record<AuthError['code'], string> = {
   forbidden: 'Forbidden',
   csrf_failed: 'Request failed anti-forgery checks',
   reauth_required: 'Recent authentication required',
+  api_key_not_allowed: 'API keys cannot use this endpoint',
 };
 
 export function toProblem(err: unknown): HttpProblem {

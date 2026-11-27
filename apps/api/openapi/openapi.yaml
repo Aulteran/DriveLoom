@@ -1,13 +1,40 @@
 openapi: 3.1.0
 info:
   title: DriveLoom API
-  version: 0.9.0
+  version: 0.10.0
   summary: Versioned contract for the self-hosted DriveLoom API.
   description: >
     Contract for the self-hosted DriveLoom API under a compatibility policy. Authenticated requests
     use the `dl_session` cookie; unsafe methods must also send the
     `X-CSRF-Token` returned at sign-in, and any `Origin` header must equal the
     instance public origin.
+
+
+    Scripts and integrations can instead use a personal API key: `Authorization: Bearer dlk_...`, created under
+    Account and security. A request carries exactly one credential: once an `Authorization` header is present the
+    cookie is ignored, and a malformed, repeated, expired, revoked or unknown key is `401 invalid_api_key` (the reason is never
+    revealed). Bearer requests need no CSRF token, are accepted only over HTTPS (or from the local machine, and from a
+    configured trusted proxy that terminates TLS), and are refused on anything that is not marked below as accepting
+    `apiKey`: every `/v1/auth/*` and `/v1/admin/*` endpoint, key management, deletion, archive, ownership, members, friends and
+    account-wide preferences are session only (`403 api_key_not_allowed`).
+
+
+    Each key has a level per permission module (`none`, `read`, `read_write` = read, create and update, `full` = also delete),
+    a vehicle selection (`selected`, `all_current`, `all_current_future`) and an optional vehicle-creation grant. Every
+    key-accessible operation lists what it needs in `x-driveloom-key-policy.requires` (all must be held) and in its description.
+    Rights are intersected with the owner's live vehicle role. A vehicle outside the key's selection is `404 vehicle_not_found`;
+    a vehicle in the selection with a missing permission is `403 insufficient_scope`. A vehicle the key creates joins its
+    selection only in mode `all_current_future`, so a `selected` or `all_current` key that creates a vehicle cannot then read it.
+    Limits: failed key authentication is limited per client address (20 a minute), key traffic per key
+    (300 a minute; 30 a minute for uploads, imports and exports) with `429 rate_limited` and `Retry-After`.
+
+
+    Bulk writes and retries (keys): an import by a key is checked against every section of its payload (dry runs too) and is refused
+    whole with `403 insufficient_scope` (every missing grant in `missing`) if any part is out of scope; a dry run returns a `previewToken`
+    that the commit must present with the identical payload (`409 preview_required`, `preview_mismatch`, `preview_expired`). Creates accept an
+    `Idempotency-Key` header: a retry with the same key and request returns the first outcome, the same key with a different request is
+    `409 idempotency_conflict`. Service visits may carry an `externalId` (`409 external_id_conflict`); a key may not attach the same
+    file to a visit twice (`409 attachment_duplicate`).
   license:
     name: AGPL-3.0-only
     identifier: AGPL-3.0-only
@@ -273,6 +300,136 @@ paths:
               schema: { $ref: '#/components/schemas/RevokedCount' }
         default:
           $ref: '#/components/responses/Problem'
+  /v1/auth/api-keys:
+    get:
+      operationId: listApiKeys
+      tags: [auth]
+      summary: 'List the caller''s API keys'
+      description: >
+        Metadata only: never the secret or its hash. `status` is `active`, `expired` or `revoked`; expired keys stay listed until removed.
+        `apiKeysEnabled` is false while an administrator has turned API keys off for the instance. Session only: an API key can never call this.
+      responses:
+        '200':
+          description: The keys, newest first.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiKeyList' }
+        default:
+          $ref: '#/components/responses/Problem'
+    post:
+      operationId: createApiKey
+      tags: [auth]
+      summary: 'Create an API key'
+      description: >
+        Needs a recent sign-in (`reauth_required` otherwise). Defaults: no module access, vehicle mode `selected` with no vehicles, expiry 30 days (computed by the server, UTC).
+        The token is returned once, in this response, and is never shown again. Errors: `too_many_api_keys` (409, at most 25 active keys), `api_keys_disabled` (403),
+        `validation_failed` (422, including unknown modules and levels a module does not offer, and vehicles the caller cannot access).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateApiKeyRequest' }
+      responses:
+        '201':
+          description: The key and its one-time token.
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiKeyWithToken' }
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/auth/api-keys/revoke-all:
+    post:
+      operationId: revokeAllApiKeys
+      tags: [auth]
+      summary: 'Revoke every active API key (lockdown)'
+      description: 'Immediate and without fresh authentication. History is kept.'
+      responses:
+        '200':
+          description: How many keys were revoked.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RevokedCount' }
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/auth/api-keys/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { $ref: '#/components/schemas/Id' } }
+    patch:
+      operationId: updateApiKey
+      tags: [auth]
+      summary: 'Edit an active API key'
+      description: >
+        Changes name, expiry, grants or vehicle scope; fields not sent are unchanged and `permissions`, when sent, replaces all module levels.
+        The server compares old and new: broadening (a higher level, a vehicle outside the old scope, a wider vehicle mode, vehicle creation, a later or no expiry)
+        needs a recent sign-in (`reauth_required`); renames and reductions need only the session. `all_current` takes a new snapshot only when the mode is switched to it.
+        Expired and revoked keys answer `api_key_not_active` (409) and are never reactivated. While API keys are disabled, a broadening edit answers `api_keys_disabled` (403).
+        Another user's key is 404 `api_key_not_found`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateApiKeyRequest' }
+      responses:
+        '200':
+          description: The updated key.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiKey' }
+        default:
+          $ref: '#/components/responses/Problem'
+    delete:
+      operationId: revokeApiKey
+      tags: [auth]
+      summary: 'Revoke an API key, or remove an expired or revoked one'
+      description: 'An active key is revoked immediately (no fresh sign-in). An expired or revoked key is removed from the list. Its activity history is kept either way.'
+      responses:
+        '204':
+          description: Done.
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/auth/api-keys/{id}/rotate:
+    parameters:
+      - { name: id, in: path, required: true, schema: { $ref: '#/components/schemas/Id' } }
+    post:
+      operationId: rotateApiKey
+      tags: [auth]
+      summary: 'Replace an API key''s secret'
+      description: >
+        Needs a recent sign-in. Atomically replaces the secret; id, grants and expiry are kept; the old token stops working at once (no grace period).
+        The new token is returned once. Blocked with `api_keys_disabled` while the instance switch is off; `api_key_not_active` (409) for expired or revoked keys.
+      responses:
+        '200':
+          description: The key and its new one-time token.
+          headers:
+            Cache-Control: { schema: { type: string, const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiKeyWithToken' }
+        default:
+          $ref: '#/components/responses/Problem'
+  /v1/auth/api-keys/{id}/activity:
+    parameters:
+      - { name: id, in: path, required: true, schema: { $ref: '#/components/schemas/Id' } }
+    get:
+      operationId: listApiKeyActivity
+      tags: [auth]
+      summary: 'History of one API key'
+      description: >
+        Owner only, newest first, also for a removed key. Records key management (created, updated, rotated, revoked, revoked_all, removed) and, later, writes made with the key.
+        Events about a vehicle the caller can no longer access are returned with `redacted: true` and without vehicle or target ids. Reads are never logged.
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: before, in: query, required: false, description: 'Return events older than this activity id (use `nextBefore`).', schema: { $ref: '#/components/schemas/Id' } }
+      responses:
+        '200':
+          description: A page of events.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiKeyActivityPage' }
+        default:
+          $ref: '#/components/responses/Problem'
   /v1/auth/password:
     put:
       operationId: setPassword
@@ -534,9 +691,37 @@ paths:
                   models: { type: array, items: { $ref: '#/components/schemas/IdentitySuggestion' } }
         '401': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
+  /v1/me:
+    get:
+      operationId: getMe
+      tags: [auth]
+      summary: Who the caller is and how they authenticated
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: []
+      description: >
+        For checking that a key works. Open to a session and to any valid API key; needs no permission. A key sees its own
+        configuration (name, permissions, vehicle selection, expiry), never the secret.
+      responses:
+        '200':
+          description: The caller.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Me' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/RateLimited' }
   /v1/vehicles:
     get:
       operationId: listVehicles
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [vehicle_info.read]
+      description: >
+        API key access: the key must hold `vehicle_info.read`. A missing permission is `403 insufficient_scope`. For a key the list contains only the vehicles in its selection that the owner can still access. Vehicle roles and feature gates still apply underneath.
       summary: Vehicles the caller is a member of
       tags: [vehicles]
       parameters:
@@ -544,6 +729,8 @@ paths:
           in: query
           schema: { type: boolean, default: false }
       responses:
+        '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/RateLimited' }
         '200':
           description: Vehicles with the caller's role on each.
           content:
@@ -556,14 +743,27 @@ paths:
         '401': { $ref: '#/components/responses/Problem' }
     post:
       operationId: createVehicle
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [vehicle_create.create]
+      description: >
+        API key access: the key must hold `vehicle_create.create`. A missing permission is `403 insufficient_scope`. Vehicle roles and feature gates still apply underneath.
+
+        Idempotency (API keys): send an `Idempotency-Key` header to make a retry safe; a retry returns the first outcome (`Idempotent-Replayed: true`) without creating a second vehicle. A replay returns the original response even if that vehicle was deleted in the meantime (nothing is recreated). Sessions ignore the header.
       summary: Create a vehicle; the caller becomes its owner
       tags: [vehicles]
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
       requestBody:
         required: true
         content:
           application/json:
             schema: { $ref: '#/components/schemas/VehicleInput' }
       responses:
+        '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/RateLimited' }
         '201':
           description: Created.
           content:
@@ -576,9 +776,18 @@ paths:
         - { $ref: '#/components/parameters/VehicleId' }
     get:
       operationId: getVehicle
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [vehicle_info.read]
+      description: >
+        API key access: the key must hold `vehicle_info.read`. The vehicle must be in the key's selection: otherwise `404 vehicle_not_found`; a missing permission is `403 insufficient_scope`. Vehicle roles and feature gates still apply underneath.
       summary: Read a vehicle (any member). Non-members receive 404.
       tags: [vehicles]
       responses:
+        '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/RateLimited' }
         '200':
           description: The vehicle.
           content:
@@ -588,6 +797,13 @@ paths:
         '404': { $ref: '#/components/responses/Problem' }
     patch:
       operationId: updateVehicle
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [vehicle_settings.update]
+      description: >
+        API key access: the key must hold `vehicle_settings.update`. The vehicle must be in the key's selection: otherwise `404 vehicle_not_found`; a missing permission is `403 insufficient_scope`. Vehicle roles and feature gates still apply underneath.
       summary: Edit vehicle details (owner or editor)
       tags: [vehicles]
       requestBody:
@@ -596,6 +812,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/VehiclePatch' }
       responses:
+        '429': { $ref: '#/components/responses/RateLimited' }
         '200':
           description: Updated.
           content:
@@ -843,12 +1060,21 @@ paths:
       - { $ref: '#/components/parameters/VehicleId' }
     get:
       operationId: listFillUps
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [fuel.read]
+      description: >
+        API key access: the key must hold `fuel.read`. The vehicle must be in the key's selection: otherwise `404 vehicle_not_found`; a missing permission is `403 insufficient_scope`. Vehicle roles and feature gates still apply underneath.
       summary: Fuel purchases, newest first, with the interval each full fill closes
       tags: [fuel]
       parameters:
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 5000, default: 500 } }
         - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
       responses:
+        '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/RateLimited' }
         '200':
           description: Fill-ups in the viewer's display units; entered values are returned unchanged.
           content:
@@ -863,19 +1089,31 @@ paths:
         '404': { $ref: '#/components/responses/Problem' }
     post:
       operationId: createFillUp
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [fuel.create]
       summary: Record a purchase (owner, editor or driver)
       description: >
         Units are chosen explicitly. The odometer may not run backwards in time
         (`odometer_out_of_sequence`), the same instant and reading is a
         duplicate (`duplicate_fill_up`), and a purchase in another currency
         needs `exchangeRate` or `reportingAmount` (`reporting_amount_required`).
+
+        API key access: the key must hold `fuel.create`. The vehicle must be in the key's selection: otherwise `404 vehicle_not_found`; a missing permission is `403 insufficient_scope`. Vehicle roles and feature gates still apply underneath.
+
+        Idempotency (API keys): send an `Idempotency-Key` header to make a retry safe. The same key with the same request returns the first outcome (`Idempotent-Replayed: true`) without writing again; the same key with a different request is `409 idempotency_conflict`. Keys are remembered for 48 hours. Sessions ignore the header.
       tags: [fuel]
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
       requestBody:
         required: true
         content:
           application/json:
             schema: { $ref: '#/components/schemas/FillUpInput' }
       responses:
+        '429': { $ref: '#/components/responses/RateLimited' }
         '201':
           description: Created.
           content:
@@ -892,9 +1130,18 @@ paths:
       - { name: fillUpId, in: path, required: true, schema: { $ref: '#/components/schemas/Id' } }
     get:
       operationId: getFillUp
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [fuel.read]
+      description: >
+        API key access: the key must hold `fuel.read`. The vehicle must be in the key's selection: otherwise `404 vehicle_not_found`; a missing permission is `403 insufficient_scope`. Vehicle roles and feature gates still apply underneath.
       summary: One purchase
       tags: [fuel]
       responses:
+        '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/RateLimited' }
         '200':
           description: The fill-up.
           content:
@@ -904,6 +1151,13 @@ paths:
         '404': { $ref: '#/components/responses/Problem' }
     patch:
       operationId: updateFillUp
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [fuel.update]
+      description: >
+        API key access: the key must hold `fuel.update`. The vehicle must be in the key's selection: otherwise `404 vehicle_not_found`; a missing permission is `403 insufficient_scope`. Vehicle roles and feature gates still apply underneath.
       summary: Correct a purchase (owner or editor; a driver only their own); the merged record is validated again as a whole
       tags: [fuel]
       requestBody:
@@ -912,6 +1166,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/FillUpPatch' }
       responses:
+        '429': { $ref: '#/components/responses/RateLimited' }
         '200':
           description: Updated.
           content:
@@ -924,9 +1179,17 @@ paths:
         '422': { $ref: '#/components/responses/Problem' }
     delete:
       operationId: deleteFillUp
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [fuel.delete]
+      description: >
+        API key access: the key must hold `fuel.delete`. The vehicle must be in the key's selection: otherwise `404 vehicle_not_found`; a missing permission is `403 insufficient_scope`. Vehicle roles and feature gates still apply underneath.
       summary: Delete a purchase (owner or editor; a driver only their own)
       tags: [fuel]
       responses:
+        '429': { $ref: '#/components/responses/RateLimited' }
         '204': { description: Deleted. }
         '401': { $ref: '#/components/responses/Problem' }
         '403': { $ref: '#/components/responses/Problem' }
@@ -937,11 +1200,18 @@ paths:
       - { $ref: '#/components/parameters/VehicleId' }
     get:
       operationId: listServiceVisits
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [service.read]
       summary: Service visits, newest first (service date, then record creation)
       description: >
         Every service endpoint answers 404 `module_disabled` while the Service
         module is off on this instance, and 404 to non-members. Any member may read.
         Page with `cursor` (the `nextCursor` of the previous page).
+
+        API key access: the key must hold `service.read`. The vehicle must be in the key's selection: otherwise `404 vehicle_not_found`; a missing permission is `403 insufficient_scope`. Vehicle roles and feature gates still apply underneath.
       tags: [service]
       parameters:
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
@@ -951,6 +1221,8 @@ paths:
         - { name: q, in: query, description: 'Case-insensitive text search over provider, notes and item names and notes.', schema: { type: string, maxLength: 100 } }
         - { name: category, in: query, description: 'Visits having at least one item of this category.', schema: { $ref: '#/components/schemas/ServiceCategory' } }
       responses:
+        '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/RateLimited' }
         '200':
           description: A page of visits.
           content:
@@ -966,19 +1238,32 @@ paths:
         '422': { $ref: '#/components/responses/Problem' }
     post:
       operationId: createServiceVisit
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [service.create]
+        dynamic: [task_link]
       summary: Record a service visit (owner, editor or driver)
       description: >
         At least one item is required. `totalCost` and item `cost` are optional:
         omitted or null means unknown, "0" means known to be free. The odometer
         is optional, is never compared with fuel records and never changes them.
         Costs are in the vehicle's currency.
+
+        API key access: the key must hold `service.create`. The vehicle must be in the key's selection: otherwise `404 vehicle_not_found`; a missing permission is `403 insufficient_scope`. Items that link a maintenance task also require `maintenance.read`. Vehicle roles and feature gates still apply underneath.
+
+        Idempotency (API keys): send an `Idempotency-Key` header to make a retry safe. The same key with the same request returns the first outcome (`Idempotent-Replayed: true`) without writing again; the same key with a different request is `409 idempotency_conflict`. Keys are remembered for 48 hours. Sessions ignore the header.
       tags: [service]
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
       requestBody:
         required: true
         content:
           application/json:
             schema: { $ref: '#/components/schemas/ServiceVisitInput' }
       responses:
+        '429': { $ref: '#/components/responses/RateLimited' }
         '201':
           description: Created.
           content:
@@ -995,9 +1280,18 @@ paths:
       - { name: visitId, in: path, required: true, schema: { $ref: '#/components/schemas/Id' } }
     get:
       operationId: getServiceVisit
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [service.read]
+      description: >
+        API key access: the key must hold `service.read`. The vehicle must be in the key's selection: otherwise `404 vehicle_not_found`; a missing permission is `403 insufficient_scope`. Vehicle roles and feature gates still apply underneath.
       summary: One service visit
       tags: [service]
       responses:
+        '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/RateLimited' }
         '200':
           description: The visit.
           content:
@@ -1007,8 +1301,17 @@ paths:
         '404': { $ref: '#/components/responses/Problem' }
     patch:
       operationId: updateServiceVisit
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [service.update]
+        dynamic: [nested_delete, task_link]
       summary: Correct a visit (owner or editor; a driver only their own); the merged record is validated again as a whole
-      description: When `items` is sent it replaces the whole item list.
+      description: >
+        When `items` is sent it replaces the whole item list.
+
+        API key access: the key must hold `service.update`. The vehicle must be in the key's selection: otherwise `404 vehicle_not_found`; a missing permission is `403 insufficient_scope`. When `items` is sent and a stored item is removed or renamed, `service.delete` is also required (editing an item keeps it). Items that link a maintenance task also require `maintenance.read`. Vehicle roles and feature gates still apply underneath.
       tags: [service]
       requestBody:
         required: true
@@ -1016,6 +1319,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/ServiceVisitPatch' }
       responses:
+        '429': { $ref: '#/components/responses/RateLimited' }
         '200':
           description: Updated.
           content:
@@ -1028,9 +1332,17 @@ paths:
         '422': { $ref: '#/components/responses/Problem' }
     delete:
       operationId: deleteServiceVisit
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [service.delete]
+      description: >
+        API key access: the key must hold `service.delete`. The vehicle must be in the key's selection: otherwise `404 vehicle_not_found`; a missing permission is `403 insufficient_scope`. Vehicle roles and feature gates still apply underneath.
       summary: Delete a visit and its items (owner or editor; a driver only their own)
       tags: [service]
       responses:
+        '429': { $ref: '#/components/responses/RateLimited' }
         '204': { description: Deleted. }
         '401': { $ref: '#/components/responses/Problem' }
         '403': { $ref: '#/components/responses/Problem' }
@@ -1042,6 +1354,11 @@ paths:
       - { name: visitId, in: path, required: true, schema: { $ref: '#/components/schemas/Id' } }
     post:
       operationId: addServiceAttachment
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [service.create]
       summary: Attach a receipt or invoice to a visit (owner or editor; a driver only on their own visits)
       description: >
         The request body is the raw file (no multipart). Limits: 10 MiB per file (413 when exceeded), 10 files per visit (422 `attachment_limit`),
@@ -1050,9 +1367,14 @@ paths:
         `application/octet-stream`. The display name comes from the `fileName` query parameter; it is reduced to a base name without
         control characters and limited to 200 characters. Stored in the database, so backups and exports include it. Works while the
         service module is on; when off every attachment route answers 404 `module_disabled`.
+
+        API key access: the key must hold `service.create`. The vehicle must be in the key's selection: otherwise `404 vehicle_not_found`; a missing permission is `403 insufficient_scope`. Vehicle roles and feature gates still apply underneath.
+
+        Idempotency (API keys): send an `Idempotency-Key` header to make a retry safe. The same key with the same request returns the first outcome (`Idempotent-Replayed: true`) without writing again; the same key with a different request is `409 idempotency_conflict`. Keys are remembered for 48 hours. Sessions ignore the header. A key may not attach a file the visit already holds (same sha256): `409 attachment_duplicate` with the existing `attachmentId`.
       tags: [service]
       parameters:
         - { name: fileName, in: query, required: false, description: Display name. Defaults to attachment with the detected extension, schema: { type: string, maxLength: 1000 } }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
       requestBody:
         required: true
         content:
@@ -1061,6 +1383,7 @@ paths:
           image/png: { schema: { type: string, format: binary } }
           application/octet-stream: { schema: { type: string, format: binary } }
       responses:
+        '429': { $ref: '#/components/responses/RateLimited' }
         '201':
           description: Stored.
           content:
@@ -1080,15 +1403,24 @@ paths:
       - { name: attachmentId, in: path, required: true, schema: { $ref: '#/components/schemas/Id' } }
     get:
       operationId: getServiceAttachment
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [service.read]
       summary: Download one attachment (any member)
       description: >
         Sent with `content-disposition: attachment` (RFC 6266 `filename*`), `x-content-type-options: nosniff` and
         `cache-control: private, no-store`. With `inline=1` the disposition is `inline` so images and PDFs can be previewed; the
         response always carries `content-security-policy: default-src 'none'; sandbox`.
+
+        API key access: the key must hold `service.read`. The vehicle must be in the key's selection: otherwise `404 vehicle_not_found`; a missing permission is `403 insufficient_scope`. Vehicle roles and feature gates still apply underneath.
       tags: [service]
       parameters:
         - { name: inline, in: query, required: false, schema: { type: string, enum: ['1'] } }
       responses:
+        '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/RateLimited' }
         '200':
           description: File bytes.
           content:
@@ -1099,6 +1431,13 @@ paths:
         '404': { $ref: '#/components/responses/Problem' }
     patch:
       operationId: renameServiceAttachment
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [service.update]
+      description: >
+        API key access: the key must hold `service.update`. The vehicle must be in the key's selection: otherwise `404 vehicle_not_found`; a missing permission is `403 insufficient_scope`. Vehicle roles and feature gates still apply underneath.
       summary: Rename an attachment (same permissions as uploading)
       tags: [service]
       requestBody:
@@ -1112,6 +1451,7 @@ paths:
               properties:
                 fileName: { type: string }
       responses:
+        '429': { $ref: '#/components/responses/RateLimited' }
         '200':
           description: Renamed.
           content:
@@ -1124,9 +1464,17 @@ paths:
         '422': { $ref: '#/components/responses/Problem' }
     delete:
       operationId: deleteServiceAttachment
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [service.delete]
+      description: >
+        API key access: the key must hold `service.delete`. The vehicle must be in the key's selection: otherwise `404 vehicle_not_found`; a missing permission is `403 insufficient_scope`. Vehicle roles and feature gates still apply underneath.
       summary: Remove an attachment (same permissions as uploading)
       tags: [service]
       responses:
+        '429': { $ref: '#/components/responses/RateLimited' }
         '204': { description: Removed. }
         '401': { $ref: '#/components/responses/Problem' }
         '403': { $ref: '#/components/responses/Problem' }
@@ -1137,13 +1485,23 @@ paths:
       - { $ref: '#/components/parameters/VehicleId' }
     get:
       operationId: getVehicleStats
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [statistics.read, fuel.read]
       summary: Aggregate economy and spending for a window
-      description: Intervals belong to the window their closing fill falls in. Economy is computed from summed distance and volume.
+      description: >
+        Intervals belong to the window their closing fill falls in. Economy is computed from summed distance and volume.
+
+        API key access: the key must hold `statistics.read` and `fuel.read` (the extra permissions cover data the response is derived from). The vehicle must be in the key's selection: otherwise `404 vehicle_not_found`; a missing permission is `403 insufficient_scope`. Vehicle roles and feature gates still apply underneath.
       tags: [fuel]
       parameters:
         - { name: from, in: query, description: Inclusive start, schema: { $ref: '#/components/schemas/Timestamp' } }
         - { name: to, in: query, description: Exclusive end, schema: { $ref: '#/components/schemas/Timestamp' } }
       responses:
+        '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/RateLimited' }
         '200':
           description: Statistics in the viewer's units and the vehicle's reporting currency.
           content:
@@ -1248,13 +1606,22 @@ paths:
   /v1/maintenance-catalog:
     get:
       operationId: getMaintenanceCatalog
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [maintenance.read]
       summary: Common service types (names only) and the illustrative reminder defaults
       description: >
         Names only: DriveLoom ships no manufacturer intervals. Answers 404 `module_disabled` while the
         Service module is off. `defaults` are illustrative lead times used to mark a task "due soon";
         they are not manufacturer or safety guidance. `leadDistance` is in the caller's distance unit.
+
+        API key access: the key must hold `maintenance.read`. A missing permission is `403 insufficient_scope`. Vehicle roles and feature gates still apply underneath.
       tags: [service]
       responses:
+        '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/RateLimited' }
         '200':
           description: The catalog.
           content:
@@ -1279,14 +1646,23 @@ paths:
       - { $ref: '#/components/parameters/VehicleId' }
     get:
       operationId: getMaintenanceStatus
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [maintenance.read, service.read, fuel.read]
       summary: Counts of maintenance tasks by status, for the Service page header
       description: >
         Archived tasks are not counted. `reading` is the latest known odometer: the most recent
         reading by date among fuel records and service visits that recorded an odometer. `stale` is
         true when it is older than `defaults.staleReadingDays`. Counts reflect the caller's own
         snoozes plus vehicle-wide ones.
+
+        API key access: the key must hold `maintenance.read` and `service.read` and `fuel.read` (the extra permissions cover data the response is derived from). The vehicle must be in the key's selection: otherwise `404 vehicle_not_found`; a missing permission is `403 insufficient_scope`. Vehicle roles and feature gates still apply underneath.
       tags: [service]
       responses:
+        '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/RateLimited' }
         '200':
           description: The summary.
           content:
@@ -1299,15 +1675,24 @@ paths:
       - { $ref: '#/components/parameters/VehicleId' }
     get:
       operationId: listMaintenanceTasks
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [maintenance.read, service.read, fuel.read]
       summary: Maintenance tasks with their computed status (any member)
       description: >
         Every maintenance endpoint answers 404 `module_disabled` while the Service module is off, and 404 to
         non-members. Status is computed on read from the task and the service items linked to it; see
         `MaintenanceTask`. Snoozes in the response are the caller's personal one and the vehicle-wide one.
+
+        API key access: the key must hold `maintenance.read` and `service.read` and `fuel.read` (the extra permissions cover data the response is derived from). The vehicle must be in the key's selection: otherwise `404 vehicle_not_found`; a missing permission is `403 insufficient_scope`. Vehicle roles and feature gates still apply underneath.
       tags: [service]
       parameters:
         - { name: includeArchived, in: query, schema: { type: boolean, default: false } }
       responses:
+        '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/RateLimited' }
         '200':
           description: The tasks, oldest first.
           content:
@@ -1322,18 +1707,30 @@ paths:
         '422': { $ref: '#/components/responses/Problem' }
     post:
       operationId: createMaintenanceTask
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [maintenance.create, service.read, fuel.read]
       summary: Add a maintenance task (owner or editor)
       description: >
         A repeating task (`recurring` true, the default) needs `intervalDays` or `intervalMonths`, `intervalDistance`, or both;
         whichever is reached first makes it due. A one-time task has no interval and needs `firstDueOn` or
         `firstDueOdometer`. `name` may be omitted when `catalogKey` is given. At most 200 tasks per vehicle.
+
+        API key access: the key must hold `maintenance.create` and `service.read` and `fuel.read` (the extra permissions cover data the response is derived from). The vehicle must be in the key's selection: otherwise `404 vehicle_not_found`; a missing permission is `403 insufficient_scope`. Vehicle roles and feature gates still apply underneath.
+
+        Idempotency (API keys): send an `Idempotency-Key` header to make a retry safe. The same key with the same request returns the first outcome (`Idempotent-Replayed: true`) without writing again; the same key with a different request is `409 idempotency_conflict`. Keys are remembered for 48 hours. Sessions ignore the header.
       tags: [service]
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
       requestBody:
         required: true
         content:
           application/json:
             schema: { $ref: '#/components/schemas/MaintenanceTaskInput' }
       responses:
+        '429': { $ref: '#/components/responses/RateLimited' }
         '201':
           description: Created.
           content:
@@ -1350,9 +1747,18 @@ paths:
       - { name: taskId, in: path, required: true, schema: { $ref: '#/components/schemas/Id' } }
     get:
       operationId: getMaintenanceTask
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [maintenance.read, service.read, fuel.read]
+      description: >
+        API key access: the key must hold `maintenance.read` and `service.read` and `fuel.read` (the extra permissions cover data the response is derived from). The vehicle must be in the key's selection: otherwise `404 vehicle_not_found`; a missing permission is `403 insufficient_scope`. Vehicle roles and feature gates still apply underneath.
       summary: One maintenance task (any member)
       tags: [service]
       responses:
+        '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/RateLimited' }
         '200':
           description: The task.
           content:
@@ -1362,6 +1768,13 @@ paths:
         '404': { $ref: '#/components/responses/Problem' }
     patch:
       operationId: updateMaintenanceTask
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [maintenance.update, service.read, fuel.read]
+      description: >
+        API key access: the key must hold `maintenance.update` and `service.read` and `fuel.read` (the extra permissions cover data the response is derived from). The vehicle must be in the key's selection: otherwise `404 vehicle_not_found`; a missing permission is `403 insufficient_scope`. Vehicle roles and feature gates still apply underneath.
       summary: Change or archive a task (owner or editor); the merged task is validated again as a whole
       tags: [service]
       requestBody:
@@ -1370,6 +1783,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/MaintenanceTaskPatch' }
       responses:
+        '429': { $ref: '#/components/responses/RateLimited' }
         '200':
           description: Updated.
           content:
@@ -1382,10 +1796,20 @@ paths:
         '422': { $ref: '#/components/responses/Problem' }
     delete:
       operationId: deleteMaintenanceTask
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [maintenance.delete, service.update]
+        dynamic: [cascade_unlink]
       summary: Delete a task and its snoozes (owner or editor)
-      description: Service items that completed the task are kept; their `taskId` becomes null.
+      description: >
+        Service items that completed the task are kept; their `taskId` becomes null.
+
+        API key access: the key must hold `maintenance.delete` and `service.update` (the extra permissions cover data the response is derived from). The vehicle must be in the key's selection: otherwise `404 vehicle_not_found`; a missing permission is `403 insufficient_scope`. Deleting the task clears links held by service items, hence `service.update`. Vehicle roles and feature gates still apply underneath.
       tags: [service]
       responses:
+        '429': { $ref: '#/components/responses/RateLimited' }
         '204': { description: Deleted. }
         '401': { $ref: '#/components/responses/Problem' }
         '403': { $ref: '#/components/responses/Problem' }
@@ -1398,6 +1822,11 @@ paths:
       - { name: scope, in: query, description: "`personal` (default; any member, viewers included) or `vehicle` (owner or editor only; seen by every member).", schema: { type: string, enum: [personal, vehicle], default: personal } }
     put:
       operationId: setMaintenanceSnooze
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [maintenance.update, service.read, fuel.read]
       summary: Snooze a task's reminders (replaces the snooze of that scope)
       description: >
         Snoozing only mutes reminders. It never reschedules or completes the task and never changes its
@@ -1407,6 +1836,8 @@ paths:
         `additionalDistance` is converted once, at this call, to an absolute target using the latest known odometer
         reading and the absolute target is stored; with no known reading the answer is 422 `no_odometer_reading`.
         One snooze per task and scope (per person for `personal`).
+
+        API key access: the key must hold `maintenance.update` and `service.read` and `fuel.read` (the extra permissions cover data the response is derived from). The vehicle must be in the key's selection: otherwise `404 vehicle_not_found`; a missing permission is `403 insufficient_scope`. Vehicle roles and feature gates still apply underneath.
       tags: [service]
       requestBody:
         required: true
@@ -1414,6 +1845,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/MaintenanceSnoozeInput' }
       responses:
+        '429': { $ref: '#/components/responses/RateLimited' }
         '200':
           description: The task as the caller now sees it.
           content:
@@ -1426,9 +1858,17 @@ paths:
         '422': { $ref: '#/components/responses/Problem' }
     delete:
       operationId: clearMaintenanceSnooze
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [maintenance.delete, service.read, fuel.read]
+      description: >
+        API key access: the key must hold `maintenance.delete` and `service.read` and `fuel.read` (the extra permissions cover data the response is derived from). The vehicle must be in the key's selection: otherwise `404 vehicle_not_found`; a missing permission is `403 insufficient_scope`. Vehicle roles and feature gates still apply underneath.
       summary: Clear the snooze of the given scope (nothing to clear is not an error)
       tags: [service]
       responses:
+        '429': { $ref: '#/components/responses/RateLimited' }
         '200':
           description: The task as the caller now sees it.
           content:
@@ -1445,6 +1885,11 @@ paths:
       - { name: market, in: query, description: "Market of the presets to offer (vehicles have no market of their own). Defaults to `us`.", schema: { type: string, pattern: '^[a-z]{2,10}$', default: us } }
     get:
       operationId: listMaintenancePresets
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [maintenance.read, service.read, fuel.read]
       summary: Community maintenance presets that match this vehicle (any member)
       description: >
         Advisory templates bundled with the server, never fetched. A preset matches on the vehicle's year (or a
@@ -1455,8 +1900,12 @@ paths:
         has the task made from it (`alreadyImported`), has a similar typed-in task (`existingTaskMatch`: same catalog
         key, or same name ignoring case) and which unlinked service items look like it (`suggestedServiceItems`;
         never linked unless the owner picks one).
+
+        API key access: the key must hold `maintenance.read` and `service.read` and `fuel.read` (the extra permissions cover data the response is derived from). The vehicle must be in the key's selection: otherwise `404 vehicle_not_found`; a missing permission is `403 insufficient_scope`. Vehicle roles and feature gates still apply underneath.
       tags: [service]
       responses:
+        '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/RateLimited' }
         '200':
           description: Matching presets.
           content:
@@ -1472,6 +1921,12 @@ paths:
       - { name: preview, in: query, description: "`true` validates and works out every result and status exactly as an apply would, then discards it: nothing is stored. Returned `taskId` is null for tasks that would be created.", schema: { type: string, enum: ['true', 'false'], default: 'false' } }
     post:
       operationId: applyMaintenancePreset
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [maintenance.create, service.read, fuel.read]
+        dynamic: [preview_equals_commit, preset_effects]
       summary: Import selected preset tasks as maintenance tasks (owner or editor)
       description: >
         All or nothing, in one transaction. Each selected task becomes an ordinary maintenance task with the preset's
@@ -1485,6 +1940,8 @@ paths:
         `skipped` (`already_imported`), whatever was customised since; a similar typed-in task is `skipped`
         (`existing_task`), or with `onDuplicate: link` gets only the preset provenance attached, keeping its own
         interval, baseline, reminders and snoozes. Archived vehicles answer 409.
+
+        API key access: the key must hold `maintenance.create` and `service.read` and `fuel.read` (the extra permissions cover data the response is derived from). The vehicle must be in the key's selection: otherwise `404 vehicle_not_found`; a missing permission is `403 insufficient_scope`. A preview needs exactly the grants of the commit it previews. Selections with `onDuplicate: link` also require `maintenance.update`; `baseline.linkServiceItemId` also requires `service.update`. Vehicle roles and feature gates still apply underneath.
       tags: [service]
       requestBody:
         required: true
@@ -1492,6 +1949,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/MaintenancePresetApplyInput' }
       responses:
+        '429': { $ref: '#/components/responses/RateLimited' }
         '200':
           description: What happened to each selected task (or would, for a preview).
           content:
@@ -1507,6 +1965,12 @@ paths:
       - { $ref: '#/components/parameters/VehicleId' }
     get:
       operationId: getNotificationSettings
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [notifications.read]
+        dynamic: [redact_members]
       summary: Reminder emails for this vehicle (any member)
       description: >
         Maintenance reminder emails for tasks that are due soon or overdue, sent only through the administrator's
@@ -1517,8 +1981,12 @@ paths:
         due (0 = never). Snoozed tasks are left out until the snooze ends; completed tasks stop. In-app status works the
         same with or without email. `recipients` and `delivery` are only filled in for the owner and managers (null
         otherwise). 404 `module_disabled` while the Service module is off, 404 to non-members.
+
+        API key access: the key must hold `notifications.read`. The vehicle must be in the key's selection: otherwise `404 vehicle_not_found`; a missing permission is `403 insufficient_scope`. For API keys other members' names and addresses are never returned (only the key owner's own recipient entry and a count of the others), and `recipientUserIds` cannot be set. Vehicle roles and feature gates still apply underneath.
       tags: [service]
       responses:
+        '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/RateLimited' }
         '200':
           description: Settings and the caller's own state.
           content:
@@ -1528,11 +1996,19 @@ paths:
         '404': { $ref: '#/components/responses/Problem' }
     put:
       operationId: updateNotificationSettings
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [notifications.update]
+        dynamic: [redact_members]
       summary: Change reminder emails for this vehicle (owner or editor)
       description: >
         Partial update. `recipientUserIds` replaces the selection; each must be an active member with role editor or
         driver (the owner is always included and may be listed or not; a viewer is 422). Selecting someone never
         overrides their own opt-out. Audited. 409 `vehicle_archived` on an archived vehicle.
+
+        API key access: the key must hold `notifications.update`. The vehicle must be in the key's selection: otherwise `404 vehicle_not_found`; a missing permission is `403 insufficient_scope`. For API keys other members' names and addresses are never returned (only the key owner's own recipient entry and a count of the others), and `recipientUserIds` cannot be set. Vehicle roles and feature gates still apply underneath.
       tags: [service]
       requestBody:
         required: true
@@ -1540,6 +2016,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/NotificationSettingsInput' }
       responses:
+        '429': { $ref: '#/components/responses/RateLimited' }
         '200':
           description: The settings as they now are.
           content:
@@ -1555,8 +2032,16 @@ paths:
       - { $ref: '#/components/parameters/VehicleId' }
     put:
       operationId: setMyNotificationPreference
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [notifications.update]
       summary: Turn the caller's own reminder emails for this vehicle on or off (any member)
-      description: '`emailMe: false` opts out, which always wins over being selected, and cancels reminders already queued for the caller. Audited. 409 `vehicle_archived` on an archived vehicle.'
+      description: >
+        `emailMe: false` opts out, which always wins over being selected, and cancels reminders already queued for the caller. Audited. 409 `vehicle_archived` on an archived vehicle.
+
+        API key access: the key must hold `notifications.update`. The vehicle must be in the key's selection: otherwise `404 vehicle_not_found`; a missing permission is `403 insufficient_scope`. Vehicle roles and feature gates still apply underneath.
       tags: [service]
       requestBody:
         required: true
@@ -1569,6 +2054,8 @@ paths:
               properties:
                 emailMe: { type: boolean }
       responses:
+        '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/RateLimited' }
         '200':
           description: The settings as the caller now sees them.
           content:
@@ -1644,9 +2131,18 @@ paths:
       - { $ref: '#/components/parameters/VehicleId' }
     get:
       operationId: getVehicleImage
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [vehicle_info.read]
+      description: >
+        API key access: the key must hold `vehicle_info.read`. The vehicle must be in the key's selection: otherwise `404 vehicle_not_found`; a missing permission is `403 insufficient_scope`. Vehicle roles and feature gates still apply underneath.
       summary: The vehicle's image (members only)
       tags: [vehicles]
       responses:
+        '403': { $ref: '#/components/responses/Problem' }
+        '429': { $ref: '#/components/responses/RateLimited' }
         '200':
           description: Image bytes.
           content:
@@ -1657,6 +2153,13 @@ paths:
         '404': { $ref: '#/components/responses/Problem' }
     put:
       operationId: setVehicleImage
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [vehicle_settings.update]
+      description: >
+        API key access: the key must hold `vehicle_settings.update`. The vehicle must be in the key's selection: otherwise `404 vehicle_not_found`; a missing permission is `403 insufficient_scope`. Vehicle roles and feature gates still apply underneath.
       summary: Upload or replace the image (editor or owner). JPEG, PNG or WebP up to 5 MiB; the type is taken from the content
       tags: [vehicles]
       requestBody:
@@ -1666,6 +2169,7 @@ paths:
           image/png: { schema: { type: string, format: binary } }
           image/webp: { schema: { type: string, format: binary } }
       responses:
+        '429': { $ref: '#/components/responses/RateLimited' }
         '204': { description: Stored. }
         '401': { $ref: '#/components/responses/Problem' }
         '403': { $ref: '#/components/responses/Problem' }
@@ -1675,9 +2179,17 @@ paths:
         '422': { $ref: '#/components/responses/Problem' }
     delete:
       operationId: deleteVehicleImage
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [vehicle_settings.delete]
+      description: >
+        API key access: the key must hold `vehicle_settings.delete`. The vehicle must be in the key's selection: otherwise `404 vehicle_not_found`; a missing permission is `403 insufficient_scope`. Vehicle roles and feature gates still apply underneath.
       summary: Remove the image
       tags: [vehicles]
       responses:
+        '429': { $ref: '#/components/responses/RateLimited' }
         '204': { description: Removed. }
         '401': { $ref: '#/components/responses/Problem' }
         '403': { $ref: '#/components/responses/Problem' }
@@ -1687,18 +2199,33 @@ paths:
       - { $ref: '#/components/parameters/VehicleId' }
     get:
       operationId: exportVehicle
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [vehicle_info.read]
+        dynamic: [payload_sections]
       summary: Download the vehicle's purchases as CSV or as a versioned JSON document
-      description: Contains no ids, members or users. The JSON document also carries the vehicle's maintenance tasks (`maintenanceTasks`, with only vehicle-wide snoozes; personal snoozes are never exported) and service visits (`serviceVisits`, whose items point at tasks with `taskRef`) even while the Service module is off, each with its `attachments` embedded as base64 (`fileName`, `contentType`, `sha256`, `data`); a vehicle with many receipts therefore produces a large file (up to 10 files of 10 MiB per visit, about 4/3 of the stored size). CSV carries purchases only. Text cells that a spreadsheet could read as a formula are prefixed with an apostrophe.
+      description: >
+        Contains no ids, members or users. The JSON document also carries the vehicle's maintenance tasks (`maintenanceTasks`, with only vehicle-wide snoozes; personal snoozes are never exported) and service visits (`serviceVisits`, whose items point at tasks with `taskRef`) even while the Service module is off, each with its `attachments` embedded as base64 (`fileName`, `contentType`, `sha256`, `data`); a vehicle with many receipts therefore produces a large file (up to 10 files of 10 MiB per visit, about 4/3 of the stored size). CSV carries purchases only. Text cells that a spreadsheet could read as a formula are prefixed with an apostrophe.
+
+        API key access: the key must hold `vehicle_info.read` (the vehicle details are always included). A key's export contains only the sections it may read:
+        `fillUps` needs `fuel.read`; `serviceVisits` (with items and receipts) needs `service.read` and the Service module on; `maintenanceTasks` needs
+        `maintenance.read` and the Service module on. A section it may not read is left out entirely and named in `omittedSections` (an absent list never means "none");
+        a visit item's `taskRef` is dropped when the tasks section is left out. CSV is purchases only and needs `fuel.read` (`403 insufficient_scope`).
+        Exports are read-only, never recorded as key activity, and share the stricter per-key limit of imports and uploads.
       tags: [portability]
       parameters:
         - { name: format, in: query, required: true, schema: { type: string, enum: [csv, json] } }
       responses:
+        '429': { $ref: '#/components/responses/RateLimited' }
         '200':
           description: The export, as an attachment.
           content:
             text/csv: { schema: { type: string } }
             application/json: { schema: { $ref: '#/components/schemas/VehicleExport' } }
         '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
         '404': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
   /v1/vehicles/{vehicleId}/import:
@@ -1706,7 +2233,15 @@ paths:
       - { $ref: '#/components/parameters/VehicleId' }
     post:
       operationId: importIntoVehicle
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [vehicle_info.read]
+        dynamic: [payload_sections, preview_equals_commit]
       summary: Preview or commit an import of purchases (editor or owner)
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
       description: >
         `dryRun` defaults to true: the same statements run and are rolled back.
         A commit is all-or-nothing (`import_invalid` with the report when any
@@ -1714,6 +2249,19 @@ paths:
         same file twice changes nothing. JSON imports accept bodies up to 96 MiB so that embedded
         service attachments fit; each attachment is checked by magic bytes, `sha256` (when given),
         size and the per-visit file limit, and identical files within a visit are stored once.
+
+        Service visits may carry an `externalId` (the id the visit has in the source system; unique per vehicle). A visit whose `externalId` is already stored
+        is skipped when identical (counted in `duplicates`) and is a `conflict` when it differs (nothing is imported, `external_id_conflict`).
+        Without an `externalId` a session import keeps skipping a visit that looks the same (date, odometer, provider and items); an API key import never
+        skips it silently: it is listed under `serviceVisits.possibleDuplicates` and still imported, because two real visits on one day can look alike.
+
+        API key access: the key must hold `vehicle_info.read`, and the import is checked against everything it CONTAINS, dry run included: `fuel.create` for
+        purchases, `service.create` for visits, items and receipts (and the Service module on), `maintenance.create` for tasks, `maintenance.read` for items that
+        link a task. If anything is missing the whole request is refused: `403 insufficient_scope` listing every missing grant in `missing`; nothing is written.
+        A dry run returns a `previewToken` (valid 15 minutes, once) bound to the key, this vehicle and the exact payload. The commit (`dryRun` false) must send that
+        token with the identical `format` and `data`, else `409 preview_required`, `preview_mismatch` or `preview_expired`. Grants, role and module gates are checked
+        again at commit and the commit is atomic. A dry run writes no records and no audit; a commit is recorded in the key's activity as a summary and as the ids of
+        every record it created. `Idempotency-Key` makes a retried commit return the first report.
       tags: [portability]
       requestBody:
         required: true
@@ -1727,7 +2275,9 @@ paths:
                 format: { type: string, enum: [csv, json] }
                 data: { description: CSV text, or a VehicleExport document. }
                 dryRun: { type: boolean, default: true }
+                previewToken: { type: string, description: API keys only. The `previewToken` of a dry run of this exact request; required when committing. }
       responses:
+        '429': { $ref: '#/components/responses/RateLimited' }
         '200':
           description: Report.
           content:
@@ -1742,7 +2292,20 @@ paths:
   /v1/vehicle-imports:
     post:
       operationId: importNewVehicle
+      security:
+        - session: []
+        - apiKey: []
+      x-driveloom-key-policy:
+        requires: [vehicle_create.create]
+        dynamic: [payload_sections, preview_equals_commit]
       summary: Create a vehicle owned by the caller from a JSON export
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      description: >
+        API key access: the key must hold `vehicle_create.create` and, for every section the file contains, that section's write grant (`fuel.create`, `service.create`
+        with the Service module on, `maintenance.create`, `maintenance.read` for linked items); otherwise the whole request, a dry run included, is `403 insufficient_scope`
+        with every missing grant in `missing`. Preview binding, idempotency and activity recording work as on the import into an existing vehicle (the preview target
+        is "a new vehicle"). The new vehicle joins the key's scope only in the `all_current_future` mode; with any other mode the key cannot read it afterwards.
       tags: [portability]
       requestBody:
         required: true
@@ -1755,13 +2318,17 @@ paths:
               properties:
                 data: { $ref: '#/components/schemas/VehicleExport' }
                 dryRun: { type: boolean, default: true }
+                previewToken: { type: string, description: API keys only. The `previewToken` of a dry run of this exact request; required when committing. }
       responses:
+        '429': { $ref: '#/components/responses/RateLimited' }
         '200':
           description: Report; includes the new vehicle when committed.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ImportReport' }
         '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '409': { $ref: '#/components/responses/Problem' }
         '413': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
   /v1/admin/users:
@@ -1962,6 +2529,46 @@ paths:
         '403': { $ref: '#/components/responses/Problem' }
         '404': { $ref: '#/components/responses/Problem' }
         '422': { $ref: '#/components/responses/Problem' }
+  /v1/admin/settings/api-keys:
+    get:
+      operationId: adminGetApiKeysSetting
+      summary: Whether API keys are enabled on this instance
+      description: 'Enabled by default (also on existing installs).'
+      tags: [admin]
+      responses:
+        '200':
+          description: The setting.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiKeysSetting' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+    put:
+      operationId: adminSetApiKeysSetting
+      summary: Turn API keys on or off for the whole instance
+      description: >
+        Off blocks API-key authentication, creation, rotation and edits that broaden a key; owners can still list, review activity, revoke and reduce.
+        Turning it on again resumes only keys that are still valid. Audited as `admin.api_keys_changed`.
+      tags: [admin]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              additionalProperties: false
+              properties:
+                enabled: { type: boolean }
+      responses:
+        '200':
+          description: The updated setting.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiKeysSetting' }
+        '401': { $ref: '#/components/responses/Problem' }
+        '403': { $ref: '#/components/responses/Problem' }
+        '422': { $ref: '#/components/responses/Problem' }
   /v1/admin/settings/smtp:
     get:
       operationId: adminGetSmtpSettings
@@ -2107,6 +2714,13 @@ paths:
         '422': { $ref: '#/components/responses/Problem' }
 components:
   securitySchemes:
+    apiKey:
+      type: http
+      scheme: bearer
+      bearerFormat: dlk
+      description: >
+        A personal API key (`dlk_` followed by 43 URL-safe characters), sent as `Authorization: Bearer <key>`. Create and manage keys
+        under Account and security or with `/v1/auth/api-keys` (session only). Never put a key in a URL.
     session:
       type: apiKey
       in: cookie
@@ -2115,6 +2729,18 @@ components:
         HttpOnly, SameSite=Lax session cookie issued by sign-in. A session in
         state `mfa_required` is accepted only by `/v1/auth/mfa/totp` and `/v1/auth/mfa/email`.
   parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: >
+        A client-chosen unique value (1 to 255 printable characters, no spaces) that makes a create safe to retry. Honoured for API keys
+        (ignored for sessions). Same key and same request: the first outcome is returned again with `Idempotent-Replayed: true` and nothing
+        is written twice, even when the retries arrive at the same moment. Same key and a different request: `409 idempotency_conflict`.
+        Only successful outcomes are remembered, for 48 hours, and a replay returns the original response even if the created resource was deleted
+        in the meantime (nothing is recreated). The server stores only a SHA-256 of the value. A retry is answered only if the key still passes every check
+        (active, in scope, granted, role); otherwise it fails like any other request.
+      schema: { type: string, minLength: 1, maxLength: 255, pattern: '^[\x21-\x7e]+$' }
     VehicleId:
       name: vehicleId
       in: path
@@ -2123,6 +2749,13 @@ components:
   responses:
     Problem:
       description: 'Error in RFC 9457 problem details form.'
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/Problem' }
+    RateLimited:
+      description: 'Too many requests (`rate_limited`). Wait `Retry-After` seconds.'
+      headers:
+        Retry-After: { schema: { type: integer, minimum: 1 }, description: Seconds until the limit window ends. }
       content:
         application/problem+json:
           schema: { $ref: '#/components/schemas/Problem' }
@@ -2309,8 +2942,9 @@ components:
             selected: { type: boolean, description: Always true for the owner. }
             optedOut: { type: boolean }
             receiving: { type: boolean, description: '`emailEnabled && eligible && selected && !optedOut` (emails still need SMTP).' }
+        otherRecipientCount: { type: integer, description: 'Only in responses to an API key: how many other recipients exist (they are not listed).' }
         recipients:
-          description: Owner and managers only; null for other members. Members whose role can receive emails.
+          description: Owner and managers only; null for other members. Members whose role can receive emails. For an API key only the caller's own entry.
           oneOf:
             - type: array
               items:
@@ -2384,6 +3018,109 @@ components:
               last_seen_at: { $ref: '#/components/schemas/Timestamp' }
               user_agent: { type: string }
               current: { type: boolean }
+    ApiKeyModuleLevels:
+      type: object
+      description: >
+        A level per module; a module not listed is `none`. Only levels a module offers are accepted: `vehicle_info` and `statistics` read; `vehicle_settings` read_write or full;
+        `notifications` read or read_write; `fuel`, `service` and `maintenance` read, read_write or full. read_write covers read, create and update; full adds delete.
+        Vehicle creation is the separate boolean `vehicleCreate`.
+      additionalProperties: false
+      properties:
+        vehicle_info: { type: string, enum: [none, read] }
+        vehicle_settings: { type: string, enum: [none, read_write, full] }
+        fuel: { type: string, enum: [none, read, read_write, full] }
+        service: { type: string, enum: [none, read, read_write, full] }
+        maintenance: { type: string, enum: [none, read, read_write, full] }
+        notifications: { type: string, enum: [none, read, read_write] }
+        statistics: { type: string, enum: [none, read] }
+    ApiKeyExpiry:
+      type: string
+      enum: ['24h', '7d', '30d', '90d', '365d', never]
+      description: 'Computed by the server from now, in UTC. Default 30d.'
+    ApiKeyVehicleMode:
+      type: string
+      enum: [selected, all_current, all_current_future]
+      description: >
+        `selected`: only the listed vehicles. `all_current`: a snapshot of the vehicles the caller can access when granted. `all_current_future`: every vehicle the caller can
+        access, now and in the future (dynamic; broad). Current roles always apply.
+    CreateApiKeyRequest:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 60, description: 'Trimmed.' }
+        expiresIn: { $ref: '#/components/schemas/ApiKeyExpiry' }
+        permissions: { $ref: '#/components/schemas/ApiKeyModuleLevels' }
+        vehicleCreate: { type: boolean, default: false }
+        vehicleMode: { $ref: '#/components/schemas/ApiKeyVehicleMode' }
+        vehicleIds: { type: array, maxItems: 200, items: { $ref: '#/components/schemas/Id' }, description: 'Only with `selected`; vehicles the caller can currently access.' }
+    UpdateApiKeyRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 60 }
+        expiresIn: { $ref: '#/components/schemas/ApiKeyExpiry' }
+        permissions: { $ref: '#/components/schemas/ApiKeyModuleLevels' }
+        vehicleCreate: { type: boolean }
+        vehicleMode: { $ref: '#/components/schemas/ApiKeyVehicleMode' }
+        vehicleIds: { type: array, maxItems: 200, items: { $ref: '#/components/schemas/Id' } }
+    ApiKey:
+      type: object
+      required: [id, name, prefix, status, createdAt, updatedAt, lastUsedAt, expiresAt, rotatedAt, revokedAt, vehicleMode, vehicleIds, permissions, vehicleCreate]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        name: { type: string }
+        prefix: { type: string, description: 'The first 12 characters of the token, for recognising it. Not a secret.' }
+        status: { type: string, enum: [active, expired, revoked] }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        lastUsedAt: { type: [string, 'null'], format: date-time }
+        expiresAt: { type: [string, 'null'], format: date-time, description: 'null means the key never expires.' }
+        rotatedAt: { type: [string, 'null'], format: date-time }
+        revokedAt: { type: [string, 'null'], format: date-time }
+        vehicleMode: { $ref: '#/components/schemas/ApiKeyVehicleMode' }
+        vehicleIds: { type: array, items: { $ref: '#/components/schemas/Id' }, description: 'The selection or snapshot; always empty for `all_current_future`.' }
+        permissions: { $ref: '#/components/schemas/ApiKeyModuleLevels' }
+        vehicleCreate: { type: boolean }
+    ApiKeyWithToken:
+      allOf:
+        - { $ref: '#/components/schemas/ApiKey' }
+        - type: object
+          required: [token]
+          properties:
+            token: { type: string, description: 'The secret, `dlk_` followed by 43 characters. Shown only in this response; store it now.' }
+    ApiKeyList:
+      type: object
+      required: [items, apiKeysEnabled, maxActiveKeys]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/ApiKey' } }
+        apiKeysEnabled: { type: boolean, description: 'False while an administrator has turned API keys off.' }
+        maxActiveKeys: { type: integer, examples: [25] }
+    ApiKeyActivity:
+      type: object
+      required: [id, occurredAt, action, keyName, targetType, targetIds, vehicleId, requestId, metadata, redacted]
+      properties:
+        id: { $ref: '#/components/schemas/Id' }
+        occurredAt: { type: string, format: date-time }
+        action: { type: string, description: 'created, updated, rotated, revoked, revoked_all, removed, or a write made with the key.' }
+        keyName: { type: string, description: 'The key''s name when the event happened.' }
+        targetType: { type: [string, 'null'] }
+        targetIds: { type: array, items: { $ref: '#/components/schemas/Id' } }
+        vehicleId: { type: [string, 'null'], format: uuid }
+        requestId: { type: [string, 'null'] }
+        metadata: { type: object, additionalProperties: true, description: 'Small, safe outcome details. Never tokens or payloads.' }
+        redacted: { type: boolean }
+    ApiKeyActivityPage:
+      type: object
+      required: [items, nextBefore]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/ApiKeyActivity' } }
+        nextBefore: { type: [string, 'null'], format: uuid, description: 'Pass as `before` for the next page; null at the end.' }
+    ApiKeysSetting:
+      type: object
+      required: [enabled]
+      properties:
+        enabled: { type: boolean }
     RevokedCount:
       type: object
       required: [revoked]
@@ -2493,7 +3230,38 @@ components:
         title: { type: string }
         status: { type: integer }
         detail: { type: string }
-        code: { type: string, description: Machine-readable error code. }
+        code:
+          type: string
+          description: >
+            Machine-readable error code. Added with API keys: `invalid_api_key` (401), `api_key_not_allowed`, `insufficient_scope`,
+            `api_keys_disabled`, `https_required` (403), `rate_limited` (429).
+        required: { type: string, description: 'With `insufficient_scope`: the missing permission, e.g. `service.delete`.' }
+    Me:
+      type: object
+      required: [user, authMethod, apiKey]
+      description: Minimal identity. No email address, roles or vehicle names.
+      properties:
+        user:
+          type: object
+          required: [id, displayName]
+          properties:
+            id: { $ref: '#/components/schemas/Id' }
+            displayName: { type: string }
+        authMethod: { type: string, enum: [session, api_key] }
+        apiKey:
+          description: Null for a session. For a key, its configuration (not what its owner could do with a session).
+          oneOf:
+            - type: 'null'
+            - type: object
+              required: [id, name, permissions, vehicleMode, vehicleIds, vehicleCreate, expiresAt]
+              properties:
+                id: { $ref: '#/components/schemas/Id' }
+                name: { type: string }
+                permissions: { type: object, additionalProperties: { type: string, enum: [read, read_write, full] }, description: 'Level per module; modules at `none` are omitted.' }
+                vehicleMode: { type: string, enum: [selected, all_current, all_current_future] }
+                vehicleIds: { type: array, items: { $ref: '#/components/schemas/Id' }, description: 'The stored selection (empty for `all_current_future`). Membership is checked on every request.' }
+                vehicleCreate: { type: boolean }
+                expiresAt: { oneOf: [{ $ref: '#/components/schemas/Timestamp' }, { type: 'null' }] }
     EconomyUnit:
       type: string
       enum: [l_per_100km, km_per_l, mpg_us, mpg_imp]
@@ -2732,6 +3500,7 @@ components:
         diy: { type: boolean, default: false, description: Done by the owner rather than a workshop. }
         totalCost: { oneOf: [{ $ref: '#/components/schemas/Decimal' }, { type: 'null' }], description: Whole-visit cost in the vehicle's currency. Null or absent is unknown; "0" is a known zero. It is not checked against item costs. }
         notes: { type: [string, 'null'], maxLength: 2000 }
+        externalId: { type: [string, 'null'], maxLength: 200, description: "The id this visit has in the system it came from. Unique per vehicle; a second visit with the same value is `409 external_id_conflict` (on import it is skipped when identical and a conflict when different)." }
         items: { type: array, minItems: 1, maxItems: 50, items: { $ref: '#/components/schemas/ServiceItemInput' } }
     ServiceVisitExport:
       type: object
@@ -2745,6 +3514,7 @@ components:
         diy: { type: boolean, default: false, description: Done by the owner rather than a workshop. }
         totalCost: { oneOf: [{ $ref: '#/components/schemas/Decimal' }, { type: 'null' }], description: Whole-visit cost in the vehicle's currency. Null or absent is unknown; "0" is a known zero. It is not checked against item costs. }
         notes: { type: [string, 'null'], maxLength: 2000 }
+        externalId: { type: [string, 'null'], maxLength: 200, description: "The id this visit has in the system it came from. Unique per vehicle; a second visit with the same value is `409 external_id_conflict` (on import it is skipped when identical and a conflict when different)." }
         items: { type: array, minItems: 1, maxItems: 50, items: { $ref: '#/components/schemas/ServiceItemExport' } }
         attachments: { type: array, maxItems: 10, items: { $ref: '#/components/schemas/ServiceExportAttachment' } }
     ServiceVisitPatch:
@@ -2758,6 +3528,7 @@ components:
         diy: { type: boolean }
         totalCost: { oneOf: [{ $ref: '#/components/schemas/Decimal' }, { type: 'null' }] }
         notes: { type: [string, 'null'], maxLength: 2000 }
+        externalId: { type: [string, 'null'], maxLength: 200, description: "The id this visit has in the system it came from. Unique per vehicle; a second visit with the same value is `409 external_id_conflict` (on import it is skipped when identical and a conflict when different)." }
         items: { type: array, minItems: 1, maxItems: 50, items: { $ref: '#/components/schemas/ServiceItemInput' } }
     ServiceAttachment:
       type: object
@@ -2771,7 +3542,7 @@ components:
         createdAt: { $ref: '#/components/schemas/Timestamp' }
     ServiceVisit:
       type: object
-      required: [id, vehicleId, servicedOn, odometer, display, provider, diy, totalCost, currency, notes, items, attachments, createdBy, createdAt, updatedAt]
+      required: [id, vehicleId, servicedOn, odometer, display, provider, diy, totalCost, currency, notes, externalId, items, attachments, createdBy, createdAt, updatedAt]
       properties:
         id: { $ref: '#/components/schemas/Id' }
         vehicleId: { $ref: '#/components/schemas/Id' }
@@ -2787,6 +3558,7 @@ components:
         totalCost: { oneOf: [{ $ref: '#/components/schemas/Decimal' }, { type: 'null' }] }
         currency: { $ref: '#/components/schemas/CurrencyCode' }
         notes: { type: [string, 'null'] }
+        externalId: { type: [string, 'null'], maxLength: 200 }
         items: { type: array, items: { $ref: '#/components/schemas/ServiceItem' } }
         attachments: { type: array, maxItems: 10, items: { $ref: '#/components/schemas/ServiceAttachment' } }
         createdBy: { oneOf: [{ $ref: '#/components/schemas/Id' }, { type: 'null' }] }
@@ -3286,7 +4058,7 @@ components:
               vehicles: { type: array, items: { $ref: '#/components/schemas/ComparedVehicle' } }
     VehicleExport:
       type: object
-      required: [format, version, vehicle, fillUps]
+      required: [format, version, vehicle]
       properties:
         format: { type: string, const: driveloom.vehicle }
         version: { type: integer, const: 1 }
@@ -3303,7 +4075,11 @@ components:
             year: { type: [integer, 'null'] }
             odometerUnit: { $ref: '#/components/schemas/DistanceUnit' }
             currency: { $ref: '#/components/schemas/CurrencyCode' }
-        fillUps: { type: array, maxItems: 5000, items: { $ref: '#/components/schemas/FillUpInput' } }
+        fillUps: { type: array, maxItems: 5000, items: { $ref: '#/components/schemas/FillUpInput' }, description: Required, except in a scoped export that lists `fillUps` in `omittedSections`. }
+        omittedSections:
+          type: array
+          items: { type: string, enum: [fillUps, serviceVisits, maintenanceTasks] }
+          description: Only in an export made with an API key. Sections left out because the key may not read them (or the Service module is off); they are absent from the document, which is then not a complete copy. Never present in session exports.
         maintenanceTasks: { type: array, maxItems: 200, items: { $ref: '#/components/schemas/MaintenanceTaskExport' }, description: Optional, added without a version bump; older files lack it. Always exported, and imported when present, regardless of the Service module switch. An identical task already on the vehicle is skipped and reused for `taskRef` links. }
         serviceVisits: { type: array, maxItems: 5000, items: { $ref: '#/components/schemas/ServiceVisitExport' }, description: Optional, added without a version bump; older files lack it. Always exported, and imported when present, regardless of the Service module switch. }
     ImportReport:
@@ -3340,6 +4116,28 @@ components:
             created: { type: integer }
             duplicates: { type: integer }
             invalid: { type: integer }
+            conflicts: { type: integer, description: Visits whose `externalId` exists with different content (also counted in `invalid`); present only when above 0. }
+            possibleDuplicates:
+              type: array
+              description: Imported visits that look like a stored one (same date, odometer, provider and items) and were not skipped. Present only when there are some.
+              items:
+                type: object
+                required: [row, visitId]
+                properties:
+                  row: { type: integer }
+                  visitId: { $ref: '#/components/schemas/Id', description: The stored visit it resembles. }
+            records:
+              type: array
+              maxItems: 100
+              description: The outcome of each visit that carried an `externalId`.
+              items:
+                type: object
+                required: [row, externalId, outcome, visitId]
+                properties:
+                  row: { type: integer }
+                  externalId: { type: string }
+                  outcome: { type: string, enum: [created, duplicate, conflict] }
+                  visitId: { $ref: '#/components/schemas/Id' }
         maintenanceTasks:
           type: object
           description: Present when the JSON file carried `maintenanceTasks`; failures are also counted in `summary.invalid`.
@@ -3349,6 +4147,8 @@ components:
             created: { type: integer }
             duplicates: { type: integer }
             invalid: { type: integer }
+        previewToken: { type: string, description: Only on a dry run made with an API key that found nothing invalid. Send it as `previewToken` to commit exactly this payload. Valid for 15 minutes, usable once. }
+        previewExpiresAt: { $ref: '#/components/schemas/Timestamp' }
     AdminUser:
       type: object
       required: [id, email, displayName, instanceRole, status, createdAt, ownedVehicleCount]

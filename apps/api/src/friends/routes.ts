@@ -1,10 +1,10 @@
 // HTTP routes for friends and aggregate comparison. Authorization lives in FriendService.
 import type { HttpRequest, Route } from '../http/app.ts';
-import { requirePrincipal } from '../identity.ts';
+import { requireSessionPrincipal } from '../identity.ts';
 import type { FriendService } from './service.ts';
 
 export function friendRoutes(svc: FriendService): Route[] {
-  const who = (r: HttpRequest) => requirePrincipal(r.ctx);
+  const who = (r: HttpRequest) => requireSessionPrincipal(r.ctx);
   return [
     { method: 'GET', path: '/v1/friends', async handler(r) { return { status: 200, body: await svc.list(who(r)) }; } },
     { method: 'POST', path: '/v1/friends', async handler(r) { return { status: 200, body: await svc.request(who(r), r.body) }; } },

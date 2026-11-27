@@ -1,6 +1,6 @@
 import { uuidv7 } from '../ids.ts';
 import type { Id } from '../types.ts';
-import type { InstanceRole, Principal } from '../identity.ts';
+import { AuthError, type InstanceRole, type Principal, type SessionPrincipal } from '../identity.ts';
 import type { Authenticator, SessionInfo } from '../http/app.ts';
 import { HttpProblem } from '../http/problem.ts';
 import { randomToken, sha256Hex } from './crypto.ts';
@@ -31,16 +31,20 @@ export function authenticator(ctx: AuthContext): Authenticator {
       const r = rows[0];
       if (!r) return null;
       if (now.getTime() - r.last_seen_at.getTime() > 60_000) await ctx.db.query('UPDATE sessions SET last_seen_at = $2 WHERE id = $1', [r.id, now]);
-      const principal: Principal | null = r.state === 'active'
-        ? { userId: r.user_id, sessionId: r.id, instanceRole: r.instance_role, authenticatedAt: r.authenticated_at }
+      const principal: SessionPrincipal | null = r.state === 'active'
+        ? { kind: 'session', userId: r.user_id, sessionId: r.id, instanceRole: r.instance_role, authenticatedAt: r.authenticated_at }
         : null;
       return { principal, sessionId: r.id, userId: r.user_id, csrfToken: r.csrf_token, pending: r.state === 'pending' } satisfies SessionInfo;
     },
   };
 }
 
-/** Throws reauth_required unless the session completed a sign-in or reauth recently. */
-export function requireFresh(ctx: AuthContext, p: Principal): void {
+/**
+ * Throws reauth_required unless the session completed a sign-in or reauth recently.
+ * An API key has no sign-in to refresh, so it is refused outright (403 api_key_not_allowed).
+ */
+export function requireFresh(ctx: AuthContext, p: Principal): asserts p is SessionPrincipal {
+  if (p.kind !== 'session') throw new AuthError('api_key_not_allowed');
   if (ctx.now().getTime() - p.authenticatedAt.getTime() > ctx.config.reauthWindowMs) throw new HttpProblem(403, 'reauth_required', 'Recent authentication required');
 }
 
@@ -55,9 +59,9 @@ export async function revokeSession(ctx: AuthContext, userId: Id, sessionId: Id)
 }
 
 /** Revoke every session of a user, optionally keeping one. Returns the number revoked. */
-export async function revokeAll(ctx: AuthContext, userId: Id, except: Id | null, reason: string): Promise<number> {
-  const r = await ctx.db.query('UPDATE sessions SET revoked_at = $3 WHERE user_id = $1 AND revoked_at IS NULL AND ($2::uuid IS NULL OR id <> $2)', [userId, except, ctx.now()]);
-  if (r.rowCount) await audit(ctx.db, userId, 'session.revoked_all', userId, { reason, count: r.rowCount }, ctx.now());
+export async function revokeAll(ctx: AuthContext, userId: Id, except: Id | null, reason: string, q: Pick<AuthContext['db'], 'query'> = ctx.db): Promise<number> {
+  const r = await q.query('UPDATE sessions SET revoked_at = $3 WHERE user_id = $1 AND revoked_at IS NULL AND ($2::uuid IS NULL OR id <> $2)', [userId, except, ctx.now()]);
+  if (r.rowCount) await audit(q, userId, 'session.revoked_all', userId, { reason, count: r.rowCount }, ctx.now());
   return r.rowCount ?? 0;
 }
 

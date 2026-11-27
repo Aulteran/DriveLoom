@@ -82,6 +82,8 @@ jobs:
           curl -fsS http://127.0.0.1:8080/v1/health
           curl -fsS http://127.0.0.1:8080/v1/version
           curl -fsS http://127.0.0.1:8080/ | grep -q 'src="/js/boot.js"'
+          curl -fsS http://127.0.0.1:8080/openapi.json | grep -q '"openapi"'
+          curl -fsS http://127.0.0.1:8080/docs/ | grep -qi '<title>'
       - name: Backup round trip inside the container
         run: |
           docker compose -f deploy/compose.yml exec -T app node scripts/backup.ts create /tmp/ci.dl-backup

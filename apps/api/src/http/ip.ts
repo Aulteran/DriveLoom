@@ -33,3 +33,29 @@ export function clientIp(peer: string, xff: string | string[] | undefined, trust
   }
   return peerAddr;
 }
+
+/** 127.0.0.0/8, ::1 and their IPv4-mapped forms. */
+export function isLoopback(addr: string): boolean {
+  const a = addr.replace(/^::ffff:/, '');
+  const v = isIP(a);
+  return (v === 4 && a.startsWith('127.')) || (v === 6 && a === '::1');
+}
+
+/**
+ * Whether a request may carry a bearer credential: the connection itself is TLS, or the direct peer is a
+ * configured trusted proxy that says it terminated TLS (the last X-Forwarded-Proto value is `https`; that
+ * header from anyone else is ignored), or the client is on loopback (local development, or a proxy on the
+ * same host that forwards nothing about a remote client). Plain HTTP from a remote client is refused.
+ */
+export function bearerTransportAllowed(
+  c: { encrypted: boolean; peer: string; forwardedFor: string | string[] | undefined; forwardedProto: string | string[] | undefined },
+  trust: IpTrust,
+): boolean {
+  if (c.encrypted) return true;
+  const peer = c.peer.replace(/^::ffff:/, '');
+  if (trust.isTrusted(peer)) {
+    const protos = (Array.isArray(c.forwardedProto) ? c.forwardedProto.join(',') : c.forwardedProto ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+    if (protos[protos.length - 1] === 'https') return true;
+  }
+  return isLoopback(clientIp(c.peer, c.forwardedFor, trust));
+}

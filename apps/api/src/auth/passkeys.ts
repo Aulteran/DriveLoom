@@ -7,7 +7,7 @@ import {
 import { HttpProblem } from '../http/problem.ts';
 import { uuidv7 } from '../ids.ts';
 import type { Id } from '../types.ts';
-import type { Principal } from '../identity.ts';
+import type { SessionPrincipal } from '../identity.ts';
 import { audit, problem, rateLimit, type AuthContext } from './context.ts';
 import { createSession, requireFresh } from './sessions.ts';
 import { removeGuarded, type SignIn } from './accounts.ts';
@@ -32,7 +32,7 @@ function consumer(ctx: AuthContext, kind: 'webauthn_register' | 'webauthn_login'
 
 const userHandle = (id: Id) => Buffer.from(id.replace(/-/g, ''), 'hex');
 
-export async function registerOptions(ctx: AuthContext, p: Principal) {
+export async function registerOptions(ctx: AuthContext, p: SessionPrincipal) {
   requireFresh(ctx, p);
   const [{ rows: u }, { rows: existing }] = await Promise.all([
     ctx.db.query<{ email: string; display_name: string }>('SELECT email, display_name FROM users WHERE id = $1', [p.userId]),
@@ -48,7 +48,7 @@ export async function registerOptions(ctx: AuthContext, p: Principal) {
   return options;
 }
 
-export async function registerVerify(ctx: AuthContext, p: Principal, response: unknown, label: unknown): Promise<{ id: Id }> {
+export async function registerVerify(ctx: AuthContext, p: SessionPrincipal, response: unknown, label: unknown): Promise<{ id: Id }> {
   requireFresh(ctx, p);
   await rateLimit(ctx, `passkey:acct:${p.userId}`, 20, TEN_MIN);
   let v;
@@ -108,5 +108,5 @@ export async function loginVerify(ctx: AuthContext, response: unknown, meta: Met
   return { session, userId: pk.user_id, mfaRequired: false };
 }
 
-export const remove = (ctx: AuthContext, p: Principal, id: Id) =>
+export const remove = (ctx: AuthContext, p: SessionPrincipal, id: Id) =>
   removeGuarded(ctx, p, async (tx) => (await tx.query('DELETE FROM passkeys WHERE id = $1 AND user_id = $2', [id, p.userId])).rowCount ?? 0, 'credential.passkey_removed', { passkey: id });

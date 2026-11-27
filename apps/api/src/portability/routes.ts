@@ -1,4 +1,5 @@
-// HTTP routes for vehicle export and import. Authorization lives in PortabilityService.
+// HTTP routes for vehicle export and import. Authorization lives in PortabilityService: a key's payload sections are enforced there.
+import { idemFrom, idemHeaders } from '../auth/idempotency.ts';
 import type { HttpRequest, Route } from '../http/app.ts';
 import { requirePrincipal } from '../identity.ts';
 import { MAX_IMPORT_JSON_BYTES, type PortabilityService } from './service.ts';
@@ -11,10 +12,14 @@ export function portabilityRoutes(svc: PortabilityService): Route[] {
       return { status: 200, raw: { data: out.data, contentType: out.contentType }, headers: { 'content-disposition': `attachment; filename="${out.filename}"` } };
     } },
     { method: 'POST', path: '/v1/vehicles/:vehicleId/import', maxBodyBytes: MAX_IMPORT_JSON_BYTES, async handler(r) {
-      return { status: 200, body: await svc.importInto(who(r), r.params['vehicleId'], r.body) };
+      const idem = idemFrom(r.headers, who(r));
+      const body = await svc.importInto(who(r), r.params['vehicleId'], r.body, idem);
+      return { status: idem.status ?? 200, body, headers: idemHeaders(idem) };
     } },
     { method: 'POST', path: '/v1/vehicle-imports', maxBodyBytes: MAX_IMPORT_JSON_BYTES, async handler(r) {
-      return { status: 200, body: await svc.importNew(who(r), r.body) };
+      const idem = idemFrom(r.headers, who(r));
+      const body = await svc.importNew(who(r), r.body, idem);
+      return { status: idem.status ?? 200, body, headers: idemHeaders(idem) };
     } },
   ];
 }

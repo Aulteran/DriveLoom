@@ -10,7 +10,7 @@ import { uuidv7 } from '../src/ids.ts';
 
 const user: TestUser = (() => {
   const id = uuidv7();
-  const principal = { userId: id, sessionId: uuidv7(), instanceRole: 'user' as const, authenticatedAt: new Date() };
+  const principal = { kind: 'session' as const, userId: id, sessionId: uuidv7(), instanceRole: 'user' as const, authenticatedAt: new Date() };
   return { id, email: 'a@example.test', role: 'user', principal, ctx: { principal } };
 })();
 

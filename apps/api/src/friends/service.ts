@@ -13,13 +13,14 @@ import { Dec } from '../decimal.ts';
 import { HttpProblem } from '../http/problem.ts';
 import { bool, invalid, obj } from '../http/validate.ts';
 import { isUuid, uuidv7 } from '../ids.ts';
-import type { Principal } from '../identity.ts';
+import type { SessionPrincipal } from '../identity.ts';
 import { getPreferences } from '../preferences.ts';
 import type { Id } from '../types.ts';
 import { currencyScale, distanceUnitOf, fromKm } from '../units.ts';
 import type { FuelService } from '../fuel/service.ts';
 import type { VehicleService } from '../vehicles/service.ts';
 import { canManageComparison } from '../vehicles/permissions.ts';
+import { auditAs } from '../audit.ts';
 
 export const WINDOWS = { '30d': 30, '90d': 90, '365d': 365, all: null } as const;
 export type WindowKey = keyof typeof WINDOWS;
@@ -36,13 +37,12 @@ export class FriendService {
     this.#pool = pool; this.#vehicles = vehicles; this.#fuel = fuel; this.#now = now;
   }
 
-  async #audit(q: Pick<pg.Pool, 'query'>, actor: Id, action: string, subjectType: 'user' | 'vehicle', subjectId: Id, details: Record<string, unknown> = {}) {
-    await q.query('INSERT INTO audit_events (id, actor_id, action, subject_type, subject_id, details) VALUES ($1,$2,$3,$4,$5,$6)',
-      [uuidv7(), actor, action, subjectType, subjectId, JSON.stringify(details)]);
+  async #audit(q: Pick<pg.Pool, 'query'>, p: SessionPrincipal, action: string, subjectType: 'user' | 'vehicle', subjectId: Id, details: Record<string, unknown> = {}) {
+    await auditAs(q, p, { action, subjectType, subjectId, details });
   }
 
   /** Ask another user of this instance, by email. If they already asked you, this accepts. */
-  async request(p: Principal, body: unknown): Promise<{ status: 'pending' | 'accepted' }> {
+  async request(p: SessionPrincipal, body: unknown): Promise<{ status: 'pending' | 'accepted' }> {
     const { email } = obj(body, ['email']);
     if (typeof email !== 'string' || !email.trim()) throw invalid('email is required.');
     const u = (await this.#pool.query<{ id: Id }>("SELECT id FROM users WHERE email = lower(btrim($1)) AND status = 'active'", [email])).rows[0];
@@ -51,17 +51,17 @@ export class FriendService {
     const out = await this.#pool.query("SELECT count(*)::int AS n FROM friendships WHERE requester_id = $1 AND status = 'pending'", [p.userId]);
     if (out.rows[0].n >= MAX_PENDING_OUT) throw new HttpProblem(429, 'too_many_requests', 'Too many pending friend requests');
     const ins = await this.#pool.query('INSERT INTO friendships (id, requester_id, addressee_id) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING', [uuidv7(), p.userId, u.id]);
-    if (ins.rowCount) { await this.#audit(this.#pool, p.userId, 'friend.request', 'user', u.id); return { status: 'pending' }; }
+    if (ins.rowCount) { await this.#audit(this.#pool, p, 'friend.request', 'user', u.id); return { status: 'pending' }; }
     // A relationship already exists. If the other side asked first, asking back is acceptance.
     const acc = await this.#pool.query(
       "UPDATE friendships SET status = 'accepted', accepted_at = $3 WHERE requester_id = $2 AND addressee_id = $1 AND status = 'pending'", [p.userId, u.id, this.#now()]);
-    if (acc.rowCount) { await this.#audit(this.#pool, p.userId, 'friend.accept', 'user', u.id); return { status: 'accepted' }; }
+    if (acc.rowCount) { await this.#audit(this.#pool, p, 'friend.accept', 'user', u.id); return { status: 'accepted' }; }
     const cur = await this.#pool.query<{ status: 'pending' | 'accepted' }>(
       'SELECT status FROM friendships WHERE LEAST(requester_id, addressee_id) = LEAST($1::uuid, $2::uuid) AND GREATEST(requester_id, addressee_id) = GREATEST($1::uuid, $2::uuid)', [p.userId, u.id]);
     return { status: cur.rows[0]?.status ?? 'pending' };
   }
 
-  async list(p: Principal) {
+  async list(p: SessionPrincipal) {
     const { rows } = await this.#pool.query<{ id: Id; status: string; mine: boolean; other_id: Id; display_name: string; email: string; created_at: Date; accepted_at: Date | null }>(
       `SELECT f.id, f.status, f.requester_id = $1 AS mine, u.id AS other_id, u.display_name, u.email, f.created_at, f.accepted_at
          FROM friendships f JOIN users u ON u.id = CASE WHEN f.requester_id = $1 THEN f.addressee_id ELSE f.requester_id END
@@ -75,31 +75,31 @@ export class FriendService {
   }
 
   /** Only the person who was asked can accept. */
-  async accept(p: Principal, friendshipId: unknown): Promise<void> {
+  async accept(p: SessionPrincipal, friendshipId: unknown): Promise<void> {
     if (!isUuid(friendshipId)) throw notFound();
     const r = await this.#pool.query<{ requester_id: Id }>(
       "UPDATE friendships SET status = 'accepted', accepted_at = $3 WHERE id = $1 AND addressee_id = $2 AND status = 'pending' RETURNING requester_id", [friendshipId, p.userId, this.#now()]);
     if (!r.rows[0]) throw notFound();
-    await this.#audit(this.#pool, p.userId, 'friend.accept', 'user', r.rows[0].requester_id);
+    await this.#audit(this.#pool, p, 'friend.accept', 'user', r.rows[0].requester_id);
   }
 
   /** Decline, cancel or unfriend: either side removes the relationship, and with it all comparison access. */
-  async remove(p: Principal, friendshipId: unknown): Promise<void> {
+  async remove(p: SessionPrincipal, friendshipId: unknown): Promise<void> {
     if (!isUuid(friendshipId)) throw notFound();
     const r = await this.#pool.query<{ requester_id: Id; addressee_id: Id }>(
       'DELETE FROM friendships WHERE id = $1 AND (requester_id = $2 OR addressee_id = $2) RETURNING requester_id, addressee_id', [friendshipId, p.userId]);
     if (!r.rows[0]) throw notFound();
-    await this.#audit(this.#pool, p.userId, 'friend.remove', 'user', r.rows[0].requester_id === p.userId ? r.rows[0].addressee_id : r.rows[0].requester_id);
+    await this.#audit(this.#pool, p, 'friend.remove', 'user', r.rows[0].requester_id === p.userId ? r.rows[0].addressee_id : r.rows[0].requester_id);
   }
 
-  async getOptIn(p: Principal, vehicleId: unknown): Promise<{ enabled: boolean }> {
+  async getOptIn(p: SessionPrincipal, vehicleId: unknown): Promise<{ enabled: boolean }> {
     const v = await this.#vehicles.access(this.#pool, p, vehicleId);
     const r = await this.#pool.query('SELECT 1 FROM vehicle_comparison_optins WHERE vehicle_id = $1', [v.id]);
     return { enabled: !!r.rowCount };
   }
 
   /** Per-vehicle, owner-only, explicit. Off by default. */
-  async setOptIn(p: Principal, vehicleId: unknown, body: unknown): Promise<{ enabled: boolean }> {
+  async setOptIn(p: SessionPrincipal, vehicleId: unknown, body: unknown): Promise<{ enabled: boolean }> {
     const enabled = bool(obj(body, ['enabled'])['enabled'], 'enabled');
     const c = await this.#pool.connect();
     try {
@@ -109,13 +109,13 @@ export class FriendService {
       const r = enabled
         ? await c.query('INSERT INTO vehicle_comparison_optins (vehicle_id, enabled_by) VALUES ($1,$2) ON CONFLICT DO NOTHING', [v.id, p.userId])
         : await c.query('DELETE FROM vehicle_comparison_optins WHERE vehicle_id = $1', [v.id]);
-      if (r.rowCount) await this.#audit(c, p.userId, enabled ? 'comparison.opt_in' : 'comparison.opt_out', 'vehicle', v.id);
+      if (r.rowCount) await this.#audit(c, p, enabled ? 'comparison.opt_in' : 'comparison.opt_out', 'vehicle', v.id);
       await c.query('COMMIT');
       return { enabled };
     } catch (e) { await c.query('ROLLBACK').catch(() => undefined); throw e; } finally { c.release(); }
   }
 
-  async compare(p: Principal, windowKey: string | null) {
+  async compare(p: SessionPrincipal, windowKey: string | null) {
     const key = (windowKey ?? '90d') as WindowKey;
     if (!Object.hasOwn(WINDOWS, key)) throw invalid(`window must be one of ${Object.keys(WINDOWS).join(', ')}.`);
     const to = this.#now();

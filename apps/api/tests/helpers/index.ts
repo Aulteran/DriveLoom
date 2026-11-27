@@ -4,7 +4,7 @@ import pg from 'pg';
 import { migrate } from '../../src/migrate.ts';
 import { uuidv7 } from '../../src/ids.ts';
 import type { Id } from '../../src/types.ts';
-import type { InstanceRole, Principal, RequestContext } from '../../src/identity.ts';
+import type { InstanceRole, RequestContext, SessionPrincipal } from '../../src/identity.ts';
 import type { Authenticator, SessionInfo } from '../../src/http/app.ts';
 import { trustFromList } from '../../src/http/ip.ts';
 
@@ -53,7 +53,7 @@ export async function createTestDb(): Promise<TestDb | null> {
   };
 }
 
-export interface TestUser { id: Id; email: string; role: InstanceRole; principal: Principal; ctx: RequestContext }
+export interface TestUser { id: Id; email: string; role: InstanceRole; principal: SessionPrincipal; ctx: RequestContext }
 
 /** Inserts an active user directly (no credentials) and returns a ready principal/context. */
 export async function createTestUser(db: pg.Pool, opts: { email?: string; role?: InstanceRole } = {}): Promise<TestUser> {
@@ -61,7 +61,7 @@ export async function createTestUser(db: pg.Pool, opts: { email?: string; role?:
   const email = opts.email ?? `user-${id.slice(-8)}@example.test`;
   const role = opts.role ?? 'user';
   await db.query('INSERT INTO users (id, email, instance_role, email_verified_at) VALUES ($1,$2,$3,now())', [id, email, role]);
-  const principal: Principal = { userId: id, sessionId: uuidv7(), instanceRole: role, authenticatedAt: new Date() };
+  const principal: SessionPrincipal = { kind: 'session', userId: id, sessionId: uuidv7(), instanceRole: role, authenticatedAt: new Date() };
   return { id, email, role, principal, ctx: { principal } };
 }
 
